@@ -1,0 +1,53 @@
+{
+  "name": "@mornscience/architecture-modules",
+  "version": "1.0.0",
+  "description": "可复用的架构模块系统，支持多地区智能分流",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "lint": "eslint . --ext .ts",
+    "docs": "typedoc",
+    "quick-start": "node scripts/quick-start.js"
+  },
+  "keywords": [
+    "architecture",
+    "geo-routing",
+    "database-adapter",
+    "payment-router",
+    "multi-region",
+    "china-overseas"
+  ],
+  "author": "Morn Science",
+  "license": "MIT",
+  "peerDependencies": {
+    "@cloudbase/js-sdk": "^2.21.9",
+    "@paypal/paypal-server-sdk": "^1.1.0",
+    "@supabase/supabase-js": "^2.52.0",
+    "alipay-sdk": "^4.14.0",
+    "stripe": "^19.1.0",
+    "wechatpay-axios-plugin": "^0.9.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^29",
+    "@types/node": "^22",
+    "eslint": "^8",
+    "jest": "^29",
+    "jest-environment-jsdom": "^30.2.0",
+    "ts-jest": "^29.4.5",
+    "typedoc": "^0.25",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mornscience/architecture-modules.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mornscience/architecture-modules/issues"
+  },
+  "homepage": "https://github.com/mornscience/architecture-modules#readme"
+}

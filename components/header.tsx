@@ -1,33 +1,45 @@
-"use client"
+"use client";
 
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Globe, WorkflowIcon as Workspace, Library, Download, Settings, User } from "lucide-react"
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Globe,
+  WorkflowIcon as Workspace,
+  Library,
+  Download,
+  Settings,
+  User,
+  CreditCard,
+  History,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { UserMenu } from "./user-menu";
+import { useLanguage } from "@/components/language-provider";
+import { useTranslations } from "@/lib/i18n";
 
 interface HeaderProps {
-  language: string
-  setLanguage: (lang: string) => void
-  activeView: string
-  setActiveView: (view: string) => void
+  activeView: string;
+  setActiveView: (view: string) => void;
 }
 
-export function Header({ language, setLanguage, activeView, setActiveView }: HeaderProps) {
-  const t = {
-    zh: {
-      title: "多AI协作平台",
-      workspace: "工作空间",
-      library: "AI库",
-      export: "导出",
-      settings: "设置",
-    },
-    en: {
-      title: "Multi-GPT Platform",
-      workspace: "Workspace",
-      library: "AI Library",
-      export: "Export",
-      settings: "Settings",
-    },
-  }
+export function Header({ activeView, setActiveView }: HeaderProps) {
+  const router = useRouter();
+  const { language, toggleLanguage } = useLanguage();
+  const t = useTranslations(language);
+
+  // 获取当前URL的debug参数
+  const currentDebugParam =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("debug")
+      : null;
+
+  // 辅助函数：构建包含debug参数的URL
+  const buildUrl = (path: string) => {
+    if (currentDebugParam) {
+      return `${path}?debug=${currentDebugParam}`;
+    }
+    return path;
+  };
 
   return (
     <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
@@ -37,12 +49,12 @@ export function Header({ language, setLanguage, activeView, setActiveView }: Hea
             <span className="text-white font-bold text-sm">AI</span>
           </div>
           <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            {t[language].title}
+            {t.header.title}
           </h1>
         </div>
 
         <Badge variant="secondary" className="bg-green-100 text-green-800">
-          {language === "zh" ? "在线" : "Online"}
+          {t.header.online}
         </Badge>
       </div>
 
@@ -54,7 +66,7 @@ export function Header({ language, setLanguage, activeView, setActiveView }: Hea
           className="flex items-center space-x-2"
         >
           <Workspace className="w-4 h-4" />
-          <span>{t[language].workspace}</span>
+          <span>{t.header.workspace}</span>
         </Button>
 
         <Button
@@ -64,7 +76,7 @@ export function Header({ language, setLanguage, activeView, setActiveView }: Hea
           className="flex items-center space-x-2"
         >
           <Library className="w-4 h-4" />
-          <span>{t[language].library}</span>
+          <span>{t.header.library}</span>
         </Button>
 
         <Button
@@ -74,7 +86,27 @@ export function Header({ language, setLanguage, activeView, setActiveView }: Hea
           className="flex items-center space-x-2"
         >
           <Download className="w-4 h-4" />
-          <span>{t[language].export}</span>
+          <span>{t.header.export}</span>
+        </Button>
+
+        <Button
+          variant={activeView === "history" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setActiveView("history")}
+          className="flex items-center space-x-2"
+        >
+          <History className="w-4 h-4" />
+          <span>{t.header.history}</span>
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(buildUrl("/payment"))}
+          className="flex items-center space-x-2"
+        >
+          <CreditCard className="w-4 h-4" />
+          <span>{t.header.payment}</span>
         </Button>
       </nav>
 
@@ -82,21 +114,25 @@ export function Header({ language, setLanguage, activeView, setActiveView }: Hea
         <Button
           variant="outline"
           size="sm"
-          onClick={() => setLanguage(language === "zh" ? "en" : "zh")}
+          onClick={() => {
+            console.log("Language toggle clicked, current:", language);
+            toggleLanguage();
+          }}
           className="flex items-center space-x-1"
         >
           <Globe className="w-4 h-4" />
           <span>{language === "zh" ? "EN" : "中文"}</span>
         </Button>
 
-        <Button variant="ghost" size="sm">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(buildUrl("/settings"))}
+        >
           <Settings className="w-4 h-4" />
         </Button>
-
-        <Button variant="ghost" size="sm">
-          <User className="w-4 h-4" />
-        </Button>
+        <UserMenu />
       </div>
     </header>
-  )
+  );
 }
