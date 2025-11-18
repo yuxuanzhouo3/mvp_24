@@ -40,6 +40,7 @@ import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
+import { getAuthClient } from "@/lib/auth/client";
 
 interface ChatSession {
   id: string;
@@ -84,30 +85,65 @@ export function ChatHistory() {
   const loadSessions = async () => {
     try {
       setLoading(true);
+      console.log("[ChatHistory] 开始加载会话列表");
 
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      console.log("[ChatHistory] 获取认证客户端:", authClient.constructor.name);
+
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+      console.log("[ChatHistory] 会话数据:", {
+        hasSession: !!sessionData.session,
+        error: sessionError,
+      });
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
         toast.error("请先登录");
         setSessions([]);
         return;
       }
 
+      const accessToken = sessionData.session.access_token;
+      console.log("[ChatHistory] 访问令牌存在:", !!accessToken);
+
+      if (!accessToken) {
+        console.error("没有访问令牌");
+        toast.error("请先登录");
+        setSessions([]);
+        return;
+      }
+
+      console.log("[ChatHistory] 发送 API 请求到 /api/chat/sessions");
+
       // 调用真实 API
       const response = await fetch("/api/chat/sessions", {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
+
+      console.log("[ChatHistory] API 响应状态:", response.status);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
       const data = await response.json();
+      console.log("[ChatHistory] API 返回数据:", {
+        sessionsCount: data.sessions?.length || 0,
+        firstSession: data.sessions?.[0]
+          ? {
+              id: data.sessions[0].id,
+              _id: data.sessions[0]._id,
+              title: data.sessions[0].title,
+              hasId: !!data.sessions[0].id,
+              hasUnderscoreId: !!data.sessions[0]._id,
+            }
+          : null,
+      });
 
       // 处理返回的数据，将 gpt_messages 数组转换为 message_count
       const processedSessions = (data.sessions || []).map((s: any) => ({
@@ -117,6 +153,8 @@ export function ChatHistory() {
           : 0,
       }));
 
+      console.log("[ChatHistory] 处理后的会话数量:", processedSessions.length);
+      console.log("[ChatHistory] 第一个会话的ID:", processedSessions[0]?.id);
       setSessions(processedSessions);
     } catch (error) {
       console.error("Failed to load sessions:", error);
@@ -128,14 +166,30 @@ export function ChatHistory() {
   };
 
   const loadSessionMessages = async (sessionId: string) => {
+    console.log(
+      "[ChatHistory] loadSessionMessages 被调用，sessionId:",
+      sessionId,
+      "类型:",
+      typeof sessionId
+    );
+
     try {
       setLoadingMessages(true);
 
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -144,7 +198,7 @@ export function ChatHistory() {
       const response = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 
@@ -176,11 +230,20 @@ export function ChatHistory() {
 
   const deleteSession = async (sessionId: string) => {
     try {
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -189,7 +252,7 @@ export function ChatHistory() {
       const response = await fetch(`/api/chat/sessions/${sessionId}`, {
         method: "DELETE",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 
@@ -211,11 +274,20 @@ export function ChatHistory() {
 
   const updateSessionTitle = async (sessionId: string, newTitle: string) => {
     try {
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -225,7 +297,7 @@ export function ChatHistory() {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({ title: newTitle }),
       });
@@ -251,11 +323,20 @@ export function ChatHistory() {
 
   const clearSessionMessages = async (sessionId: string) => {
     try {
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -264,7 +345,7 @@ export function ChatHistory() {
       const response = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
         method: "DELETE",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 

@@ -13,9 +13,15 @@ export interface AlipayConfig {
   appId: string;
   privateKey: string;
   publicKey: string;
+  alipayPublicKey: string;
   notifyUrl: string;
   returnUrl?: string;
   gatewayUrl?: string; // 支付宝网关地址
+  // 证书模式可选字段
+  certMode?: boolean; // 是否启用证书模式
+  appCertContent?: string; // 应用公钥证书内容（appCertPublicKey_xxx.crt）
+  alipayPublicCertContent?: string; // 支付宝公钥证书内容（alipayCertPublicKey_xxx.crt）
+  alipayRootCertContent?: string; // 支付宝根证书内容（alipayRootCert.crt）
 }
 
 export abstract class AbstractAlipayProvider extends BasePaymentProvider {
@@ -29,8 +35,28 @@ export abstract class AbstractAlipayProvider extends BasePaymentProvider {
   protected validateConfig(config: AlipayConfig): void {
     if (!config.appId) throw new Error("Alipay appId is required");
     if (!config.privateKey) throw new Error("Alipay privateKey is required");
-    if (!config.publicKey) throw new Error("Alipay publicKey is required");
     if (!config.notifyUrl) throw new Error("Alipay notifyUrl is required");
+
+    // 支持两种模式：密钥模式 或 证书模式
+    if (config.certMode) {
+      if (!config.appCertContent)
+        throw new Error(
+          "Alipay appCertContent (应用公钥证书) is required in cert mode"
+        );
+      if (!config.alipayPublicCertContent)
+        throw new Error(
+          "Alipay alipayPublicCertContent (支付宝公钥证书) is required in cert mode"
+        );
+      if (!config.alipayRootCertContent)
+        throw new Error(
+          "Alipay alipayRootCertContent (支付宝根证书) is required in cert mode"
+        );
+    } else {
+      if (!config.publicKey)
+        throw new Error("Alipay publicKey is required in key mode");
+      if (!config.alipayPublicKey)
+        throw new Error("Alipay alipayPublicKey is required in key mode");
+    }
   }
 
   async createPayment(order: PaymentOrder): Promise<PaymentResult> {

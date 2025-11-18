@@ -17,11 +17,12 @@ import {
   Clock,
   CheckCircle2,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
+import { getClientAuthToken } from "@/lib/client-auth";
+import { useWorkspaceMessages } from "@/components/workspace-messages-context";
 
 interface AIResponse {
   agentId: string;
@@ -51,14 +52,22 @@ export function GPTWorkspace({
   collaborationMode,
 }: GPTWorkspaceProps) {
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Message[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<string>();
   const [error, setError] = useState<string | null>(null);
   const [aiResponses, setAIResponses] = useState<AIResponse[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { language } = useLanguage();
   const t = useTranslations(language);
+
+  // 使用全局 Context 管理消息和会话 ID
+  const {
+    messages,
+    setMessages,
+    addMessage,
+    currentSessionId,
+    setCurrentSessionId,
+    clearMessages,
+  } = useWorkspaceMessages();
 
   // 自动滚动到底部
   useEffect(() => {
@@ -80,7 +89,7 @@ export function GPTWorkspace({
       timestamp: new Date(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    addMessage(userMessage);
     setInput("");
     setIsProcessing(true);
     setError(null);
@@ -96,36 +105,16 @@ export function GPTWorkspace({
     setAIResponses(initialResponses);
 
     try {
-      // 模拟认证检查（在测试模式下跳过）
-      // const {
-      //   data: { session },
-      // } = await supabase.auth.getSession();
-      // if (!session) {
-      //   throw new Error("Not authenticated");
-      // }
+      // 获取认证 Token（支持 CloudBase 和 Supabase）
+      const { token: authToken, error: authError } = await getClientAuthToken();
 
-      // TODO: 实现真实的会话创建API
-      // const {
-      //   data: { session },
-      // } = await supabase.auth.getSession();
-      // if (!session) {
-      //   throw new Error("Not authenticated");
-      // }
-
-      // 获取真实 Token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
+      if (authError || !authToken) {
         toast.error("请先登录", {
           description: "您需要登录后才能使用 AI 对话功能",
         });
         setIsProcessing(false);
         return;
       }
-
-      const authToken = session.access_token;
 
       // 如果没有sessionId，先创建会话
       let sessId = currentSessionId;
@@ -162,7 +151,7 @@ export function GPTWorkspace({
         isMultiAI: true,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, finalMessage]);
+      addMessage(finalMessage);
       setAIResponses([]);
     } catch (error) {
       console.error("Multi-AI collaboration error:", error);
@@ -492,6 +481,14 @@ export function GPTWorkspace({
     }
   };
 
+  const clearConversation = () => {
+    setMessages([]);
+    setCurrentSessionId(undefined);
+    localStorage.removeItem("workspace-messages");
+    localStorage.removeItem("workspace-session-id");
+    console.log("Cleared conversation from localStorage");
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case "processing":
@@ -508,7 +505,7 @@ export function GPTWorkspace({
   return (
     <div className="flex-1 flex flex-col h-full">
       {/* 聊天区域 */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-2 sm:p-4 lg:p-6 space-y-4">
         {messages.length === 0 && selectedGPTs.length === 0 && (
           <div className="text-center py-12">
             <Users className="w-16 h-16 text-blue-500 mx-auto mb-4" />
@@ -547,16 +544,16 @@ export function GPTWorkspace({
           <div key={message.id}>
             {message.role === "user" ? (
               // 用户消息
-              <div className="flex items-start space-x-3 justify-end">
-                <div className="flex-1 max-w-3xl text-right">
-                  <Card className="p-4 bg-blue-500 text-white">
-                    <p className="text-sm whitespace-pre-wrap break-words">
+              <div className="flex items-start gap-2 sm:gap-3 justify-end">
+                <div className="flex-1 max-w-xs sm:max-w-2xl lg:max-w-3xl text-right">
+                  <Card className="p-2 sm:p-4 bg-blue-500 text-white">
+                    <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">
                       {message.content as string}
                     </p>
                   </Card>
                 </div>
-                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
-                  <User className="w-5 h-5 text-white" />
+                <div className="w-7 h-7 sm:w-8 sm:h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                  <User className="w-4 sm:w-5 h-4 sm:h-5 text-white" />
                 </div>
               </div>
             ) : message.isMultiAI ? (
@@ -724,13 +721,13 @@ export function GPTWorkspace({
       </div>
 
       {/* 输入区域 */}
-      <div className="border-t border-gray-200 p-4 bg-white">
-        <div className="flex space-x-3">
+      <div className="border-t border-gray-200 p-2 sm:p-4 bg-white">
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={t.workspace.placeholder}
-            className="flex-1 min-h-[80px] max-h-[200px] resize-none"
+            className="flex-1 min-h-[60px] sm:min-h-[80px] max-h-[200px] resize-none text-sm sm:text-base"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -744,7 +741,7 @@ export function GPTWorkspace({
             disabled={
               !input.trim() || isProcessing || selectedGPTs.length === 0
             }
-            className="px-6 h-[80px]"
+            className="px-4 sm:px-6 h-[40px] sm:h-[80px] self-end sm:self-auto"
           >
             {isProcessing ? (
               <Loader2 className="w-4 h-4 animate-spin" />

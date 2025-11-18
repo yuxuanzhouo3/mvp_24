@@ -5,13 +5,18 @@
  */
 
 import { NextRequest } from "next/server";
-import { supabase } from "@/lib/supabase";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { aiRouter } from "@/lib/ai/router";
 import { calculateCost, recordUsage } from "@/lib/ai/token-counter";
 import { AIMessage } from "@/lib/ai/types";
 import { edgeChatRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
+import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
+import { isChinaRegion } from "@/lib/config/region";
+import {
+  getGptMessages as getCloudBaseMessages,
+  saveGptMessage as saveCloudBaseMessage,
+} from "@/lib/cloudbase-db";
 
 // 使用Node.js Runtime以支持winston日志库
 export const runtime = "nodejs";
@@ -34,26 +39,28 @@ export async function POST(req: NextRequest) {
     // 1. 鉴权验证
     // ========================================
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
       return new Response(
-        JSON.stringify({ error: "Missing or invalid authorization header" }),
+        JSON.stringify({
+          error: tokenError || "Missing or invalid authorization header",
+        }),
         { status: 401, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-
-    if (authError || !user) {
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
       return new Response(
-        JSON.stringify({ error: "Invalid or expired token" }),
+        JSON.stringify({
+          error: authResult.error || "Invalid or expired token",
+        }),
         { status: 401, headers: { "Content-Type": "application/json" } }
       );
     }
+
+    const userId = authResult.userId;
 
     // ========================================
     // 2. 解析请求参数
@@ -85,12 +92,50 @@ export async function POST(req: NextRequest) {
     // ========================================
     // 3. 验证会话所有权
     // ========================================
-    const { data: session, error: sessionError } = await supabaseAdmin
-      .from("gpt_sessions")
-      .select("*")
-      .eq("id", sessionId)
-      .eq("user_id", user.id)
-      .single();
+    let session: any;
+    let sessionError: any;
+
+    if (isChinaRegion()) {
+      // 国内版：从 CloudBase 获取
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      try {
+        const sessionResult = await cloudbase
+          .collection("ai_conversations")
+          .doc(sessionId)
+          .get();
+
+        if (sessionResult.data && sessionResult.data.length > 0) {
+          const conv = sessionResult.data[0];
+          if (conv.user_id === userId) {
+            session = conv;
+          } else {
+            sessionError = { message: "Access denied" };
+          }
+        } else {
+          sessionError = { message: "Session not found" };
+        }
+      } catch (err) {
+        console.error("[CloudBase] Session query error:", err);
+        sessionError = err;
+      }
+    } else {
+      // 国际版：从 Supabase 获取会话
+      const result = await supabaseAdmin
+        .from("gpt_sessions")
+        .select("*")
+        .eq("id", sessionId)
+        .eq("user_id", userId)
+        .single();
+      session = result.data;
+      sessionError = result.error;
+    }
 
     if (sessionError || !session) {
       return new Response(
@@ -105,7 +150,7 @@ export async function POST(req: NextRequest) {
     const { data: profile } = await supabaseAdmin
       .from("user_profiles")
       .select("subscription_plan")
-      .eq("id", user.id)
+      .eq("id", userId)
       .single();
 
     const subscriptionPlan = profile?.subscription_plan || "free";
@@ -118,7 +163,7 @@ export async function POST(req: NextRequest) {
       const { count, error: countError } = await supabaseAdmin
         .from("gpt_messages")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("role", "assistant")
         .gte("created_at", startOfMonth.toISOString());
 
@@ -140,15 +185,45 @@ export async function POST(req: NextRequest) {
     // ========================================
     // 5. 获取会话历史消息
     // ========================================
-    const { data: history } = await supabaseAdmin
-      .from("gpt_messages")
-      .select("role, content")
-      .eq("session_id", sessionId)
-      .order("created_at", { ascending: true })
-      .limit(20); // 最近20条消息（控制上下文长度）
+    let history: any[] = [];
+
+    if (isChinaRegion()) {
+      // 国内版：从 CloudBase 获取消息
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      const sessionResult = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      if (sessionResult.data && sessionResult.data.length > 0) {
+        const conv = sessionResult.data[0];
+        history = (conv.messages || [])
+          .slice(-20) // 最近20条消息
+          .map((msg: any) => ({
+            role: msg.role,
+            content: msg.content,
+          }));
+      }
+    } else {
+      // 国际版：从 Supabase 获取消息
+      const result = await supabaseAdmin
+        .from("gpt_messages")
+        .select("role, content")
+        .eq("session_id", sessionId)
+        .order("created_at", { ascending: true })
+        .limit(20); // 最近20条消息（控制上下文长度）
+      history = result.data || [];
+    }
 
     const messages: AIMessage[] = [
-      ...(history || []).map((msg: { role: string; content: string }) => ({
+      ...history.map((msg: { role: string; content: string }) => ({
         role: msg.role as "system" | "user" | "assistant",
         content: msg.content,
       })),
@@ -158,18 +233,29 @@ export async function POST(req: NextRequest) {
     // ========================================
     // 6. 保存用户消息到数据库
     // ========================================
-    const { error: saveUserMsgError } = await supabaseAdmin
-      .from("gpt_messages")
-      .insert({
+    if (isChinaRegion()) {
+      // 国内版：保存到 CloudBase
+      await saveCloudBaseMessage({
         session_id: sessionId,
-        user_id: user.id,
+        user_id: userId,
         role: "user",
         content: message,
-        tokens_used: 0,
       });
+    } else {
+      // 国际版：保存到 Supabase
+      const { error: saveUserMsgError } = await supabaseAdmin
+        .from("gpt_messages")
+        .insert({
+          session_id: sessionId,
+          user_id: userId,
+          role: "user",
+          content: message,
+          tokens_used: 0,
+        });
 
-    if (saveUserMsgError) {
-      console.error("Failed to save user message:", saveUserMsgError);
+      if (saveUserMsgError) {
+        console.error("Failed to save user message:", saveUserMsgError);
+      }
     }
 
     // ========================================
@@ -180,7 +266,7 @@ export async function POST(req: NextRequest) {
       model,
       temperature,
       maxTokens,
-      user: user.id,
+      user: userId,
     });
 
     // ========================================
@@ -218,13 +304,25 @@ export async function POST(req: NextRequest) {
               completionTokens = totalTokens - promptTokens;
 
               // 保存AI响应到数据库
-              await supabaseAdmin.from("gpt_messages").insert({
-                session_id: sessionId,
-                user_id: user.id,
-                role: "assistant",
-                content: fullResponse,
-                tokens_used: completionTokens,
-              });
+              if (isChinaRegion()) {
+                // 国内版：保存到 CloudBase
+                await saveCloudBaseMessage({
+                  session_id: sessionId,
+                  user_id: userId,
+                  role: "assistant",
+                  content: fullResponse,
+                  tokens_used: completionTokens,
+                });
+              } else {
+                // 国际版：保存到 Supabase
+                await supabaseAdmin.from("gpt_messages").insert({
+                  session_id: sessionId,
+                  user_id: userId,
+                  role: "assistant",
+                  content: fullResponse,
+                  tokens_used: completionTokens,
+                });
+              }
 
               // 记录Token使用
               const costUsd = calculateCost(
@@ -234,7 +332,7 @@ export async function POST(req: NextRequest) {
               );
 
               await recordUsage({
-                userId: user.id,
+                userId,
                 sessionId,
                 model,
                 promptTokens,
@@ -244,10 +342,29 @@ export async function POST(req: NextRequest) {
               });
 
               // 更新会话的最后更新时间
-              await supabaseAdmin
-                .from("gpt_sessions")
-                .update({ updated_at: new Date().toISOString() })
-                .eq("id", sessionId);
+              if (isChinaRegion()) {
+                // 国内版：更新 CloudBase
+                const cloudbase = require("@cloudbase/node-sdk")
+                  .init({
+                    env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+                    secretId: process.env.CLOUDBASE_SECRET_ID,
+                    secretKey: process.env.CLOUDBASE_SECRET_KEY,
+                  })
+                  .database();
+
+                await cloudbase
+                  .collection("ai_conversations")
+                  .doc(sessionId)
+                  .update({
+                    updated_at: new Date().toISOString(),
+                  });
+              } else {
+                // 国际版：更新 Supabase
+                await supabaseAdmin
+                  .from("gpt_sessions")
+                  .update({ updated_at: new Date().toISOString() })
+                  .eq("id", sessionId);
+              }
 
               // 发送完成事件
               const endTime = Date.now();

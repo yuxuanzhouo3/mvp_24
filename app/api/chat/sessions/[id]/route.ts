@@ -3,11 +3,19 @@
  * GET /api/chat/sessions/[id] - 获取会话详情
  * DELETE /api/chat/sessions/[id] - 删除会话
  * PATCH /api/chat/sessions/[id] - 更新会话
+ *
+ * 国内版(CN): 使用 CloudBase
+ * 国际版(INTL): 使用 Supabase
  */
 
 import { NextRequest } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { isChinaRegion } from "@/lib/config/region";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
+import {
+  deleteGptSession as deleteCloudBaseSession,
+  updateGptSession as updateCloudBaseSession,
+} from "@/lib/cloudbase-db";
 
 /**
  * GET /api/chat/sessions/[id]
@@ -20,35 +28,64 @@ export async function GET(
   try {
     // 鉴权
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
+      return Response.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return Response.json({ error: "Invalid token" }, { status: 401 });
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
+      return Response.json({ error: authResult.error }, { status: 401 });
     }
 
+    const userId = authResult.userId;
     const { id: sessionId } = await params;
 
     // 获取会话
-    const { data: session, error } = await supabaseAdmin
-      .from("gpt_sessions")
-      .select("*")
-      .eq("id", sessionId)
-      .eq("user_id", user.id)
-      .single();
+    if (isChinaRegion()) {
+      // 国内版：从 CloudBase 获取
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
 
-    if (error || !session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
+      const result = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      if (!result.data || result.data.length === 0) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      const session = result.data[0];
+      if (session.user_id !== userId) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      return Response.json({ session });
+    } else {
+      // 国际版：从 Supabase 获取
+      const { data: session, error } = await supabaseAdmin
+        .from("gpt_sessions")
+        .select("*")
+        .eq("id", sessionId)
+        .eq("user_id", userId)
+        .single();
+
+      if (error || !session) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      return Response.json({ session });
     }
-
-    return Response.json({ session });
   } catch (error) {
     console.error("Get session API error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });
@@ -66,35 +103,49 @@ export async function DELETE(
   try {
     // 鉴权
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
+      return Response.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return Response.json({ error: "Invalid token" }, { status: 401 });
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
+      return Response.json({ error: authResult.error }, { status: 401 });
     }
 
+    const userId = authResult.userId;
     const { id: sessionId } = await params;
 
     // 删除会话（数据库的ON DELETE CASCADE会自动删除关联的消息）
-    const { error } = await supabaseAdmin
-      .from("gpt_sessions")
-      .delete()
-      .eq("id", sessionId)
-      .eq("user_id", user.id);
+    if (isChinaRegion()) {
+      // 国内版：从 CloudBase 删除
+      const error = await deleteCloudBaseSession(sessionId, userId);
+      if (error) {
+        console.error("Failed to delete session:", error);
+        return Response.json(
+          { error: "Failed to delete session" },
+          { status: 500 }
+        );
+      }
+    } else {
+      // 国际版：从 Supabase 删除
+      const { error } = await supabaseAdmin
+        .from("gpt_sessions")
+        .delete()
+        .eq("id", sessionId)
+        .eq("user_id", userId);
 
-    if (error) {
-      console.error("Failed to delete session:", error);
-      return Response.json(
-        { error: "Failed to delete session" },
-        { status: 500 }
-      );
+      if (error) {
+        console.error("Failed to delete session:", error);
+        return Response.json(
+          { error: "Failed to delete session" },
+          { status: 500 }
+        );
+      }
     }
 
     return Response.json({ success: true });
@@ -115,20 +166,21 @@ export async function PATCH(
   try {
     // 鉴权
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
+      return Response.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return Response.json({ error: "Invalid token" }, { status: 401 });
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
+      return Response.json({ error: authResult.error }, { status: 401 });
     }
 
+    const userId = authResult.userId;
     const { id: sessionId } = await params;
 
     // 解析请求体
@@ -153,26 +205,62 @@ export async function PATCH(
     }
 
     // 更新会话
-    const { data: session, error } = await supabaseAdmin
-      .from("gpt_sessions")
-      .update({
+    if (isChinaRegion()) {
+      // 国内版：更新 CloudBase
+      const error = await updateCloudBaseSession(sessionId, userId, {
         title: title?.trim(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", sessionId)
-      .eq("user_id", user.id)
-      .select()
-      .single();
+      });
 
-    if (error || !session) {
-      console.error("Failed to update session:", error);
-      return Response.json(
-        { error: "Failed to update session" },
-        { status: 500 }
-      );
+      if (error) {
+        console.error("Failed to update session:", error);
+        return Response.json(
+          { error: "Failed to update session" },
+          { status: 500 }
+        );
+      }
+
+      // 返回更新后的会话
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      const result = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      if (!result.data || result.data.length === 0) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      return Response.json({ session: result.data[0] });
+    } else {
+      // 国际版：更新 Supabase
+      const { data: session, error } = await supabaseAdmin
+        .from("gpt_sessions")
+        .update({
+          title: title?.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", sessionId)
+        .eq("user_id", userId)
+        .select()
+        .single();
+
+      if (error || !session) {
+        console.error("Failed to update session:", error);
+        return Response.json(
+          { error: "Failed to update session" },
+          { status: 500 }
+        );
+      }
+
+      return Response.json({ session });
     }
-
-    return Response.json({ session });
   } catch (error) {
     console.error("Update session API error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });

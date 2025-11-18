@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { CreditCard, Smartphone, Loader2, AlertCircle } from "lucide-react";
 import { paymentRouter } from "@/lib/architecture-modules/layers/third-party/payment/router";
-import { supabase } from "@/lib/supabase";
+import { getAuthClient } from "@/lib/auth/client";
 import { RegionType } from "@/lib/architecture-modules/core/types";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/components/language-provider";
@@ -140,12 +140,8 @@ export function PaymentForm({
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
       console.time("create-payment");
       // Attach authorization header if session exists
-      const sessionRes = await supabase.auth.getSession();
-      const session =
-        sessionRes && (sessionRes as any).data
-          ? (sessionRes as any).data.session
-          : null;
-      const token = session?.access_token;
+      const sessionResult = await getAuthClient().getSession();
+      const token = sessionResult.data.session?.access_token;
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",

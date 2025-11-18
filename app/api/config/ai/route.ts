@@ -1,6 +1,6 @@
 /**
  * AI 配置 API
- * 根据用户区域返回对应的 AI 配置
+ * 根据 DEPLOY_REGION 环境变量返回对应的 AI 配置
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -9,14 +9,17 @@ import {
   getEnabledAgents,
   hasEnabledAI,
 } from "@/lib/ai/ai-config-loader";
+import { isChinaRegion, DEPLOY_REGION } from "@/lib/config/region";
 
 export async function GET(request: NextRequest) {
   try {
-    // 从 middleware 设置的 Header 读取区域信息
-    const region = request.headers.get("X-User-Region") || "global";
-    const country = request.headers.get("X-User-Country") || "Unknown";
+    // 使用 DEPLOY_REGION 环境变量，而不是IP检测
+    const region = isChinaRegion() ? "china" : "global";
+    const country = isChinaRegion() ? "CN" : "INTL";
 
-    console.log(`📡 AI 配置请求 - 区域: ${region}, 国家: ${country}`);
+    console.log(
+      `📡 AI 配置请求 - DEPLOY_REGION: ${DEPLOY_REGION}, 区域: ${region}, 国家: ${country}`
+    );
 
     // 加载对应区域的配置
     const config = loadAIConfig(region as "china" | "global" | "usa");

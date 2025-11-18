@@ -60,7 +60,7 @@ export class EnvironmentLoader {
 
     if (this.region === RegionType.CHINA) {
       // 中国地区：微信支付 + 支付宝
-      config.WECHAT_APP_ID = process.env.WECHAT_PAY_APP_ID;
+      config.WECHAT_APP_ID = process.env.WECHAT_APP_ID;
       config.WECHAT_MCH_ID = process.env.WECHAT_PAY_MCH_ID;
       config.WECHAT_API_KEY = process.env.WECHAT_PAY_API_V3_KEY;
       config.ALIPAY_APP_ID = process.env.NEXT_PUBLIC_ALIPAY_APP_ID;

@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { getAuth, isAuthFeatureSupported } from "@/lib/auth/adapter";
+import { getDatabase } from "@/lib/database/adapter";
 import { passwordSecurity } from "@/lib/password-security";
 import { logSecurityEvent } from "@/lib/logger";
+import { createProfileFromEmailUser } from "@/lib/models/user";
+import { isChinaRegion } from "@/lib/config/region";
 import { z } from "zod";
 
 // 注册请求验证schema
 const registerSchema = z
   .object({
     email: z.string().email("Invalid email format"),
-    password: z.string().min(8, "Password must be at least 8 characters"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
     fullName: z
       .string()
       .min(1, "Full name is required")
@@ -52,88 +56,183 @@ export async function POST(request: NextRequest) {
 
     const { email, password, fullName } = validationResult.data;
 
-    // 验证密码强度
-    const passwordValidation = passwordSecurity.validatePassword(password);
-    if (!passwordValidation.isValid) {
-      logSecurityEvent("register_weak_password", undefined, clientIP, {
-        email,
-        score: passwordValidation.score,
-        feedback: passwordValidation.feedback,
-      });
+    // 验证密码强度（仅国际区域）
+    // CN 区域由用户自己选择密码强度，不强制要求
+    let passwordValidation: any = {
+      isValid: true,
+      score: 0,
+      feedback: [],
+      suggestions: [],
+    };
 
-      return NextResponse.json(
-        {
-          error: "Password does not meet security requirements",
-          code: "WEAK_PASSWORD",
-          passwordStrength: {
-            score: passwordValidation.score,
-            isValid: passwordValidation.isValid,
-            feedback: passwordValidation.feedback,
-            suggestions: passwordValidation.suggestions,
-          },
-        },
-        { status: 400 }
-      );
-    }
+    if (!isChinaRegion()) {
+      passwordValidation = passwordSecurity.validatePassword(password);
+      if (!passwordValidation.isValid) {
+        logSecurityEvent("register_weak_password", undefined, clientIP, {
+          email,
+          score: passwordValidation.score,
+          feedback: passwordValidation.feedback,
+        });
 
-    // 尝试注册用户
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-        },
-      },
-    });
-
-    if (error) {
-      logSecurityEvent("register_failed", undefined, clientIP, {
-        email,
-        error: error.message,
-      });
-
-      // 处理特定错误
-      if (error.message.includes("already registered")) {
         return NextResponse.json(
           {
-            error: "Email already registered",
-            code: "EMAIL_EXISTS",
+            error: "Password does not meet security requirements",
+            code: "WEAK_PASSWORD",
+            passwordStrength: {
+              score: passwordValidation.score,
+              isValid: passwordValidation.isValid,
+              feedback: passwordValidation.feedback,
+              suggestions: passwordValidation.suggestions,
+            },
           },
-          { status: 409 }
+          { status: 400 }
+        );
+      }
+    }
+
+    // 根据区域选择认证方式
+    let authResponse;
+
+    if (isChinaRegion()) {
+      // 中国区域：直接调用统一的 /api/auth 端点
+      const response = await fetch(
+        `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/auth`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "signup", email, password }),
+        }
+      );
+
+      const data = await response.json();
+      if (data.success && data.user) {
+        authResponse = {
+          user: {
+            id: data.user.id || data.user.userId,
+            email: data.user.email,
+            name: data.user.name,
+            avatar: data.user.avatar,
+          },
+        };
+      } else {
+        // 处理特定错误
+        if (
+          data.message &&
+          (data.message.includes("已存在") || data.message.includes("exists"))
+        ) {
+          return NextResponse.json(
+            {
+              error: "Email already registered",
+              code: "EMAIL_EXISTS",
+            },
+            { status: 409 }
+          );
+        }
+
+        return NextResponse.json(
+          {
+            error: "Registration failed",
+            code: "REGISTRATION_ERROR",
+            details: data.message || "注册失败",
+          },
+          { status: 400 }
+        );
+      }
+    } else {
+      // 国际区域：使用 Supabase
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            name: fullName,
+          },
+        },
+      });
+
+      if (error) {
+        logSecurityEvent("register_failed", undefined, clientIP, {
+          email,
+          error: error.message,
+        });
+
+        // 处理特定错误
+        if (error.message.includes("already registered")) {
+          return NextResponse.json(
+            {
+              error: "Email already registered",
+              code: "EMAIL_EXISTS",
+            },
+            { status: 409 }
+          );
+        }
+
+        return NextResponse.json(
+          {
+            error: "Registration failed",
+            code: "REGISTRATION_ERROR",
+            details: error.message,
+          },
+          { status: 400 }
         );
       }
 
-      return NextResponse.json(
-        {
-          error: "Registration failed",
-          code: "REGISTRATION_ERROR",
-          details: error.message,
+      authResponse = {
+        user: {
+          id: data.user?.id || "",
+          email: data.user?.email,
+          name: fullName,
+          avatar: data.user?.user_metadata?.avatar_url,
         },
-        { status: 400 }
-      );
+      };
     }
 
-    logSecurityEvent("register_successful", data.user?.id, clientIP, {
-      email,
-      userId: data.user?.id,
-      fullName,
-      passwordStrength: passwordValidation.score,
-    });
+    const userId = authResponse.user?.id;
+
+    // 保存用户资料到数据库
+    if (userId) {
+      try {
+        const db = getDatabase();
+        const userProfile = createProfileFromEmailUser(userId, email, fullName);
+        userProfile.lastLoginIp = clientIP;
+
+        await db.insert("web_users", userProfile);
+
+        logSecurityEvent("register_successful", userId, clientIP, {
+          email,
+          userId,
+          fullName,
+          passwordStrength: passwordValidation.score,
+          profileSaved: true,
+        });
+      } catch (dbError) {
+        console.error("Failed to save user profile:", dbError);
+        // 即使保存资料失败，注册本身是成功的
+        logSecurityEvent("register_profile_save_failed", userId, clientIP, {
+          email,
+          error: dbError instanceof Error ? dbError.message : "Unknown error",
+        });
+      }
+    } else {
+      logSecurityEvent("register_successful", userId, clientIP, {
+        email,
+        userId,
+        fullName,
+        passwordStrength: passwordValidation.score,
+      });
+    }
 
     // 返回成功响应
     return NextResponse.json({
       success: true,
       user: {
-        id: data.user?.id,
-        email: data.user?.email,
-        full_name: fullName,
-        avatar_url: data.user?.user_metadata?.avatar_url,
+        id: authResponse.user?.id,
+        email: authResponse.user?.email,
+        name: fullName,
+        avatar: authResponse.user?.avatar,
       },
-      message: data.user?.email_confirmed_at
-        ? "Registration successful"
-        : "Registration successful. Please check your email to confirm your account.",
-      emailConfirmed: !!data.user?.email_confirmed_at,
+      message: "Registration successful. You can now log in.",
+      region: isChinaRegion() ? "CN" : "INTL",
     });
   } catch (error) {
     console.error("Registration error:", error);

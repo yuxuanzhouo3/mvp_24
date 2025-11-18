@@ -1,0 +1,5 @@
+{"userId": "user1_id", "email": "user1@example.com", "event": "login_successful", "ipAddress": "192.168.1.1", "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", "status": "success", "message": "用户成功登录", "region": "china", "createdAt": "2024-11-07T10:15:00.000Z"}
+{"email": "attacker@example.com", "event": "login_failed", "ipAddress": "203.0.113.45", "userAgent": "python-requests/2.28.1", "status": "failure", "message": "登录失败：密码错误", "region": "china", "createdAt": "2024-11-07T10:20:00.000Z"}
+{"email": "user1@example.com", "event": "account_locked", "ipAddress": "203.0.113.46", "status": "failure", "message": "账户因多次登录失败被锁定", "region": "china", "createdAt": "2024-11-07T10:25:00.000Z"}
+{"userId": "user2_id", "email": "user2@example.com", "event": "password_changed", "ipAddress": "192.168.1.2", "status": "success", "message": "用户修改了密码", "region": "china", "createdAt": "2024-11-07T11:00:00.000Z"}
+{"userId": "user1_id", "email": "user1@example.com", "event": "logout_successful", "ipAddress": "192.168.1.1", "status": "success", "message": "用户已登出", "region": "china", "createdAt": "2024-11-07T12:30:00.000Z"}

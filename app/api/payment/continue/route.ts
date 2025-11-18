@@ -3,8 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
 import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
+import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { logBusinessEvent, logError, logSecurityEvent } from "@/lib/logger";
+import { getDatabase } from "@/lib/auth-utils";
+import { isChinaRegion } from "@/lib/config/region";
 
 export async function POST(request: NextRequest) {
   // Apply payment rate limiting
@@ -64,17 +67,37 @@ async function handlePaymentContinue(request: NextRequest) {
     });
 
     // 从数据库获取支付记录
-    const { data: payment, error: fetchError } = await supabaseAdmin
-      .from("payments")
-      .select("*")
-      .eq("id", paymentId)
-      .single();
+    let payment: any = null;
+    let fetchError: any = null;
+
+    if (isChinaRegion()) {
+      // CloudBase 查询
+      try {
+        const db = getDatabase();
+        const result = await db.collection("payments").doc(paymentId).get();
+        if (result.data && result.data.length > 0) {
+          payment = result.data[0];
+        }
+      } catch (error) {
+        fetchError = error;
+      }
+    } else {
+      // Supabase 查询
+      const { data, error } = await supabaseAdmin
+        .from("payments")
+        .select("*")
+        .eq("id", paymentId)
+        .single();
+
+      payment = data;
+      fetchError = error;
+    }
 
     if (fetchError || !payment) {
       logBusinessEvent("payment_continue_not_found", undefined, {
         operationId,
         paymentId,
-        fetchError: fetchError?.message,
+        fetchError: fetchError?.message || String(fetchError),
       });
       return NextResponse.json(
         { success: false, error: "Payment not found" },
@@ -158,13 +181,23 @@ async function handlePaymentContinue(request: NextRequest) {
 
       if (result && result.success) {
         // 更新原订单的 transaction_id
-        await supabaseAdmin
-          .from("payments")
-          .update({
+        if (isChinaRegion()) {
+          // CloudBase 更新
+          const db = getDatabase();
+          await db.collection("payments").doc(paymentId).update({
             transaction_id: result.paymentId,
             updated_at: new Date().toISOString(),
-          })
-          .eq("id", paymentId);
+          });
+        } else {
+          // Supabase 更新
+          await supabaseAdmin
+            .from("payments")
+            .update({
+              transaction_id: result.paymentId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", paymentId);
+        }
 
         logBusinessEvent(
           "payment_continue_new_session_created",
@@ -244,19 +277,77 @@ async function handlePaymentContinue(request: NextRequest) {
         paymentUrl = result.paymentUrl || "";
 
         // 更新 transaction_id
-        await supabaseAdmin
-          .from("payments")
-          .update({
+        if (isChinaRegion()) {
+          // CloudBase 更新
+          const db = getDatabase();
+          await db.collection("payments").doc(paymentId).update({
             transaction_id: result.paymentId,
             updated_at: new Date().toISOString(),
-          })
-          .eq("id", paymentId);
+          });
+        } else {
+          // Supabase 更新
+          await supabaseAdmin
+            .from("payments")
+            .update({
+              transaction_id: result.paymentId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", paymentId);
+        }
 
         logBusinessEvent("payment_continue_stripe_refreshed", payment.user_id, {
           operationId,
           paymentId,
           newTransactionId: result.paymentId,
           paymentUrl,
+        });
+      }
+    } else if (payment.payment_method === "alipay") {
+      // Alipay 支付链接需要重新创建，因为支付链接有时效性
+      const order = {
+        amount: payment.amount,
+        currency: payment.currency,
+        description: `Continue payment for order ${payment.id}`,
+        userId: payment.user_id,
+        planType: extractPlanTypeFromPayment(payment),
+        billingCycle: extractBillingCycleFromPayment(payment),
+      };
+
+      logBusinessEvent("payment_continue_alipay_refresh", payment.user_id, {
+        operationId,
+        paymentId,
+      });
+
+      const alipayProvider = new AlipayProvider(process.env);
+      const result = await alipayProvider.createPayment(order);
+
+      if (result && result.success) {
+        paymentUrl = result.paymentUrl || "";
+
+        // 更新 transaction_id
+        if (isChinaRegion()) {
+          // CloudBase 更新
+          const db = getDatabase();
+          await db.collection("payments").doc(paymentId).update({
+            transaction_id: result.paymentId,
+            updated_at: new Date().toISOString(),
+          });
+        } else {
+          // Supabase 更新
+          await supabaseAdmin
+            .from("payments")
+            .update({
+              transaction_id: result.paymentId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", paymentId);
+        }
+
+        logBusinessEvent("payment_continue_alipay_refreshed", payment.user_id, {
+          operationId,
+          paymentId,
+          newTransactionId: result.paymentId,
+          paymentUrl: paymentUrl.substring(0, 100) + "...", // 截断日志
         });
       }
     }

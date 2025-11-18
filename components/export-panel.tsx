@@ -21,7 +21,7 @@ import {
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { useGeo } from "@/components/geo-provider";
-import { supabase } from "@/lib/supabase";
+import { getAuthClient } from "@/lib/auth/client";
 import { toast } from "sonner";
 
 interface ChatSession {
@@ -64,11 +64,21 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     try {
       setLoading(true);
 
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error(t.errors.loginRequired);
+        setSessions([]);
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error(t.errors.loginRequired);
         setSessions([]);
         return;
@@ -78,7 +88,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       const response = await fetch("/api/chat/sessions", {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
       });
 
@@ -207,11 +217,20 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     }
 
     try {
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -226,7 +245,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
           {
             method: "GET",
             headers: {
-              Authorization: `Bearer ${session.access_token}`,
+              Authorization: `Bearer ${accessToken}`,
             },
           }
         );
@@ -855,11 +874,20 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     }
 
     try {
-      // 获取认证 token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) {
+      // 获取认证 token - 根据区域使用正确的认证客户端
+      const authClient = getAuthClient();
+      const { data: sessionData, error: sessionError } =
+        await authClient.getSession();
+
+      if (sessionError || !sessionData.session) {
+        console.error("获取会话失败:", sessionError);
+        toast.error("请先登录");
+        return;
+      }
+
+      const accessToken = sessionData.session.access_token;
+      if (!accessToken) {
+        console.error("没有访问令牌");
         toast.error("请先登录");
         return;
       }
@@ -874,7 +902,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
           {
             method: "GET",
             headers: {
-              Authorization: `Bearer ${session.access_token}`,
+              Authorization: `Bearer ${accessToken}`,
             },
           }
         );

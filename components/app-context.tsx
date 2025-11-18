@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, ReactNode } from "react";
+import { useLanguage } from "@/components/language-provider";
 
 interface AppContextType {
   language: string;
@@ -12,14 +13,14 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguage] = useState("zh");
+  const { language } = useLanguage();
   const [activeView, setActiveView] = useState("workspace");
 
   return (
     <AppContext.Provider
       value={{
         language,
-        setLanguage,
+        setLanguage: () => {}, // 已弃用，使用 useLanguage 替代
         activeView,
         setActiveView,
       }}

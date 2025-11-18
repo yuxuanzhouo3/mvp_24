@@ -156,7 +156,7 @@ export function GPTLibrary({
 
   const addGPT = (gpt: any) => {
     if (
-      selectedGPTs.length < 8 &&
+      selectedGPTs.length < 4 &&
       !selectedGPTs.find((selected) => selected.id === gpt.id)
     ) {
       // 手动添加AI时，移除task属性，确保使用并行模式

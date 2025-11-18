@@ -368,11 +368,11 @@ export const zh = {
     selected: "已选择",
     aiSelected: "个AI",
     clearAll: "清空",
-    maxSelected: "最多8个",
+    maxSelected: "最多4个",
     specialty: "专长",
     rating: "评分",
     teamMembers: "团队成员",
-    selectedCount: "已选择 {count} 个AI (最多8个)",
+    selectedCount: "已选择 {count} 个AI (最多4个)",
   },
 
   // ==================== AI Collaboration Panel ====================

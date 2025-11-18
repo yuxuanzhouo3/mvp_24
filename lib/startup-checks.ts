@@ -81,15 +81,34 @@ export function performStartupSecurityChecks(): void {
   console.log("🎉 Security checks completed successfully");
 }
 
-// 在开发环境中运行检查
-if (process.env.NODE_ENV !== "test") {
-  try {
-    performStartupSecurityChecks();
-  } catch (error) {
-    console.error("🚨 Startup security check failed:", error);
-    // 在生产环境中，安全检查失败应该阻止启动
-    if (process.env.NODE_ENV === "production") {
-      process.exit(1);
+// 懒加载：延迟执行安全检查，避免在构建时阻塞
+// 使用 Promise.then 确保在事件循环的下一个微任务中执行
+let securityChecksPerformed = false;
+
+if (typeof window === "undefined" && process.env.NODE_ENV !== "test") {
+  // 仅在服务器端且非测试环境
+  Promise.resolve().then(() => {
+    if (!securityChecksPerformed) {
+      securityChecksPerformed = true;
+      try {
+        performStartupSecurityChecks();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error("🚨 Startup security check failed:", errorMessage);
+        console.error("📋 Current environment:");
+        console.error("   NODE_ENV:", process.env.NODE_ENV);
+        console.error("   NEXT_PUBLIC_SUPABASE_URL:", process.env.NEXT_PUBLIC_SUPABASE_URL ? "✓ Set" : "✗ Missing");
+        console.error("   NEXT_PUBLIC_SUPABASE_ANON_KEY:", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? "✓ Set" : "✗ Missing");
+        console.error("   APP_URL:", process.env.APP_URL ? "✓ Set" : "✗ Missing");
+
+        // 在生产环境中，记录警告但继续运行（避免503错误）
+        // 这样用户能通过日志看到问题并修复
+        if (process.env.NODE_ENV === "production") {
+          console.warn("⚠️  Production mode: Security checks failed but continuing to serve requests");
+          console.warn("⚠️  Please review the errors above and update your environment variables");
+          // 不调用 process.exit(1)，让应用继续运行
+        }
+      }
     }
-  }
+  });
 }

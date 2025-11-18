@@ -1,0 +1,597 @@
+/**
+ * 国内用户认证 API (App Router版)
+ * 简化后的版本：仅处理登录认证
+ *
+ * 支持的操作:
+ * - action=signup: 用户注册
+ * - action=login: 用户登录
+ *
+ * 调用方法:
+ * POST /api/auth
+ * {
+ *   "action": "login|signup",
+ *   "email": "user@example.com",
+ *   "password": "password123"
+ * }
+ */
+
+import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import { loginUser, signupUser } from "@/lib/cloudbase-service";
+
+/**
+ * POST /api/auth
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { email, password, action = "login" } = body;
+
+    console.log("📨 [/api/auth] 收到请求，action:", action, "email:", email);
+
+    if (!email || !password) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "请提供邮箱和密码",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (action === "login") {
+      // 登录
+      console.log("🔐 [/api/auth] 处理登录请求");
+      const result = await loginUser(email, password);
+
+      if (!result.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: result.error || "登录失败",
+          },
+          { status: 401 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        user: {
+          id: result.userId,
+          email: result.email,
+          name: result.name,
+        },
+        token: result.token,
+      });
+    } else if (action === "signup") {
+      // 注册
+      console.log("📝 [/api/auth] 处理注册请求");
+      const result = await signupUser(email, password);
+
+      if (!result.success) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: result.error || "注册失败",
+          },
+          { status: 400 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        user: {
+          id: result.userId,
+          email: email,
+          name: email.split("@")[0],
+        },
+        token: result.token,
+      });
+    } else {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "未知的 action",
+        },
+        { status: 400 }
+      );
+    }
+  } catch (error: any) {
+    console.error("❌ [/api/auth] 异常:", error);
+    return NextResponse.json(
+      {
+        success: false,
+        message: error.message || "服务器错误",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * 获取微信用户信息
+ */
+async function getWechatUserInfo(code: string) {
+  try {
+    const appId = process.env.NEXT_PUBLIC_WECHAT_APP_ID;
+    const appSecret = process.env.WECHAT_APP_SECRET;
+
+    if (!appId || !appSecret) {
+      throw new Error("微信应用配置缺失");
+    }
+
+    // 第一步：使用授权码换取 access_token
+    const tokenUrl = `https://api.weixin.qq.com/sns/oauth2/access_token?appid=${appId}&secret=${appSecret}&code=${code}&grant_type=authorization_code`;
+
+    const tokenResponse = await fetch(tokenUrl);
+    const tokenData = await tokenResponse.json();
+
+    if (tokenData.errcode) {
+      console.error("微信获取access_token失败:", tokenData);
+      return null;
+    }
+
+    const { access_token, openid, unionid } = tokenData;
+
+    // 第二步：使用 access_token 获取用户信息
+    const userUrl = `https://api.weixin.qq.com/sns/userinfo?access_token=${access_token}&openid=${openid}&lang=zh_CN`;
+
+    const userResponse = await fetch(userUrl);
+    const userData = await userResponse.json();
+
+    if (userData.errcode) {
+      console.error("微信获取用户信息失败:", userData);
+      return null;
+    }
+
+    return {
+      openid: userData.openid,
+      unionid: userData.unionid || unionid,
+      nickname: userData.nickname,
+      sex: userData.sex,
+      province: userData.province,
+      city: userData.city,
+      country: userData.country,
+      headimgurl: userData.headimgurl,
+      privilege: userData.privilege,
+    };
+  } catch (error) {
+    console.error("获取微信用户信息时出错:", error);
+    return null;
+  }
+}
+
+/**
+ * POST /api/auth
+ */
+export async function POST(request: NextRequest) {
+  try {
+    // 调试：记录原始请求体
+    const rawBody = await request.text();
+    console.log("🔍 Raw request body:", rawBody);
+
+    let body;
+    try {
+      body = JSON.parse(rawBody);
+    } catch (parseError) {
+      console.error("❌ JSON parse error:", parseError);
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid JSON format",
+        },
+        { status: 400 }
+      );
+    }
+
+    const { email, password, action = "login", code } = body;
+
+    // 在请求处理时初始化 CloudBase，避免全局初始化问题
+    let app: any;
+    let auth: any;
+    let db: any;
+
+    try {
+      // 使用 Node.js 适配器
+      cloudbase.useAdapters(adapter);
+
+      // 初始化 CloudBase App 实例
+      app = cloudbase.init({
+        env:
+          process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID ||
+          "multigpt-6g9pqxiz52974a7c",
+        appSecret: process.env.CLOUDBASE_SECRET_KEY as string,
+        appSign: process.env.CLOUDBASE_SECRET_KEY as string,
+      });
+
+      auth = app.auth();
+      db = app.mysql();
+
+      console.log("✅ CloudBase 初始化成功");
+    } catch (initError: any) {
+      console.error("❌ CloudBase 初始化失败:", initError);
+      return NextResponse.json(
+        {
+          success: false,
+          message: "CloudBase 初始化失败: " + initError.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    if (action === "signup") {
+      // ============ 注册逻辑 ============
+      try {
+        console.log(`📝 [Signup] 处理邮箱: ${email}`);
+
+        if (!email || !password) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "请提供邮箱和密码",
+            },
+            { status: 400 }
+          );
+        }
+
+        // 使用 CloudBase 内置注册
+        const loginState = await auth.signUp({
+          email: email,
+          password: password,
+          name: email.split("@")[0], // 使用邮箱前缀作为用户名
+        });
+
+        console.log(`✅ [Signup] 注册成功: ${email}`);
+
+        // 获取用户信息
+        const user = auth.currentUser;
+        if (!user) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "注册成功但获取用户信息失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        // 获取访问令牌
+        let accessToken: string;
+        try {
+          const tokenResult = await auth.getAccessToken();
+          accessToken = tokenResult.accessToken;
+          console.log(
+            `🔑 [Signup] 获取到访问令牌: ${accessToken?.substring(0, 20)}...`
+          );
+        } catch (tokenError) {
+          console.error("❌ [Signup] 获取访问令牌失败:", tokenError);
+          return NextResponse.json(
+            {
+              success: false,
+              message: "注册成功但获取访问令牌失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        // 在 user_profiles 表中创建用户记录
+        const userProfile = {
+          _id: user.uid,
+          _openid: user.uid,
+          user_id: email,
+          email: email,
+          full_name: user.name || email.split("@")[0],
+          avatar_url: (user as any).picture || null,
+          subscription_plan: "free",
+          subscription_status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          createBy: "system",
+          updateBy: "system",
+          _sort: 0,
+          owner: email,
+        };
+
+        const { error: insertError } = await db
+          .from("user_profiles")
+          .insert(userProfile);
+        if (insertError) {
+          console.error("❌ 插入用户档案错误:", insertError);
+          // 不返回错误，继续处理
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            message: "注册成功",
+            user: {
+              id: user.uid,
+              userId: user.uid,
+              email: user.email,
+              name: user.name,
+              avatar: (user as any).picture,
+              pro: false,
+              region: "china",
+            },
+            token: accessToken,
+          },
+          { status: 200 }
+        );
+      } catch (error: any) {
+        console.error("❌ [Signup] 注册错误:", error);
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || "注册失败，请稍后重试",
+          },
+          { status: 400 }
+        );
+      }
+    } else if (action === "login") {
+      // ============ 登录逻辑 ============
+      try {
+        console.log(`🔐 [Login] 处理邮箱: ${email}`);
+
+        if (!email || !password) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "请提供邮箱和密码",
+            },
+            { status: 400 }
+          );
+        }
+
+        // 使用 CloudBase 内置登录
+        const loginState = await auth.signIn({
+          username: email,
+          password: password,
+        });
+
+        console.log(`✅ [Login] 登录成功: ${email}`);
+
+        // 获取用户信息
+        const user = auth.currentUser;
+        if (!user) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "登录成功但获取用户信息失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        // 获取访问令牌
+        let accessToken: string;
+        try {
+          const tokenResult = await auth.getAccessToken();
+          accessToken = tokenResult.accessToken;
+          console.log(
+            `🔑 [Login] 获取到访问令牌: ${accessToken?.substring(0, 20)}...`
+          );
+        } catch (tokenError) {
+          console.error("❌ [Login] 获取访问令牌失败:", tokenError);
+          return NextResponse.json(
+            {
+              success: false,
+              message: "登录成功但获取访问令牌失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            message: "登录成功",
+            user: {
+              id: user.uid,
+              userId: user.uid,
+              email: user.email,
+              name: user.name,
+              avatar: (user as any).picture,
+              pro: false,
+              region: "china",
+            },
+            token: accessToken,
+          },
+          { status: 200 }
+        );
+      } catch (error: any) {
+        console.error("❌ [Login] 登录错误:", error);
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || "邮箱或密码错误",
+          },
+          { status: 400 }
+        );
+      }
+    } else if (action === "refresh") {
+      // ============ Token刷新逻辑 ============
+      try {
+        console.log(`🔄 [Refresh] 刷新Token`);
+
+        // 检查当前登录状态
+        const loginState = auth.hasLoginState();
+        if (!loginState) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "用户未登录",
+            },
+            { status: 401 }
+          );
+        }
+
+        // 获取新的访问令牌
+        const { accessToken } = await auth.getAccessToken();
+
+        console.log(`✅ [Refresh] Token已刷新`);
+
+        return NextResponse.json(
+          {
+            success: true,
+            message: "Token刷新成功",
+            token: accessToken,
+          },
+          { status: 200 }
+        );
+      } catch (error: any) {
+        console.error("❌ [Refresh] Token刷新错误:", error);
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || "Token刷新失败",
+          },
+          { status: 400 }
+        );
+      }
+    } else if (action === "login_wechat") {
+      // ============ 微信登录逻辑 ============
+      try {
+        if (!code) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "缺少微信授权码",
+            },
+            { status: 400 }
+          );
+        }
+
+        console.log(
+          `🔐 [WeChat Login] 处理授权码: ${code.substring(0, 10)}...`
+        );
+
+        // 使用微信授权码获取用户信息
+        const wechatUserInfo = await getWechatUserInfo(code);
+
+        if (!wechatUserInfo) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "获取微信用户信息失败",
+            },
+            { status: 400 }
+          );
+        }
+
+        // 使用 CloudBase 微信登录
+        const loginState = await (auth as any).signInWithOpenId({
+          useWxCloud: true, // 使用微信云开发模式
+        });
+
+        console.log(`✅ [WeChat Login] 登录成功: ${wechatUserInfo.nickname}`);
+
+        // 获取用户信息
+        const user = auth.currentUser;
+        if (!user) {
+          return NextResponse.json(
+            {
+              success: false,
+              message: "微信登录成功但获取用户信息失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        // 获取访问令牌
+        let accessToken: string;
+        try {
+          const tokenResult = await auth.getAccessToken();
+          accessToken = tokenResult.accessToken;
+          console.log(
+            `🔑 [WeChat Login] 获取到访问令牌: ${accessToken?.substring(
+              0,
+              20
+            )}...`
+          );
+        } catch (tokenError) {
+          console.error("❌ [WeChat Login] 获取访问令牌失败:", tokenError);
+          return NextResponse.json(
+            {
+              success: false,
+              message: "微信登录成功但获取访问令牌失败",
+            },
+            { status: 500 }
+          );
+        }
+
+        // 更新或创建用户档案
+        const userProfile = {
+          _id: user.uid,
+          _openid: user.uid,
+          user_id: wechatUserInfo.openid,
+          email: `${wechatUserInfo.openid}@wechat.local`,
+          full_name: wechatUserInfo.nickname || "微信用户",
+          avatar_url: wechatUserInfo.headimgurl,
+          wechat_open_id: wechatUserInfo.openid,
+          wechat_union_id: wechatUserInfo.unionid,
+          subscription_plan: "free",
+          subscription_status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          createBy: "system",
+          updateBy: "system",
+          _sort: 0,
+          owner: wechatUserInfo.openid,
+        };
+
+        // 先尝试更新，如果不存在则插入
+        const { error: upsertError } = await db
+          .from("user_profiles")
+          .upsert(userProfile);
+        if (upsertError) {
+          console.error("❌ 更新用户档案错误:", upsertError);
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            message: "微信登录成功",
+            user: {
+              id: user.uid,
+              userId: user.uid,
+              email: userProfile.email,
+              name: userProfile.full_name,
+              avatar: userProfile.avatar_url,
+              pro: false,
+              region: "china",
+            },
+            token: accessToken,
+          },
+          { status: 200 }
+        );
+      } catch (error: any) {
+        console.error("❌ [WeChat Login] 登录错误:", error);
+        return NextResponse.json(
+          {
+            success: false,
+            message: error.message || "微信登录失败",
+          },
+          { status: 400 }
+        );
+      }
+    } else {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "无效的action参数，请使用 signup, login, refresh 或 login_wechat",
+        },
+        { status: 400 }
+      );
+    }
+  } catch (error: any) {
+    console.error("❌ [API Error]:", error);
+    return NextResponse.json(
+      {
+        success: false,
+        message: error.message || "服务器错误",
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -12,10 +12,12 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle, Loader2 } from "lucide-react";
+import { useUser } from "@/components/user-context";
 
 function PaymentSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { refreshUser } = useUser();
   const [isProcessing, setIsProcessing] = useState(true);
   const [paymentStatus, setPaymentStatus] = useState<
     "processing" | "success" | "error"
@@ -25,21 +27,34 @@ function PaymentSuccessContent() {
     amount?: number;
     currency?: string;
   }>({});
+  const [hasProcessed, setHasProcessed] = useState(false); // 🔑 防止重复处理
 
   useEffect(() => {
+    // 🔑 如果已经处理过，直接返回
+    if (hasProcessed) {
+      return;
+    }
+
     const handlePaymentSuccess = async () => {
       try {
         // 🔄 一次性支付使用不同的参数
         const sessionId = searchParams.get("session_id"); // Stripe
         const token = searchParams.get("token"); // PayPal
+        const outTradeNo = searchParams.get("out_trade_no"); // Alipay
+        const tradeNo = searchParams.get("trade_no"); // Alipay交易号
+        const wechatOutTradeNo = searchParams.get("wechat_out_trade_no"); // WeChat Native QR Code
 
         console.log("Payment success callback:", {
           sessionId,
           token,
+          outTradeNo,
+          tradeNo,
+          wechatOutTradeNo,
+          allParams: Object.fromEntries(searchParams.entries()),
         });
 
-        // 一次性支付:两个参数至少要有一个
-        if (!sessionId && !token) {
+        // 一次性支付:至少要有一个参数
+        if (!sessionId && !token && !outTradeNo && !tradeNo && !wechatOutTradeNo) {
           throw new Error("Missing payment confirmation parameters");
         }
 
@@ -47,16 +62,14 @@ function PaymentSuccessContent() {
         const params = new URLSearchParams();
         if (sessionId) params.set("session_id", sessionId);
         if (token) params.set("token", token);
+        if (outTradeNo) params.set("out_trade_no", outTradeNo);
+        if (tradeNo) params.set("trade_no", tradeNo);
+        if (wechatOutTradeNo) params.set("wechat_out_trade_no", wechatOutTradeNo);
 
         // 获取认证 token
-        const { createClient } = await import("@supabase/supabase-js");
-        const supabase = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        );
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
+        const { getAuthClient } = await import("@/lib/auth/client");
+        const sessionResult = await getAuthClient().getSession();
+        const session = sessionResult.data.session;
 
         const headers: Record<string, string> = {};
         if (session?.access_token) {
@@ -77,6 +90,9 @@ function PaymentSuccessContent() {
 
         if (result.success) {
           console.log("Payment confirmed:", result);
+          // 🔑 标记为已处理，防止重复调用
+          setHasProcessed(true);
+
           // 保存支付详情
           setPaymentDetails({
             daysAdded: result.daysAdded,
@@ -89,6 +105,16 @@ function PaymentSuccessContent() {
           } catch (e) {
             // 忽略localStorage错误
           }
+
+          // ✅ 关键修复：刷新用户信息以反映新的会员状态
+          console.log("🔄 刷新用户信息以获取最新的会员状态...");
+          try {
+            await refreshUser();
+            console.log("✅ 用户信息已刷新，会员状态已更新");
+          } catch (refreshError) {
+            console.warn("⚠️ 刷新用户信息失败，但支付已成功:", refreshError);
+          }
+
           setPaymentStatus("success");
         } else {
           throw new Error(result.error || "Payment confirmation failed");
@@ -96,13 +122,14 @@ function PaymentSuccessContent() {
       } catch (error) {
         console.error("Payment confirmation error:", error);
         setPaymentStatus("error");
+        setHasProcessed(true); // 🔑 即使失败也标记为已处理，避免无限重试
       } finally {
         setIsProcessing(false);
       }
     };
 
     handlePaymentSuccess();
-  }, [searchParams]);
+  }, [searchParams, hasProcessed]); // 🔑 添加 hasProcessed 到依赖
 
   const handleContinue = () => {
     router.push("/"); // 或者跳转到用户仪表板

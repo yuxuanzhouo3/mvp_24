@@ -163,7 +163,7 @@ describe("Architecture Integration Tests", () => {
       try {
         envLoader.load();
       } catch (error) {
-        expect(error.message).toContain("APP_URL is required");
+        expect((error as Error).message).toContain("APP_URL is required");
       }
     });
 
@@ -199,7 +199,7 @@ describe("Architecture Integration Tests", () => {
       });
 
       // Set development environment
-      process.env.NODE_ENV = "development";
+      (process.env as any).NODE_ENV = "development";
       process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-anon-key";
 
@@ -210,7 +210,7 @@ describe("Architecture Integration Tests", () => {
       expect(config.APP_URL).toBe("http://localhost:3000");
 
       // Clean up
-      delete process.env.NODE_ENV;
+      delete (process.env as any).NODE_ENV;
       delete process.env.NEXT_PUBLIC_SUPABASE_URL;
       delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     });

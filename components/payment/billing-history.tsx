@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { getAuthClient } from "@/lib/auth/client";
 import {
   Card,
   CardContent,
@@ -58,11 +58,9 @@ export function BillingHistory({ userId }: BillingHistoryProps) {
 
       try {
         setLoading(true);
-        // 从 API 获取历史账单（使用 Supabase access token 验证）
-        // 为了安全性，API 会从 Authorization Bearer 验证当前用户，所以这里无需再传 userId
-        // 该请求依赖用户已登录并且浏览器有 Supabase 的会话 Cookie
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
+        // 从 API 获取历史账单（使用认证 token）
+        const sessionResult = await getAuthClient().getSession();
+        const token = sessionResult.data.session?.access_token;
 
         const headers: HeadersInit = token
           ? { Authorization: `Bearer ${token}` }
@@ -145,8 +143,8 @@ export function BillingHistory({ userId }: BillingHistoryProps) {
   const handleCancelOrder = async (recordId: string) => {
     setProcessingId(recordId);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const sessionResult = await getAuthClient().getSession();
+      const token = sessionResult.data.session?.access_token;
 
       const response = await fetch(`/api/payment/cancel`, {
         method: "POST",
@@ -189,8 +187,8 @@ export function BillingHistory({ userId }: BillingHistoryProps) {
     setProcessingId(record.id);
     try {
       // 尝试获取原支付链接或创建新的支付会话
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
+      const sessionResult = await getAuthClient().getSession();
+      const token = sessionResult.data.session?.access_token;
 
       const response = await fetch(`/api/payment/continue`, {
         method: "POST",

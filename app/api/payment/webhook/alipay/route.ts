@@ -8,39 +8,49 @@ export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    // 支付宝使用GET参数传递数据
-    const searchParams = request.nextUrl.searchParams;
+    console.log("🔔 [Alipay Webhook] 收到 webhook 请求");
+
+    // 支付宝在POST body中以form-urlencoded格式传递数据
+    const formData = await request.formData();
     const params: Record<string, string> = {};
 
     // 收集所有参数
-    searchParams.forEach((value, key) => {
-      params[key] = value;
+    formData.forEach((value, key) => {
+      params[key] = value as string;
+    });
+
+    console.log("📝 [Alipay Webhook] 接收到的参数:", {
+      outTradeNo: params.out_trade_no,
+      tradeNo: params.trade_no,
+      tradeStatus: params.trade_status,
+      totalAmount: params.total_amount,
+      passbackParams: params.passback_params,
+      hasSignature: !!params.sign,
     });
 
     // 验证支付宝签名
     const isValidSignature = verifyAlipaySignature(
       params,
-      process.env.ALIPAY_PUBLIC_KEY
+      process.env.ALIPAY_ALIPAY_PUBLIC_KEY
     );
 
+    console.log("🔐 [Alipay Webhook] 签名验证:", isValidSignature ? "✅ 通过" : "❌ 失败");
+
     if (!isValidSignature) {
-      console.error("Invalid Alipay webhook signature");
+      console.error("❌ [Alipay Webhook] Invalid Alipay webhook signature");
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     }
 
     // 检查支付状态
     const tradeStatus = params.trade_status;
+    console.log("💰 [Alipay Webhook] 支付状态:", tradeStatus);
+
     if (tradeStatus !== "TRADE_SUCCESS" && tradeStatus !== "TRADE_FINISHED") {
-      console.log("Alipay payment not completed:", tradeStatus);
+      console.log("⏭️  [Alipay Webhook] 支付状态不是最终状态，忽略:", tradeStatus);
       return NextResponse.json({ status: "ignored" });
     }
 
-    console.log("Received Alipay webhook:", {
-      outTradeNo: params.out_trade_no,
-      tradeNo: params.trade_no,
-      tradeStatus,
-      totalAmount: params.total_amount,
-    });
+    console.log("✅ [Alipay Webhook] 支付成功，开始处理");
 
     // 处理webhook事件
     const webhookHandler = WebhookHandler.getInstance();
@@ -50,15 +60,18 @@ export async function POST(request: NextRequest) {
       params
     );
 
+    console.log("📊 [Alipay Webhook] 处理结果:", success ? "✅ 成功" : "❌ 失败");
+
     if (success) {
       // 支付宝要求返回success字符串
+      console.log("✨ [Alipay Webhook] 返回 success");
       return new NextResponse("success");
     } else {
-      console.error("Failed to process Alipay webhook");
+      console.error("❌ [Alipay Webhook] Failed to process Alipay webhook");
       return new NextResponse("failure");
     }
   } catch (error) {
-    console.error("Alipay webhook error:", error);
+    console.error("❌ [Alipay Webhook] 异常错误:", error);
     return new NextResponse("failure");
   }
 }

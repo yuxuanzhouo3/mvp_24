@@ -2,15 +2,15 @@
 import { TextEncoder, TextDecoder } from "util";
 
 // 设置全局的TextEncoder和TextDecoder
-global.TextEncoder = TextEncoder;
-global.TextDecoder = TextDecoder;
+(global as any).TextEncoder = TextEncoder;
+(global as any).TextDecoder = TextDecoder;
 
 // 设置全局的fetch mock
-global.fetch = jest.fn();
+(global as any).fetch = jest.fn();
 
 // 设置AbortController polyfill（如果需要）
 if (typeof global.AbortController === "undefined") {
-  global.AbortController = class AbortController {
+  (global as any).AbortController = class AbortController {
     signal = { aborted: false };
     abort() {
       this.signal.aborted = true;

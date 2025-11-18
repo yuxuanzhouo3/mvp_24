@@ -16,10 +16,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, CheckCircle } from "lucide-react";
 import { RegionType } from "@/lib/architecture-modules/core/types";
+import { isChinaRegion } from "@/lib/config/region";
 import { useUser } from "@/components/user-context";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
+import { getAmountByCurrency } from "@/lib/payment-config";
 
 export default function PaymentPage() {
   const { user, loading } = useUser();
@@ -44,20 +46,13 @@ export default function PaymentPage() {
     return path;
   };
 
-  // 根据debug参数确定区域和货币
+  // 根据区域配置确定货币
   const getRegionAndCurrency = () => {
-    if (currentDebugParam) {
-      switch (currentDebugParam.toLowerCase()) {
-        case "china":
-          return { region: RegionType.CHINA, currency: "CNY" };
-        case "usa":
-        case "us":
-          return { region: RegionType.USA, currency: "USD" };
-        default:
-          return { region: RegionType.USA, currency: "USD" };
-      }
+    if (isChinaRegion()) {
+      return { region: RegionType.CHINA, currency: "CNY" };
+    } else {
+      return { region: RegionType.USA, currency: "USD" };
     }
-    return { region: RegionType.USA, currency: "USD" };
   };
 
   const { region, currency } = getRegionAndCurrency();
@@ -160,40 +155,67 @@ export default function PaymentPage() {
     planId: string,
     billingCycle: "monthly" | "yearly"
   ) => {
-    // 基础价格（USD）
-    const basePrices = {
-      free: {
-        amount: 0,
-        description: language === "zh" ? "免费版" : "Free Plan",
-      },
-      pro: {
-        amount: billingCycle === "monthly" ? 9.99 : 99.99,
-        description:
-          language === "zh"
-            ? `专业版 - ${billingCycle === "monthly" ? "月付" : "年付"}`
-            : `Pro Plan - ${billingCycle === "monthly" ? "Monthly" : "Yearly"}`,
-      },
-    };
+    // 根据货币类型确定价格（使用统一配置）
+    const amount = getAmountByCurrency(currency, billingCycle);
 
-    const plan = basePrices[planId as keyof typeof basePrices];
-    if (plan) {
-      setSelectedPlan({
-        planId,
-        billingCycle,
-        amount: convertPrice(plan.amount, currency),
-        currency,
-        description: plan.description,
-      });
-      setPaymentResult(null);
-    }
+    const description =
+      language === "zh"
+        ? `专业版 - ${billingCycle === "monthly" ? "月付" : "年付"}`
+        : `Pro Plan - ${billingCycle === "monthly" ? "Monthly" : "Yearly"}`;
+
+    setSelectedPlan({
+      planId,
+      billingCycle,
+      amount,
+      currency,
+      description,
+    });
+    setPaymentResult(null);
   };
 
   const handlePaymentSuccess = (result: any) => {
     setPaymentResult(result);
 
-    // 如果有支付URL，重定向到支付页面
+    // 如果有支付URL或微信二维码，处理支付
     if (result.paymentUrl) {
-      window.location.href = result.paymentUrl;
+      // 检查是否是微信支付（codeUrl 格式的二维码链接）
+      if (
+        typeof result.paymentUrl === "string" &&
+        (result.paymentUrl.startsWith("weixin://") ||
+          result.paymentUrl.includes("weixin://"))
+      ) {
+        console.log("WeChat Native payment - redirect to QR code page");
+        // 微信支付：跳转到专门的二维码页面
+        const qrcodeUrl = `/payment/wechat-qrcode?codeUrl=${encodeURIComponent(
+          result.paymentUrl
+        )}&paymentId=${encodeURIComponent(
+          result.paymentId || ""
+        )}&amount=${encodeURIComponent(selectedPlan?.amount || "")}`;
+        window.location.href = qrcodeUrl;
+        return;
+      }
+
+      // 检查是否是HTML表单 (支付宝返回的是HTML)
+      if (
+        typeof result.paymentUrl === "string" &&
+        result.paymentUrl.includes("<form")
+      ) {
+        console.log("Redirecting to Alipay payment page...");
+
+        // 支付宝：跳转到专门的支付重定向页面（绕过CSP限制）
+        // 将表单HTML进行base64编码后作为URL参数传递
+        const encodedForm = btoa(result.paymentUrl);
+        const redirectUrl = `/payment/redirect?form=${encodeURIComponent(
+          encodedForm
+        )}`;
+
+        console.log("Redirect URL created");
+        window.location.href = redirectUrl;
+      } else {
+        // 其他支付方式返回的是URL，直接跳转
+        console.log("Redirecting to payment URL:", result.paymentUrl);
+        window.location.href = result.paymentUrl;
+      }
     }
   };
 
@@ -223,8 +245,12 @@ export default function PaymentPage() {
             <ArrowLeft className="h-4 w-4 mr-2" />
             {t.common.back}
           </Button>
-          <h1 className="text-3xl font-bold">{t.payment.manage}</h1>
-          <p className="text-muted-foreground mt-2">{t.payment.subtitle}</p>
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold">
+            {t.payment.manage}
+          </h1>
+          <p className="text-sm sm:text-base text-muted-foreground mt-2">
+            {t.payment.subtitle}
+          </p>
         </div>
 
         {/* 支付成功提示 */}
@@ -250,13 +276,17 @@ export default function PaymentPage() {
           </Card>
         )}
 
-        <Tabs defaultValue="plans" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="plans">{t.payment.title}</TabsTrigger>
-            <TabsTrigger value="payment">
+        <Tabs defaultValue="plans" className="space-y-4 sm:space-y-6">
+          <TabsList className="grid w-full grid-cols-3 gap-1 sm:gap-0">
+            <TabsTrigger value="plans" className="text-xs sm:text-sm">
+              {t.payment.title}
+            </TabsTrigger>
+            <TabsTrigger value="payment" className="text-xs sm:text-sm">
               {language === "zh" ? "支付" : "Payment"}
             </TabsTrigger>
-            <TabsTrigger value="history">{t.payment.billing}</TabsTrigger>
+            <TabsTrigger value="history" className="text-xs sm:text-sm">
+              {t.payment.billing}
+            </TabsTrigger>
           </TabsList>
 
           {/* 订阅计划 */}

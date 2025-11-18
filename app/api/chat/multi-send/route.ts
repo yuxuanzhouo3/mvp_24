@@ -6,7 +6,6 @@
 
 import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { supabase } from "@/lib/supabase";
 import {
   multiAgentOrchestrator,
   CollaborationMode,
@@ -14,6 +13,9 @@ import {
 import { validateAgents, getAgentById } from "@/lib/ai/ai-agents.config";
 import { recordUsage } from "@/lib/ai/token-counter";
 import { captureException } from "@/lib/sentry";
+import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
+import { isChinaRegion } from "@/lib/config/region";
+import { saveGptMessage as saveCloudBaseMessage } from "@/lib/cloudbase-db";
 
 export const runtime = "nodejs";
 
@@ -25,19 +27,21 @@ export async function POST(req: NextRequest) {
   try {
     // 鉴权
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
+      return Response.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return Response.json({ error: "Invalid token" }, { status: 401 });
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
+      return Response.json({ error: authResult.error }, { status: 401 });
     }
+
+    const userId = authResult.userId;
 
     // 解析请求
     const body = await req.json();
@@ -74,7 +78,7 @@ export async function POST(req: NextRequest) {
     const { data: profile } = await supabaseAdmin
       .from("user_profiles")
       .select("subscription_plan")
-      .eq("id", user.id)
+      .eq("id", userId)
       .single();
 
     const userPlan = profile?.subscription_plan || "free";
@@ -111,7 +115,7 @@ export async function POST(req: NextRequest) {
       const { count } = await supabaseAdmin
         .from("gpt_messages")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", user.id)
+        .eq("user_id", userId)
         .eq("role", "assistant")
         .gte("created_at", startOfMonth.toISOString());
 
@@ -128,25 +132,67 @@ export async function POST(req: NextRequest) {
     }
 
     // 验证会话所有权
-    const { data: session, error: sessionError } = await supabaseAdmin
-      .from("gpt_sessions")
-      .select("*")
-      .eq("id", sessionId)
-      .eq("user_id", user.id)
-      .single();
+    let session: any;
+    let sessionError: any;
+
+    if (isChinaRegion()) {
+      // 国内版：从 CloudBase 获取
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      const result = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      if (result.data && result.data.length > 0) {
+        const conv = result.data[0];
+        if (conv.user_id === userId) {
+          session = conv;
+        } else {
+          sessionError = { message: "Access denied" };
+        }
+      } else {
+        sessionError = { message: "Session not found" };
+      }
+    } else {
+      // 国际版：从 Supabase 获取
+      const result = await supabaseAdmin
+        .from("gpt_sessions")
+        .select("*")
+        .eq("id", sessionId)
+        .eq("user_id", userId)
+        .single();
+      session = result.data;
+      sessionError = result.error;
+    }
 
     if (sessionError || !session) {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
     // 保存用户消息
-    await supabaseAdmin.from("gpt_messages").insert({
-      session_id: sessionId,
-      user_id: user.id,
-      role: "user",
-      content: message,
-      tokens_used: 0,
-    });
+    if (isChinaRegion()) {
+      await saveCloudBaseMessage({
+        session_id: sessionId,
+        user_id: userId,
+        role: "user",
+        content: message,
+      });
+    } else {
+      await supabaseAdmin.from("gpt_messages").insert({
+        session_id: sessionId,
+        user_id: userId,
+        role: "user",
+        content: message,
+        tokens_used: 0,
+      });
+    }
 
     // 执行多AI协作
     let result;
@@ -191,19 +237,29 @@ export async function POST(req: NextRequest) {
     // 保存所有AI响应到数据库
     for (const response of result.responses) {
       if (!response.error) {
-        await supabaseAdmin.from("gpt_messages").insert({
-          session_id: sessionId,
-          user_id: user.id,
-          role: "assistant",
-          content: `[${response.agentName}]\n${response.content}`,
-          tokens_used: response.tokens,
-        });
+        if (isChinaRegion()) {
+          await saveCloudBaseMessage({
+            session_id: sessionId,
+            user_id: userId,
+            role: "assistant",
+            content: `[${response.agentName}]\n${response.content}`,
+            tokens_used: response.tokens,
+          });
+        } else {
+          await supabaseAdmin.from("gpt_messages").insert({
+            session_id: sessionId,
+            user_id: userId,
+            role: "assistant",
+            content: `[${response.agentName}]\n${response.content}`,
+            tokens_used: response.tokens,
+          });
+        }
 
         // 记录Token使用
         const agent = getAgentById(response.agentId);
         if (agent) {
           await recordUsage({
-            userId: user.id,
+            userId,
             sessionId,
             model: agent.model,
             promptTokens: Math.floor(response.tokens * 0.4),
@@ -217,20 +273,43 @@ export async function POST(req: NextRequest) {
 
     // 如果有综合结论，也保存
     if (result.synthesis) {
-      await supabaseAdmin.from("gpt_messages").insert({
-        session_id: sessionId,
-        user_id: user.id,
-        role: "assistant",
-        content: `[综合结论]\n${result.synthesis}`,
-        tokens_used: 0,
-      });
+      if (isChinaRegion()) {
+        await saveCloudBaseMessage({
+          session_id: sessionId,
+          user_id: userId,
+          role: "assistant",
+          content: `[综合结论]\n${result.synthesis}`,
+        });
+      } else {
+        await supabaseAdmin.from("gpt_messages").insert({
+          session_id: sessionId,
+          user_id: userId,
+          role: "assistant",
+          content: `[综合结论]\n${result.synthesis}`,
+          tokens_used: 0,
+        });
+      }
     }
 
     // 更新会话时间
-    await supabaseAdmin
-      .from("gpt_sessions")
-      .update({ updated_at: new Date().toISOString() })
-      .eq("id", sessionId);
+    if (isChinaRegion()) {
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      await cloudbase.collection("ai_conversations").doc(sessionId).update({
+        updated_at: new Date().toISOString(),
+      });
+    } else {
+      await supabaseAdmin
+        .from("gpt_sessions")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", sessionId);
+    }
 
     // 返回结果
     return Response.json({
@@ -273,25 +352,27 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   try {
     const authHeader = req.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+    if (tokenError || !token) {
+      return Response.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      );
     }
 
-    const token = authHeader.replace("Bearer ", "");
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return Response.json({ error: "Invalid token" }, { status: 401 });
+    const authResult = await verifyAuthToken(token);
+    if (!authResult.success || !authResult.userId) {
+      return Response.json({ error: authResult.error }, { status: 401 });
     }
+
+    const userId = authResult.userId;
 
     // 获取用户订阅
     const { data: profile } = await supabaseAdmin
       .from("user_profiles")
       .select("subscription_plan")
-      .eq("id", user.id)
+      .eq("id", userId)
       .single();
 
     const userPlan = profile?.subscription_plan || "free";

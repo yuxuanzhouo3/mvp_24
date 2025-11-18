@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense, useEffect, useCallback } from "react";
+import { useState, Suspense, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,14 +14,24 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { supabase } from "@/lib/supabase";
+import { getAuthClient } from "@/lib/auth/client";
 import { Eye, EyeOff, Mail, Lock, MessageSquare, Home } from "lucide-react";
 import { RegionType } from "@/lib/architecture-modules/core/types";
 import { useUser } from "@/components/user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
+import { getWechatLoginUrl } from "@/lib/wechat/oauth";
+import { isChinaDeployment } from "@/lib/config/deployment.config";
+import { useAuthConfig } from "@/lib/hooks/useAuthConfig";
+
+const authClient = getAuthClient();
 
 function AuthPageContent() {
+  // 从API端点读取配置
+  const { config, loading: configLoading } = useAuthConfig();
+  const wechatAppId = config.wechatAppId || "";
+  const appUrl = config.appUrl || "";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -73,8 +83,21 @@ function AuthPageContent() {
     [debugRegion]
   );
 
-  // 检测用户区域
-  const [userRegion, setUserRegion] = useState<RegionType>(RegionType.USA);
+  // 检测用户区域 - 从部署配置初始化
+  const getInitialRegion = (): RegionType => {
+    // 使用新的部署配置系统而不是环境变量
+    if (isChinaDeployment()) {
+      return RegionType.CHINA;
+    }
+    return RegionType.USA;
+  };
+
+  const [userRegion, setUserRegion] = useState<RegionType>(getInitialRegion());
+
+  useEffect(() => {
+    // 初始化区域
+    setUserRegion(getInitialRegion());
+  }, []);
 
   useEffect(() => {
     // 如果用户已经登录且不是在加载状态，自动跳转到首页
@@ -86,13 +109,13 @@ function AuthPageContent() {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || loading) return;
+    if (loading) return;
 
     setLoading(true);
     setError("");
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await authClient.signInWithPassword({
         email,
         password,
       });
@@ -103,8 +126,18 @@ function AuthPageContent() {
         return;
       }
 
-      // 登录成功，等待user-context更新用户状态后自动跳转
-      // useEffect会监听user变化并跳转
+      // 登录成功，触发auth-state-changed事件通知其他组件
+      // 对于INTL模式，Supabase SDK的onAuthStateChange会自动触发
+      console.log("邮箱登录成功，准备跳转...");
+      setLoading(false);
+
+      // 发送自定义事件，让user-context通过监听器更新（用于兼容CN模式）
+      window.dispatchEvent(new Event("auth-state-changed"));
+
+      // 等待user-context更新用户状态后自动跳转
+      setTimeout(() => {
+        router.replace(buildUrl("/"));
+      }, 500);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -117,101 +150,166 @@ function AuthPageContent() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || loading) return;
+    if (loading) return;
 
     setLoading(true);
     setError("");
 
-    // 第一步：验证表单并发送验证码
-    if (signupStep === "form") {
-      // 验证密码
-      if (password !== confirmPassword) {
-        setError("两次输入的密码不一致");
-        setLoading(false);
-        return;
-      }
-
-      if (password.length < 6) {
-        setError("密码长度至少为6位");
-        setLoading(false);
-        return;
-      }
-
-      try {
-        // 发送验证码到邮箱
-        const { error: otpError } = await supabase.auth.signInWithOtp({
-          email,
-          options: {
-            shouldCreateUser: false,
-          },
-        });
-
-        if (otpError) {
-          console.log("发送注册验证码:", otpError);
-        }
-
-        setSignupOtpSent(true);
-        setSignupStep("verify");
-        setError("验证码已发送到您的邮箱，请检查并输入验证码。");
-        setLoading(false);
-      } catch (err) {
-        if (err instanceof Error) {
-          setError(err.message);
-        } else {
-          setError("发送验证码失败，请稍后重试");
-        }
-        setLoading(false);
-      }
+    // 验证密码
+    if (password !== confirmPassword) {
+      setError("两次输入的密码不一致");
+      setLoading(false);
       return;
     }
 
-    // 第二步：验证验证码并完成注册
-    if (signupStep === "verify") {
-      if (!signupOtp) {
-        setError("请输入验证码");
-        setLoading(false);
-        return;
-      }
+    if (password.length < 6) {
+      setError("密码长度至少为6位");
+      setLoading(false);
+      return;
+    }
 
-      try {
-        // 先验证 OTP
-        const { error: verifyError } = await supabase.auth.verifyOtp({
-          email,
-          token: signupOtp,
-          type: "email",
+    try {
+      // 根据区域采用不同的注册方式
+      if (userRegion === RegionType.CHINA) {
+        // 中国区域：直接使用 email + password + confirmPassword 注册
+        // 无需 OTP 验证，直接调用后端 API
+
+        const response = await fetch("/api/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            password,
+            confirmPassword,
+            fullName: email.split("@")[0], // 使用邮箱前缀作为默认名称
+          }),
         });
 
-        if (verifyError) {
-          setError("验证码错误或已过期，请重新获取");
-          setLoading(false);
-          return;
-        }
+        const data = await response.json();
 
-        // 验证成功后，创建用户账户
-        const { error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-
-        if (signUpError) {
-          setError(signUpError.message);
+        if (!response.ok) {
+          // 处理特定的错误信息
+          if (data.code === "EMAIL_EXISTS") {
+            setError("该邮箱已被注册");
+          } else if (data.code === "WEAK_PASSWORD") {
+            setError(
+              data.passwordStrength?.feedback?.[0] ||
+                "密码强度不足，请使用更复杂的密码"
+            );
+          } else {
+            setError(data.error || data.message || "注册失败，请稍后重试");
+          }
           setLoading(false);
           return;
         }
 
         // 注册成功
-        setError("注册成功！正在登录...");
+        setError("注册成功！请使用您的邮箱和密码登录。");
         setSignupStep("form");
-        setSignupOtp("");
-        setSignupOtpSent(false);
-      } catch (err) {
-        if (err instanceof Error) {
-          setError(err.message);
-        } else {
-          setError("注册失败，请稍后重试");
-        }
+        setPassword("");
+        setConfirmPassword("");
+        setEmail("");
+        setLoginMethod("password");
         setLoading(false);
+
+        // 重置到登录页面
+        setTimeout(() => {
+          router.push(buildUrl("/auth", { mode: "signin" }));
+        }, 1500);
+      } else {
+        // 国际区域：使用原有的 OTP + Supabase 流程
+        if (signupStep === "form") {
+          // 第一步：发送 OTP
+          try {
+            const { error: otpError } = await authClient.signInWithOtp({
+              email,
+              options: {
+                shouldCreateUser: false,
+              },
+            });
+
+            if (otpError) {
+              console.log("发送注册验证码:", otpError);
+            }
+
+            setSignupOtpSent(true);
+            setSignupStep("verify");
+            setError("验证码已发送到您的邮箱，请检查并输入验证码。");
+            setLoading(false);
+          } catch (err) {
+            if (err instanceof Error) {
+              setError(err.message);
+            } else {
+              setError("发送验证码失败，请稍后重试");
+            }
+            setLoading(false);
+          }
+          return;
+        }
+
+        if (signupStep === "verify") {
+          // 第二步：验证 OTP 并注册
+          if (!signupOtp) {
+            setError("请输入验证码");
+            setLoading(false);
+            return;
+          }
+
+          try {
+            // 先验证 OTP
+            const { error: verifyError } = await authClient.verifyOtp({
+              email,
+              token: signupOtp,
+              type: "email",
+            });
+
+            if (verifyError) {
+              setError("验证码错误或已过期，请重新获取");
+              setLoading(false);
+              return;
+            }
+
+            // 验证成功后，创建用户账户
+            const { error: signUpError } = await authClient.signUp({
+              email,
+              password,
+            });
+
+            if (signUpError) {
+              setError(signUpError.message);
+              setLoading(false);
+              return;
+            }
+
+            // 注册成功
+            setError("注册成功！正在登录...");
+            setSignupStep("form");
+            setSignupOtp("");
+            setSignupOtpSent(false);
+            setLoading(false);
+
+            // 注册成功后直接跳转
+            console.log("注册成功，准备跳转...");
+            setTimeout(() => {
+              router.replace(buildUrl("/"));
+            }, 1000);
+          } catch (err) {
+            if (err instanceof Error) {
+              setError(err.message);
+            } else {
+              setError("注册失败，请稍后重试");
+            }
+            setLoading(false);
+          }
+        }
       }
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("注册失败，请稍后重试");
+      }
+      setLoading(false);
     }
   };
 
@@ -223,7 +321,7 @@ function AuthPageContent() {
     setError("");
 
     try {
-      const { error: otpError } = await supabase.auth.signInWithOtp({
+      const { error: otpError } = await authClient.signInWithOtp({
         email,
         options: {
           shouldCreateUser: false,
@@ -235,6 +333,7 @@ function AuthPageContent() {
       }
 
       setError("验证码已重新发送到您的邮箱。");
+      setLoading(false);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -248,14 +347,14 @@ function AuthPageContent() {
 
   const handleOtpSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || loading) return;
+    if (loading) return;
 
     setLoading(true);
     setError("");
 
     try {
       if (!otpSent) {
-        const { error } = await supabase.auth.signInWithOtp({ email });
+        const { error } = await authClient.signInWithOtp({ email });
         if (error) {
           setError(error.message);
         } else {
@@ -264,7 +363,7 @@ function AuthPageContent() {
         }
         setLoading(false);
       } else {
-        const { error } = await supabase.auth.verifyOtp({
+        const { error } = await authClient.verifyOtp({
           email,
           token: otp,
           type: "email",
@@ -275,6 +374,11 @@ function AuthPageContent() {
         } else {
           // 验证成功，等待user-context更新后自动跳转
           // 不手动调用router.replace，避免竞态
+          console.log("OTP登录成功，准备跳转...");
+          setLoading(false);
+          setTimeout(() => {
+            router.replace(buildUrl("/"));
+          }, 500);
         }
       }
     } catch (err) {
@@ -287,14 +391,53 @@ function AuthPageContent() {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    if (!supabase || loading) return;
+  const handleWechatSignIn = async () => {
+    if (loading) return;
 
     setLoading(true);
     setError("");
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      // 直接使用环境变量中的配置
+
+      if (!wechatAppId) {
+        setError("微信应用 ID 未配置");
+        setLoading(false);
+        return;
+      }
+
+      if (!appUrl) {
+        setError("应用 URL 未配置");
+        setLoading(false);
+        return;
+      }
+
+      // 获取微信登录 URL
+      // 使用 NEXT_PUBLIC_APP_URL 确保与微信开放平台配置的域名一致
+      const redirectUri = `${appUrl}/auth/callback`;
+      const wechatLoginUrl = getWechatLoginUrl(wechatAppId, redirectUri);
+
+      // ✅ 直接跳转到微信登录页面（标准 OAuth2 流程）
+      // 用户看到二维码，扫码授权后自动回调到 /auth/callback
+      window.location.href = wechatLoginUrl;
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("微信登录失败，请稍后重试");
+      }
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    if (loading) return;
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const { error } = await authClient.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: buildUrl(`${window.location.origin}/auth/callback`),
@@ -327,7 +470,7 @@ function AuthPageContent() {
     e?: React.FormEvent | React.MouseEvent<HTMLButtonElement>
   ) => {
     e?.preventDefault();
-    if (!supabase || loading) return; // 防止并发请求
+    if (loading) return; // 防止并发请求
 
     setLoading(true);
     setError("");
@@ -339,7 +482,7 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const resetOtpPromise = supabase.auth.signInWithOtp({
+      const resetOtpPromise = authClient.signInWithOtp({
         email,
         options: {
           shouldCreateUser: false,
@@ -354,6 +497,7 @@ function AuthPageContent() {
       } else {
         setForgotPasswordStep("verify");
         setError("验证码已发送到您的邮箱，请输入验证码。");
+        setLoading(false);
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -368,7 +512,7 @@ function AuthPageContent() {
 
   const handleVerifyResetOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || loading) return; // 防止并发请求
+    if (loading) return; // 防止并发请求
 
     if (!resetOtp) {
       setError("请输入验证码");
@@ -385,7 +529,7 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const verifyPromise = supabase.auth.verifyOtp({
+      const verifyPromise = authClient.verifyOtp({
         email,
         token: resetOtp,
         type: "email",
@@ -399,6 +543,7 @@ function AuthPageContent() {
         setForgotPasswordStep("reset");
         setResetOtp("");
         setError("验证码验证成功，请设置新密码。");
+        setLoading(false);
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -413,7 +558,7 @@ function AuthPageContent() {
 
   const handleSetNewPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase || loading) return; // 防止并发请求
+    if (loading) return; // 防止并发请求
 
     if (newPassword.length < 6) {
       setError("密码长度至少为6位");
@@ -435,7 +580,7 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const updatePromise = supabase.auth.updateUser({
+      const updatePromise = authClient.updateUser({
         password: newPassword,
       });
 
@@ -446,7 +591,7 @@ function AuthPageContent() {
         return;
       }
 
-      await supabase.auth.signOut();
+      await authClient.signOut();
 
       setForgotPassword(false);
       resetForgotPasswordFlow();
@@ -458,6 +603,7 @@ function AuthPageContent() {
       setNewPassword("");
       setConfirmNewPassword("");
       setError("密码重置成功，请使用新密码登录。");
+      setLoading(false);
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);
@@ -807,10 +953,10 @@ function AuthPageContent() {
               {userRegion === RegionType.CHINA ? (
                 <div className="space-y-3">
                   <Button
-                    onClick={() => setError(t.auth.domesticLoginDeveloping)}
+                    onClick={handleWechatSignIn}
                     variant="outline"
                     className="w-full h-12"
-                    disabled={true}
+                    disabled={loading}
                   >
                     <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
                       <path
@@ -818,13 +964,8 @@ function AuthPageContent() {
                         d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
                       />
                     </svg>
-                    {t.auth.wechatLogin}
+                    {loading ? "正在跳转到微信..." : t.auth.wechatLogin}
                   </Button>
-                  <p className="text-xs text-center text-gray-500">
-                    {debugRegion
-                      ? t.auth.debugDomesticLogin
-                      : t.auth.domesticLoginNote}
-                  </p>
                 </div>
               ) : (
                 <Button
@@ -935,8 +1076,8 @@ function AuthPageContent() {
                   </div>
                 </div>
 
-                {/* 验证码输入框（仅在验证步骤显示） */}
-                {signupStep === "verify" && (
+                {/* 验证码输入框（仅国际版在验证步骤显示） */}
+                {userRegion === RegionType.USA && signupStep === "verify" && (
                   <div className="space-y-2">
                     <Label htmlFor="signup-otp">{t.auth.resetPassword}</Label>
                     <Input
@@ -953,16 +1094,20 @@ function AuthPageContent() {
 
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading
-                    ? signupStep === "form"
+                    ? userRegion === RegionType.CHINA
+                      ? "注册中..."
+                      : signupStep === "form"
                       ? t.auth.sending
                       : t.auth.verifying
+                    : userRegion === RegionType.CHINA
+                    ? t.auth.register
                     : signupStep === "form"
                     ? t.auth.sendOtp
                     : t.auth.verifyOtp}
                 </Button>
 
-                {/* 重新发送验证码和返回按钮 */}
-                {signupStep === "verify" && (
+                {/* 重新发送验证码和返回按钮（仅国际版显示） */}
+                {userRegion === RegionType.USA && signupStep === "verify" && (
                   <div className="flex items-center justify-between text-sm">
                     <button
                       type="button"
@@ -1004,10 +1149,10 @@ function AuthPageContent() {
               {userRegion === RegionType.CHINA ? (
                 <div className="space-y-3">
                   <Button
-                    onClick={() => setError(t.auth.domesticRegisterDeveloping)}
+                    onClick={handleWechatSignIn}
                     variant="outline"
                     className="w-full h-12"
-                    disabled={true}
+                    disabled={loading}
                   >
                     <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
                       <path
@@ -1015,13 +1160,8 @@ function AuthPageContent() {
                         d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"
                       />
                     </svg>
-                    {t.auth.wechatRegister}
+                    {loading ? "正在跳转到微信..." : t.auth.wechatRegister}
                   </Button>
-                  <p className="text-xs text-center text-gray-500">
-                    {debugRegion
-                      ? t.auth.debugDomesticRegister
-                      : t.auth.domesticRegisterNote}
-                  </p>
                 </div>
               ) : (
                 <Button

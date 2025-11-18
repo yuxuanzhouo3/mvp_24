@@ -6,8 +6,12 @@ import { WebhookHandler } from "../../../../../lib/payment/webhook-handler";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
+  console.log("🌐🌐🌐 [PAYPAL WEBHOOK /api/payment/webhook/paypal] STARTED - Entry point");
+
   try {
     const body = await request.text();
+    console.log("🌐🌐🌐 [PAYPAL WEBHOOK] Body received, length:", body.length);
+
     // 修复：使用正确的PayPal头名称
     const signature = request.headers.get("paypal-transmission-sig"); // 注意：不是 signature
     const certUrl = request.headers.get("paypal-cert-url");
@@ -69,6 +73,15 @@ export async function POST(request: NextRequest) {
       transmissionId,
       resourceId: webhookData.resource?.id,
     });
+
+    // 🔧 PayPal去重：使用 transmissionId 作为唯一标识，防止重复处理
+    // PayPal 可能会重复发送相同的事件，transmissionId 是唯一的
+    if (transmissionId) {
+      webhookData._paypal_transmission_id = transmissionId;
+      console.log("✅ Added PayPal transmissionId for deduplication:", {
+        transmissionId,
+      });
+    }
 
     // 处理webhook事件
     const webhookHandler = WebhookHandler.getInstance();

@@ -6,6 +6,7 @@ import {
   checkSensitiveDataExposure,
 } from "@/lib/env-validation";
 import { csrfProtection } from "@/lib/csrf";
+import { RegionConfig, getDEPLOY_REGION } from "@/lib/config/region";
 
 /**
  * IP检测和地理分流中间件
@@ -84,17 +85,17 @@ export async function middleware(request: NextRequest) {
   // 这样可以避免与前端useEffect产生重定向循环
 
   try {
-    // 🚨 生产环境安全：完全移除调试模式支持
     // 检查URL参数中的debug模式（仅开发环境支持）
     const debugParam = searchParams.get("debug");
+    const isDevelopment = process.env.NODE_ENV === "development";
 
-    // 🚨 生产环境安全检查：完全禁止调试模式访问
-    if (debugParam) {
-      console.warn(`🚨 检测到调试模式参数，已禁止访问: ${debugParam}`);
+    // 🚨 生产环境安全检查：禁止调试模式访问
+    if (debugParam && !isDevelopment) {
+      console.warn(`🚨 生产环境检测到调试模式参数，已禁止访问: ${debugParam}`);
       return new NextResponse(
         JSON.stringify({
           error: "Access Denied",
-          message: "Debug mode is not allowed.",
+          message: "Debug mode is not allowed in production.",
           code: "DEBUG_MODE_BLOCKED",
         }),
         {
@@ -108,21 +109,21 @@ export async function middleware(request: NextRequest) {
     }
 
     // 如果是 API 请求，也检查 Referer 中的 debug 参数
-    if (pathname.startsWith("/api/")) {
+    if (pathname.startsWith("/api/") && !isDevelopment) {
       const referer = request.headers.get("referer");
       if (referer) {
         const refererUrl = new URL(referer);
         const refererDebug = refererUrl.searchParams.get("debug");
 
-        // 同样禁用来自referer的调试模式
+        // 生产环境禁用来自referer的调试模式
         if (refererDebug) {
           console.warn(
-            `🚨 检测到来自referer的调试模式参数，已禁止访问: ${refererDebug}`
+            `🚨 生产环境检测到来自referer的调试模式参数，已禁止访问: ${refererDebug}`
           );
           return new NextResponse(
             JSON.stringify({
               error: "Access Denied",
-              message: "Debug mode is not allowed.",
+              message: "Debug mode is not allowed in production.",
               code: "DEBUG_MODE_BLOCKED",
             }),
             {
@@ -136,26 +137,68 @@ export async function middleware(request: NextRequest) {
         }
       }
     }
+
     let geoResult;
 
-    // 🚨 调试模式已被完全移除，只使用正常地理位置检测
-    // 获取客户端真实IP并检测地理位置
-    const clientIP = getClientIP(request);
+    // 开发环境支持调试模式
+    if (debugParam && isDevelopment) {
+      console.log(`� 调试模式启用: ${debugParam}`);
 
-    if (!clientIP) {
-      console.warn("无法获取客户端IP，使用默认处理");
-      return NextResponse.next();
+      // 根据debug参数设置模拟的地理位置
+      switch (debugParam.toLowerCase()) {
+        case "china":
+          geoResult = {
+            region: RegionType.CHINA,
+            countryCode: "CN",
+            currency: "CNY",
+          };
+          break;
+        case "usa":
+        case "us":
+          geoResult = {
+            region: RegionType.USA,
+            countryCode: "US",
+            currency: "USD",
+          };
+          break;
+        case "europe":
+        case "eu":
+          geoResult = {
+            region: RegionType.EUROPE,
+            countryCode: "DE",
+            currency: "EUR",
+          };
+          break;
+        default:
+          // 无效的debug参数，回退到正常检测
+          const clientIP = getClientIP(request);
+          geoResult = await geoRouter.detect(clientIP || "");
+      }
+    } else {
+      // 正常地理位置检测
+      // 获取客户端真实IP并检测地理位置
+      const clientIP = getClientIP(request);
+
+      if (!clientIP) {
+        console.warn("无法获取客户端IP，使用默认处理");
+        return NextResponse.next();
+      }
+
+      // 检测地理位置
+      geoResult = await geoRouter.detect(clientIP);
     }
 
-    // 检测地理位置
-    geoResult = await geoRouter.detect(clientIP);
-
     console.log(
-      `IP: ${clientIP}, 国家: ${geoResult.countryCode}, 地区: ${geoResult.region}`
+      `IP检测结果 - 国家: ${geoResult.countryCode}, 地区: ${geoResult.region}${
+        debugParam && isDevelopment ? " (调试模式)" : ""
+      }`
     );
 
-    // 1. 禁止欧洲IP访问（完全屏蔽，不允许任何欧洲IP访问，包括调试模式）
-    if (geoResult.region === RegionType.EUROPE) {
+    // 1. 禁止欧洲IP访问（开发环境调试模式除外）
+    if (
+      geoResult.region === RegionType.EUROPE &&
+      !(debugParam && isDevelopment)
+    ) {
       console.log(`禁止欧洲IP访问: ${geoResult.countryCode}`);
       return new NextResponse(
         JSON.stringify({
@@ -173,17 +216,18 @@ export async function middleware(request: NextRequest) {
       );
     }
 
-    // 2. 地理分流逻辑（调试模式已被移除）
-    if (!pathname.startsWith("/api/")) {
-      const domesticUrl = process.env.DOMESTIC_SYSTEM_URL;
-      const internationalUrl = process.env.INTERNATIONAL_SYSTEM_URL;
+    // 2. 地理分流逻辑（基于 DEPLOY_REGION 环境变量的重定向）
+    // 注意：这里只是做重定向（门卫），真正的系统切换由 DEPLOY_REGION 环境变量控制
+    if (!pathname.startsWith("/api/") && RegionConfig.ipDetection.enabled) {
+      const { domestic, international } = RegionConfig.redirectUrls;
 
-      // 如果配置了分流URL，则进行重定向
-      if (domesticUrl && internationalUrl) {
-        const isDomestic = geoResult.region === RegionType.CHINA;
-        const targetUrl = isDomestic ? domesticUrl : internationalUrl;
+      // 只有配置了两个不同的 URL 才进行重定向
+      if (domestic && international && domestic !== international) {
+        // 优先使用 DEPLOY_REGION 环境变量决定目标域名，而不是IP检测
+        const isDomesticDeployment = getDEPLOY_REGION() === "CN";
+        const targetUrl = isDomesticDeployment ? domestic : international;
 
-        // 如果当前域名不是目标域名，则重定向
+        // 检查当前域名是否与目标域名匹配
         const currentHost = request.headers.get("host");
         const targetHost = new URL(targetUrl).host;
 
@@ -192,13 +236,15 @@ export async function middleware(request: NextRequest) {
           redirectUrl.protocol = new URL(targetUrl).protocol;
           redirectUrl.host = targetHost;
 
-          console.log(
-            `分流用户: ${geoResult.countryCode} -> ${redirectUrl.toString()}`
-          );
+          // 重定向发生 - 不记录DEPLOY_REGION环境变量以保护敏感信息
+          console.log(`🌍 域名重定向: ${currentHost} -> ${redirectUrl.host}`);
 
           return NextResponse.redirect(redirectUrl, {
-            status: 302, // 临时重定向
+            status: 301, // 永久重定向（SEO 友好）
           });
+        } else {
+          // 用户已在正确域名 - 不记录DEPLOY_REGION环境变量以保护敏感信息
+          console.log(`✅ 用户已在正确域名: ${currentHost}`);
         }
       }
     }
@@ -229,7 +275,10 @@ export async function middleware(request: NextRequest) {
     response.headers.set("X-User-Country", geoResult.countryCode);
     response.headers.set("X-User-Currency", geoResult.currency);
 
-    // 🚨 调试模式已被完全移除，不再设置调试头
+    // 开发环境添加调试模式标识
+    if (debugParam && isDevelopment) {
+      response.headers.set("X-Debug-Mode", debugParam);
+    }
 
     // 4. CSRF防护 - 对状态改变请求进行CSRF验证
     const csrfResponse = await csrfProtection(request, response);

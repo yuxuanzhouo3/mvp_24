@@ -86,6 +86,17 @@ export function SubscriptionPlans({
     return null;
   };
 
+  // 根据货币确定价格
+  const getPrice = (usdPrice: number) => {
+    if (currency === "CNY") {
+      // 人民币定价
+      if (usdPrice === 9.99) return 30;
+      if (usdPrice === 99.99) return 300;
+      return usdPrice * 7; // 其他价格按汇率转换
+    }
+    return usdPrice; // 美元保持原价
+  };
+
   // 展开所有计划选项（免费、月付、年付）
   const allPlans = [
     {
@@ -103,7 +114,7 @@ export function SubscriptionPlans({
       planId: "pro",
       name: t.payment.proMonthly,
       description: t.payment.monthlyDesc,
-      price: convertPrice(9.99, currency),
+      price: getPrice(9.99),
       billingCycle: "monthly" as const,
       currency: currency,
       features: t.payment.plans.pro.features as unknown as string[],
@@ -114,7 +125,7 @@ export function SubscriptionPlans({
       planId: "pro",
       name: t.payment.proYearly,
       description: t.payment.yearlyDesc,
-      price: convertPrice(99.99, currency),
+      price: getPrice(99.99),
       billingCycle: "yearly" as const,
       currency: currency,
       features: t.payment.plans.pro.features as unknown as string[],

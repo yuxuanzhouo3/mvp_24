@@ -32,7 +32,7 @@ export const alipayConfigExample: AlipayConfigTemplate = {
   publicKey: `-----BEGIN PUBLIC KEY-----
 支付宝公钥内容
 -----END PUBLIC KEY-----`,
-  notifyUrl: "https://your-domain.com/api/payment/alipay/notify",
+  notifyUrl: "https://your-domain.com/api/payment/webhook/alipay",
   returnUrl: "https://your-domain.com/payment/success",
   sandbox: false, // 生产环境设为false
   timeout: 30000,

@@ -374,11 +374,11 @@ export const en = {
     selected: "selected",
     aiSelected: "AI",
     clearAll: "Clear All",
-    maxSelected: "Max 8",
+    maxSelected: "Max 4",
     specialty: "Specialty",
     rating: "Rating",
     teamMembers: "Team Members",
-    selectedCount: "{count} AI selected (Max 8)",
+    selectedCount: "{count} AI selected (Max 4)",
   },
 
   // ==================== AI Collaboration Panel ====================

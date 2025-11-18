@@ -2,11 +2,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
 import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
+import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
+import { WechatProviderV3 } from "@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
+import { getDatabase } from "@/lib/auth-utils";
+import { isChinaRegion } from "@/lib/config/region";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
 import { logInfo, logError, logWarn } from "@/lib/logger";
+import {
+  getPricingByMethod,
+  getDaysByBillingCycle,
+} from "@/lib/payment-config";
+import type { PaymentMethod, BillingCycle } from "@/lib/payment-config";
 
 export async function POST(request: NextRequest) {
   // 应用速率限制
@@ -40,7 +49,10 @@ async function handleOnetimePaymentCreate(request: NextRequest) {
 
     const { user } = authResult;
     const body = await request.json();
-    const { method, billingCycle } = body;
+    const { method, billingCycle } = body as {
+      method: PaymentMethod;
+      billingCycle: BillingCycle;
+    };
 
     logInfo("Creating one-time payment", {
       operationId,
@@ -74,26 +86,59 @@ async function handleOnetimePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 确定金额和天数
-    const amount = billingCycle === "monthly" ? 9.99 : 99.99;
-    const currency = "USD";
-    const days = billingCycle === "monthly" ? 30 : 365;
+    // 使用统一的支付配置获取货币和金额
+    const pricing = getPricingByMethod(method);
+    const currency = pricing.currency;
+    const amount = pricing[billingCycle];
+    const days = getDaysByBillingCycle(billingCycle);
 
     // 检查最近1分钟内是否有相同的pending或completed支付(防止重复点击)
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-    const { data: recentPayments, error: checkError } = await supabaseAdmin
-      .from("payments")
-      .select("id, status, created_at")
-      .eq("user_id", user.id)
-      .eq("amount", amount)
-      .eq("currency", currency)
-      .eq("payment_method", method)
-      .gte("created_at", oneMinuteAgo)
-      .in("status", ["pending", "completed"])
-      .order("created_at", { ascending: false })
-      .limit(1);
+    let recentPayments: any[] = [];
+    let checkError: any = null;
 
-    if (checkError && checkError.code !== "PGRST116") {
+    if (isChinaRegion()) {
+      // CloudBase 查询
+      try {
+        const db = getDatabase();
+        const _ = db.command;
+        const result = await db
+          .collection("payments")
+          .where({
+            user_id: user.id,
+            amount: amount,
+            currency: currency,
+            payment_method: method,
+            created_at: _.gte(oneMinuteAgo),
+            status: _.in(["pending", "completed"]),
+          })
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .get();
+
+        recentPayments = result.data || [];
+      } catch (error) {
+        checkError = error;
+      }
+    } else {
+      // Supabase 查询
+      const result = await supabaseAdmin
+        .from("payments")
+        .select("id, status, created_at")
+        .eq("user_id", user.id)
+        .eq("amount", amount)
+        .eq("currency", currency)
+        .eq("payment_method", method)
+        .gte("created_at", oneMinuteAgo)
+        .in("status", ["pending", "completed"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      recentPayments = result.data || [];
+      checkError = result.error;
+    }
+
+    if (checkError && (!isChinaRegion() || checkError.code !== "PGRST116")) {
       logError("Error checking existing payment", checkError, {
         operationId,
         userId: user.id,
@@ -173,6 +218,63 @@ async function handleOnetimePaymentCreate(request: NextRequest) {
         const paypalProvider = new PayPalProvider(process.env);
         // PayPal 一次性支付(使用 order 而不是 subscription)
         result = await paypalProvider.createOnetimePayment(order);
+      } else if (method === "alipay") {
+        logInfo("Creating Alipay one-time payment", {
+          operationId,
+          userId: user.id,
+          amount,
+        });
+        const alipayProvider = new AlipayProvider(process.env);
+        // 支付宝一次性支付
+        result = await alipayProvider.createPayment(order);
+      } else if (method === "wechat") {
+        logInfo("Creating WeChat Native one-time payment", {
+          operationId,
+          userId: user.id,
+          amount,
+        });
+
+        // 微信支付仅支持中国区域
+        if (!isChinaRegion()) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "WeChat payment is only available in China region",
+            },
+            { status: 400 }
+          );
+        }
+
+        // 生成商户订单号
+        const out_trade_no = `WX${Date.now()}${Math.random()
+          .toString(36)
+          .substr(2, 9)
+          .toUpperCase()}`;
+
+        // 初始化微信支付提供商
+        const wechatProvider = new WechatProviderV3({
+          appId: process.env.WECHAT_APP_ID!,
+          mchId: process.env.WECHAT_PAY_MCH_ID!,
+          apiV3Key: process.env.WECHAT_PAY_API_V3_KEY!,
+          privateKey: process.env.WECHAT_PAY_PRIVATE_KEY!,
+          serialNo: process.env.WECHAT_PAY_SERIAL_NO!,
+          notifyUrl: `${process.env.APP_URL}/api/payment/webhook/wechat`,
+        });
+
+        // 创建微信 NATIVE 支付订单
+        const wechatResponse = await wechatProvider.createNativePayment({
+          out_trade_no,
+          amount: Math.round(amount * 100), // 转换为分
+          description: order.description,
+        });
+
+        result = {
+          success: true,
+          paymentId: out_trade_no,
+          paymentUrl: wechatResponse.codeUrl,
+          codeUrl: wechatResponse.codeUrl, // 兼容旧的字段名
+          transactionId: out_trade_no,
+        };
       } else {
         return NextResponse.json(
           { success: false, error: `Unsupported payment method: ${method}` },
@@ -206,38 +308,77 @@ async function handleOnetimePaymentCreate(request: NextRequest) {
         status: "pending",
         payment_method: method,
         transaction_id: result.paymentId,
-      };
-
-      // 如果数据库支持 metadata 字段,则添加
-      try {
-        paymentData.metadata = {
+        metadata: {
           days,
           paymentType: "onetime",
           billingCycle,
-        };
-      } catch (e) {
-        // 如果不支持 metadata,忽略
+        },
+      };
+
+      // 微信支付额外字段
+      if (method === "wechat") {
+        paymentData.out_trade_no = result.paymentId;
+        paymentData.code_url = result.codeUrl;
+        paymentData.client_type = "native";
       }
 
-      const { error: paymentRecordError } = await supabaseAdmin
-        .from("payments")
-        .insert(paymentData);
+      try {
+        if (isChinaRegion()) {
+          // CloudBase 插入
+          const db = getDatabase();
+          await db.collection("payments").add(paymentData);
+        } else {
+          // Supabase 插入
+          console.log("💾 Inserting payment data to Supabase:", {
+            transactionId: result.paymentId,
+            metadata: paymentData.metadata,
+          });
 
-      if (paymentRecordError) {
-        logError("Error recording payment", paymentRecordError, {
-          operationId,
-          userId: user.id,
-          transactionId: result.paymentId,
-        });
+          const { data: insertedPayment, error: paymentRecordError } =
+            await supabaseAdmin
+              .from("payments")
+              .insert([paymentData])
+              .select("id, metadata");
+
+          if (paymentRecordError) {
+            console.error("❌ Supabase insert error:", paymentRecordError);
+            throw paymentRecordError;
+          }
+
+          if (insertedPayment && insertedPayment.length > 0) {
+            const payment = insertedPayment[0];
+            console.log("✅ Payment record created with metadata:", {
+              paymentId: payment.id,
+              metadata: payment.metadata,
+            });
+            logInfo("Payment record created", {
+              operationId,
+              userId: user.id,
+              paymentId: payment.id,
+              transactionId: result.paymentId,
+              amount,
+              days,
+              metadataSaved: payment.metadata,
+            });
+          }
+        }
+      } catch (paymentRecordError) {
+        console.error("❌ Error recording payment:", paymentRecordError);
+        logError(
+          "Error recording payment",
+          paymentRecordError instanceof Error
+            ? paymentRecordError
+            : new Error(String(paymentRecordError)),
+          {
+            operationId,
+            userId: user.id,
+            transactionId: result.paymentId,
+            amount,
+            currency,
+            method,
+          }
+        );
         // 继续执行,不阻断支付流程
-      } else {
-        logInfo("Payment record created", {
-          operationId,
-          userId: user.id,
-          transactionId: result.paymentId,
-          amount,
-          days,
-        });
       }
     }
 

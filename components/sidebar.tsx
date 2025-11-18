@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowRight, ArrowDown, Zap, X, Plus } from "lucide-react";
+import { ArrowRight, ArrowDown, Zap, X, Plus, Trash2 } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { AVAILABLE_TEMPLATES, findTemplateById } from "@/lib/templates";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
+import { useWorkspaceMessages } from "@/components/workspace-messages-context";
 
 // 简化版本：不再依赖旧的配置文件
 
@@ -29,6 +30,7 @@ export function Sidebar({
 }: SidebarProps) {
   const { language } = useLanguage();
   const t = useTranslations(language);
+  const { messages, clearMessages } = useWorkspaceMessages();
 
   // 处理模板选择
   const handleTemplateSelect = (templateId: string) => {
@@ -91,8 +93,8 @@ export function Sidebar({
   ];
 
   return (
-    <div className="w-80 bg-white border-r border-gray-200 p-4 overflow-y-auto">
-      <div className="space-y-6">
+    <div className="hidden lg:flex w-80 bg-white border-r border-gray-200 p-4 overflow-y-auto flex-col relative pb-20">
+      <div className="space-y-6 flex-1">
         {/* Selected GPTs */}
         <div>
           <div className="flex items-center justify-between mb-3">
@@ -214,6 +216,22 @@ export function Sidebar({
             )}
           </div>
         </div>
+      </div>
+
+      {/* 新建对话按钮 */}
+      <div className="absolute bottom-4 left-4 right-4">
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full"
+          onClick={() => {
+            clearMessages();
+          }}
+          disabled={messages.length === 0}
+        >
+          <Trash2 className="w-4 h-4 mr-2" />
+          {t.workspace.newConversation}
+        </Button>
       </div>
     </div>
   );

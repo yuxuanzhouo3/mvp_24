@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { checkHealth } from "../../../lib/health";
-import { initSentry, captureException } from "../../../lib/sentry";
+import { captureException } from "../../../lib/sentry";
 
 export async function GET() {
   try {

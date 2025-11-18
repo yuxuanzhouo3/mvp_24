@@ -1,45 +1,29 @@
-// app/api/payment/create/route.ts - 支付创建API路由
+// app/api/payment/create/route.ts - ֧������API·��
 import { NextRequest, NextResponse } from "next/server";
-import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
-import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
-import { paymentRouter } from "@/lib/architecture-modules/layers/third-party/payment/router";
-import { RegionType } from "@/lib/architecture-modules/core/types";
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import { getPayment } from "@/lib/payment/adapter";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
-import { ApiValidator, commonSchemas } from "@/lib/api-validation";
+import { supabaseAdmin } from "@/lib/supabase-admin";
+import { isChinaRegion } from "@/lib/config/region";
+import { getDatabase } from "@/lib/cloudbase-service";
+import { z } from "zod";
 
-// 订阅计划层级定义（时间累加模式下已不再使用）
-const PLAN_HIERARCHY = {
-  free: 0,
-  premium: 1, // 统一使用premium
-};
+// ֧������������֤schema
+const createPaymentSchema = z.object({
+  method: z.string().min(1, "Payment method is required"),
+  amount: z.number().positive("Amount must be positive"),
+  currency: z.string().min(1, "Currency is required"),
+  description: z.string().optional(),
+  planType: z.string().optional(),
+  billingCycle: z.enum(["monthly", "yearly"]).optional(),
+  idempotencyKey: z.string().optional(),
+});
 
-// 检查用户当前活跃订阅（简化版，用于历史记录）
-async function checkUserSubscription(userId: string) {
-  try {
-    const { data: subscription, error } = await supabaseAdmin
-      .from("subscriptions")
-      .select("*")
-      .eq("user_id", userId)
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error && error.code !== "PGRST116") {
-      console.error("Error checking subscription:", error);
-      return null;
-    }
-
-    return subscription;
-  } catch (error) {
-    console.error("Error in checkUserSubscription:", error);
-    return null;
-  }
-}
-
+/**
+ * POST /api/payment/create
+ * ����֧������
+ */
 export async function POST(request: NextRequest) {
   // Apply rate limiting
   return new Promise<NextResponse>((resolve) => {
@@ -60,7 +44,7 @@ export async function POST(request: NextRequest) {
 
 async function handlePaymentCreate(request: NextRequest) {
   try {
-    // 验证用户认证
+    // ��֤�û���֤
     const authResult = await requireAuth(request);
     if (!authResult) {
       return createAuthErrorResponse();
@@ -68,15 +52,18 @@ async function handlePaymentCreate(request: NextRequest) {
 
     const { user } = authResult;
 
-    // 验证请求体
-    const bodyValidation = await ApiValidator.validateBody(
-      request,
-      commonSchemas.createPayment
-    );
+    // ��֤������
+    const body = await request.json();
+    const validationResult = createPaymentSchema.safeParse(body);
 
-    if (!bodyValidation.success) {
+    if (!validationResult.success) {
       return NextResponse.json(
-        { success: false, error: bodyValidation.error },
+        {
+          success: false,
+          error: "Invalid input",
+          code: "VALIDATION_ERROR",
+          details: validationResult.error.errors,
+        },
         { status: 400 }
       );
     }
@@ -88,34 +75,66 @@ async function handlePaymentCreate(request: NextRequest) {
       description,
       planType,
       billingCycle,
-      region,
       idempotencyKey,
-    } = bodyValidation.data;
+    } = validationResult.data;
 
-    // 使用认证用户的ID
+    // ʹ����֤�û���ID
     const userId = user.id;
 
-    // 生成或使用幂等性键
-    const key = idempotencyKey || `${userId}-${billingCycle}-${Date.now()}`;
+    // 检查重复支付请求
+    let recentPayments: any[] = [];
+    let checkError: any = null;
 
-    // 关键修复：更严格的重复检查 - 防止用户快速点击创建多个订单
-    // 检查最近1分钟内是否有相同的pending或completed支付
-    const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-    const { data: recentPayments, error: checkError } = await supabaseAdmin
-      .from("payments")
-      .select("id, status, created_at, transaction_id")
-      .eq("user_id", userId)
-      .eq("amount", Number(amount))
-      .eq("currency", currency)
-      .eq("payment_method", method)
-      .gte("created_at", oneMinuteAgo)
-      .in("status", ["pending", "completed"]) // 只检查pending和completed状态
-      .order("created_at", { ascending: false })
-      .limit(1);
+    if (isChinaRegion()) {
+      // CloudBase 用户：从 CloudBase 检查重复支付
+      try {
+        const db = getDatabase();
+        const _ = db.command;
+        const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
 
-    if (checkError && checkError.code !== "PGRST116") {
+        const result = await db
+          .collection("payments")
+          .where({
+            user_id: userId,
+            amount: amount,
+            currency: currency,
+            payment_method: method,
+            created_at: _.gte(oneMinuteAgo),
+            status: _.in(["pending", "completed"]),
+          })
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .get();
+
+        recentPayments = result.data || [];
+      } catch (error) {
+        console.error("Error checking existing CloudBase payment:", error);
+        checkError = error;
+      }
+    } else {
+      // 国际用户：从 Supabase 检查重复支付
+      const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+      const { data, error } = await supabaseAdmin
+        .from("payments")
+        .select("id, status, created_at, transaction_id")
+        .eq("user_id", userId)
+        .eq("amount", amount)
+        .eq("currency", currency)
+        .eq("payment_method", method)
+        .gte("created_at", oneMinuteAgo)
+        .in("status", ["pending", "completed"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      recentPayments = data || [];
+      checkError = error;
+    }
+
+    if (
+      checkError &&
+      (!isChinaRegion() || (checkError as any)?.code !== "PGRST116")
+    ) {
       console.error("Error checking existing payment:", checkError);
-      // 即使检查失败，为了安全起见，也不创建新支付
       return NextResponse.json(
         {
           success: false,
@@ -125,18 +144,19 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 如果存在最近1分钟内的pending或completed支付，拒绝创建新订单
+    // 处理重复支付请求
     if (recentPayments && recentPayments.length > 0) {
       const latestPayment = recentPayments[0];
       const paymentAge =
-        Date.now() - new Date(latestPayment.created_at).getTime();
+        Date.now() -
+        new Date(latestPayment.created_at || latestPayment.createdAt).getTime();
 
       console.warn(
         `Duplicate payment request blocked: User ${userId} tried to create payment within ${Math.floor(
           paymentAge / 1000
-        )}s of existing payment ${latestPayment.id} (status: ${
-          latestPayment.status
-        })`
+        )}s of existing payment ${
+          latestPayment.id || latestPayment._id
+        } (status: ${latestPayment.status})`
       );
 
       return NextResponse.json(
@@ -145,120 +165,112 @@ async function handlePaymentCreate(request: NextRequest) {
           error:
             "You have a recent payment request. Please wait a moment before trying again.",
           code: "DUPLICATE_PAYMENT_REQUEST",
-          existingPaymentId: latestPayment.id,
-          waitTime: Math.ceil((60000 - paymentAge) / 1000), // 秒
+          existingPaymentId: latestPayment.id || latestPayment._id,
+          waitTime: Math.ceil((60000 - paymentAge) / 1000),
         },
-        { status: 429 } // 429 Too Many Requests
+        { status: 429 }
       );
     }
 
-    // 验证支付方式是否支持当前区域
-    const availableMethods = paymentRouter.getAvailableMethods(
-      region as RegionType
-    );
-    if (!availableMethods.includes(method)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Payment method '${method}' not available in your region`,
-        },
-        { status: 400 }
-      );
-    }
+    // ��ȡ֧��������
+    const payment = getPayment();
 
-    // 时间累加模式：用户可以随时购买更多会员时间，不需要检查当前订阅状态
-
-    // 创建支付订单
+    // ����֧������
     const order = {
-      amount: Number(amount),
+      amount,
       currency,
-      description: `${
-        billingCycle === "monthly" ? "1 Month" : "1 Year"
-      } Premium Membership`,
+      description:
+        description ||
+        `${
+          billingCycle === "monthly" ? "1 Month" : "1 Year"
+        } Premium Membership`,
       userId,
-      planType: "pro", // 使用pro计划类型匹配Stripe价格ID
-      billingCycle,
+      planType: planType || "pro",
+      billingCycle: billingCycle || "monthly",
+      method,
     };
 
-    // 根据用户选择的支付方式创建支付
-    let result;
+    console.log(`Creating payment with method: ${method} using adapter`);
 
-    console.log(`Creating payment with method: ${method}`);
+    // 使用适配器创建支付订单
+    const orderResult = await payment.createOrder(amount, userId);
 
-    try {
-      if (method === "stripe") {
-        const stripeProvider = new StripeProvider(process.env);
-        result = await stripeProvider.createPayment(order);
-      } else if (method === "paypal") {
-        console.log("Initializing PayPal provider...");
-        try {
-          const paypalProvider = new PayPalProvider(process.env);
-          console.log("PayPal provider initialized, creating payment...");
-          result = await paypalProvider.createPayment(order);
-          console.log("PayPal payment result:", result);
-        } catch (paypalError) {
-          console.error("PayPal provider error:", paypalError);
-          return NextResponse.json(
-            {
-              success: false,
-              error:
-                paypalError instanceof Error
-                  ? paypalError.message
-                  : "PayPal initialization failed",
-            },
-            { status: 500 }
-          );
-        }
-      } else {
-        // 其他支付方式，使用 paymentRouter
-        result = await paymentRouter.createPayment(region as RegionType, order);
+    // 记录支付到相应数据库
+    let paymentRecordError: any = null;
+
+    if (isChinaRegion()) {
+      // CloudBase 用户：记录到 CloudBase
+      try {
+        const db = getDatabase();
+        const paymentsCollection = db.collection("payments");
+
+        await paymentsCollection.add({
+          user_id: userId,
+          amount,
+          currency: currency || "CNY",
+          status: "pending",
+          payment_method: method,
+          transaction_id: orderResult.orderId,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error("Error recording CloudBase payment:", error);
+        paymentRecordError = error;
       }
-    } catch (providerError) {
-      console.error("Payment provider error:", providerError);
+    } else {
+      // 国际用户：记录到 Supabase
+      const days = billingCycle === "yearly" ? 365 : 30;
+      const metadataObj = {
+        days,
+        billingCycle: billingCycle || "monthly",
+        planType: planType || "pro",
+      };
+
+      const { error } = await supabaseAdmin.from("payments").insert({
+        user_id: userId,
+        amount,
+        currency,
+        status: "pending",
+        payment_method: method,
+        transaction_id: orderResult.orderId,
+        metadata: metadataObj,
+      });
+
+      if (!error) {
+        console.log("✅ Payment recorded with metadata:", {
+          transactionId: orderResult.orderId,
+          metadata: metadataObj,
+        });
+      }
+
+      paymentRecordError = error;
+    }
+
+    if (paymentRecordError) {
+      console.error("Error recording payment:", paymentRecordError);
       return NextResponse.json(
         {
           success: false,
-          error:
-            providerError instanceof Error
-              ? providerError.message
-              : "Payment provider error",
+          error: "Failed to record payment",
         },
         { status: 500 }
       );
     }
 
-    // 如果支付创建成功，记录到数据库
-    if (result && result.success && result.paymentId) {
-      const { error: paymentRecordError } = await supabaseAdmin
-        .from("payments")
-        .insert({
-          user_id: userId,
-          amount: Number(amount),
-          currency,
-          status: "pending",
-          payment_method: method,
-          transaction_id: result.paymentId,
-        });
+    // 返回支付信息
+    const response = {
+      success: true,
+      orderId: orderResult.orderId,
+      paymentUrl: orderResult.paymentUrl,
+      formHtml: orderResult.formHtml,
+    };
 
-      if (paymentRecordError) {
-        console.error("Error recording payment:", paymentRecordError);
-        // 不返回错误，继续处理
-      }
-    }
-
-    if (!result) {
-      return NextResponse.json(
-        { success: false, error: "Payment provider not available" },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json(result);
+    return NextResponse.json(response);
   } catch (error) {
     console.error("Payment creation error:", error);
     captureException(error);
 
-    // 返回用户友好的错误信息
     const errorMessage =
       error instanceof Error ? error.message : "Internal server error";
 

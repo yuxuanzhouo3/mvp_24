@@ -22,7 +22,6 @@ import {
   Crown,
 } from "lucide-react";
 import { useRouter, usePathname } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { useUser } from "./user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
@@ -32,8 +31,21 @@ export function UserMenu() {
   const pathname = usePathname();
   const { user, loading, refreshUser, signOut } = useUser();
   const [isLoading, setIsLoading] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { language } = useLanguage();
   const t = useTranslations(language);
+
+  // 当菜单打开时刷新用户数据
+  const handleMenuOpenChange = async (open: boolean) => {
+    setIsMenuOpen(open);
+    if (open && user) {
+      try {
+        await refreshUser();
+      } catch (error) {
+        console.error("Failed to refresh user data:", error);
+      }
+    }
+  };
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -49,22 +61,29 @@ export function UserMenu() {
     return path;
   };
 
-  // 获取用户名首字母
-  const userInitial = (() => {
-    if (user?.full_name) {
-      const trimmed = user.full_name.trim();
-      if (trimmed) {
-        return trimmed.charAt(0).toUpperCase();
-      }
+  // 获取显示名称：优先使用 name，如果为空则使用 email 的用户名部分
+  const displayName = (() => {
+    if (user?.name && user.name.trim()) {
+      return user.name.trim();
     }
 
     if (user?.email) {
-      const trimmed = user.email.trim();
-      if (trimmed) {
-        return trimmed.charAt(0).toUpperCase();
+      // 从邮箱中提取用户名部分（@前面的部分）
+      const emailParts = user.email.split("@");
+      if (emailParts[0]) {
+        return emailParts[0];
       }
     }
 
+    return "User";
+  })();
+
+  // 获取用户名首字母
+  const userInitial = (() => {
+    const name = displayName;
+    if (name) {
+      return name.charAt(0).toUpperCase();
+    }
     return "U";
   })();
 
@@ -160,7 +179,7 @@ export function UserMenu() {
 
   // 已登录状态
   return (
-    <DropdownMenu>
+    <DropdownMenu open={isMenuOpen} onOpenChange={handleMenuOpenChange}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
@@ -168,20 +187,20 @@ export function UserMenu() {
           className="flex items-center space-x-2"
         >
           <Avatar className="w-6 h-6">
-            <AvatarImage src={user.avatar_url} alt={user.full_name} />
+            <AvatarImage src={user.avatar} alt={displayName} />
             <AvatarFallback className="text-xs">{userInitial}</AvatarFallback>
           </Avatar>
-          <span className="hidden md:inline text-sm">{user.full_name}</span>
+          <span className="hidden md:inline text-sm">{displayName}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel className="flex items-center space-x-3 p-3">
           <Avatar className="w-10 h-10">
-            <AvatarImage src={user.avatar_url} alt={user.full_name} />
+            <AvatarImage src={user.avatar} alt={displayName} />
             <AvatarFallback>{userInitial}</AvatarFallback>
           </Avatar>
           <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium">{user.full_name}</p>
+            <p className="text-sm font-medium">{displayName}</p>
             <p className="text-xs text-muted-foreground">{user.email}</p>
             {user.membership_expires_at ? (
               <p className="text-xs text-gray-600">

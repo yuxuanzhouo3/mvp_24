@@ -17,11 +17,12 @@ import {
   Clock,
   CheckCircle2,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { getAuthClient } from "@/lib/auth/client";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
+import { getClientAuthToken } from "@/lib/client-auth";
 
 interface AIResponse {
   agentId: string;
@@ -60,6 +61,58 @@ export function GPTWorkspace({
   const { language } = useLanguage();
   const t = useTranslations(language);
 
+  // 从localStorage恢复消息状态
+  useEffect(() => {
+    const savedMessages = localStorage.getItem("workspace-messages");
+    const savedSessionId = localStorage.getItem("workspace-session-id");
+
+    if (savedMessages) {
+      try {
+        const parsedMessages = JSON.parse(savedMessages);
+        // 恢复Date对象
+        const restoredMessages = parsedMessages.map((msg: any) => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp),
+          content: msg.isMultiAI
+            ? msg.content.map((aiResp: any) => ({
+                ...aiResp,
+                timestamp: new Date(aiResp.timestamp),
+              }))
+            : msg.content,
+        }));
+        setMessages(restoredMessages);
+        console.log(
+          "Restored messages from localStorage:",
+          restoredMessages.length
+        );
+      } catch (error) {
+        console.error("Failed to parse saved messages:", error);
+        localStorage.removeItem("workspace-messages"); // 清理损坏的数据
+      }
+    }
+
+    if (savedSessionId) {
+      setCurrentSessionId(savedSessionId);
+      console.log("Restored session ID from localStorage:", savedSessionId);
+    }
+  }, []);
+
+  // 保存消息状态到localStorage
+  useEffect(() => {
+    if (messages.length > 0) {
+      localStorage.setItem("workspace-messages", JSON.stringify(messages));
+      console.log("Saved messages to localStorage:", messages.length);
+    }
+  }, [messages]);
+
+  // 保存sessionId到localStorage
+  useEffect(() => {
+    if (currentSessionId) {
+      localStorage.setItem("workspace-session-id", currentSessionId);
+      console.log("Saved session ID to localStorage:", currentSessionId);
+    }
+  }, [currentSessionId]);
+
   // 自动滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -96,36 +149,16 @@ export function GPTWorkspace({
     setAIResponses(initialResponses);
 
     try {
-      // 模拟认证检查（在测试模式下跳过）
-      // const {
-      //   data: { session },
-      // } = await supabase.auth.getSession();
-      // if (!session) {
-      //   throw new Error("Not authenticated");
-      // }
+      // 获取认证 Token（支持 CloudBase 和 Supabase）
+      const { token: authToken, error: authError } = await getClientAuthToken();
 
-      // TODO: 实现真实的会话创建API
-      // const {
-      //   data: { session },
-      // } = await supabase.auth.getSession();
-      // if (!session) {
-      //   throw new Error("Not authenticated");
-      // }
-
-      // 获取真实 Token
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
+      if (authError || !authToken) {
         toast.error("请先登录", {
           description: "您需要登录后才能使用 AI 对话功能",
         });
         setIsProcessing(false);
         return;
       }
-
-      const authToken = session.access_token;
 
       // 如果没有sessionId，先创建会话
       let sessId = currentSessionId;
