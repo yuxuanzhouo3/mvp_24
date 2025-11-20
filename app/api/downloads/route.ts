@@ -138,14 +138,6 @@ async function handleChinaDownload(
     // 调用 CloudBase SDK 下载文件
     const fileContent = await downloadFileFromCloudBase(fileInfo.fileID);
 
-    if (!fileContent) {
-      console.error('[Download API] CloudBase 下载失败 - 文件内容为空');
-      return NextResponse.json(
-        { error: '无法获取文件内容，请检查 fileID 是否正确' },
-        { status: 404 }
-      );
-    }
-
     console.log('[Download API] 文件下载成功，大小:', fileContent.length, 'bytes');
 
     // 方案 1: 返回 Base64 编码的文件内容（适合小文件）
@@ -171,12 +163,37 @@ async function handleChinaDownload(
     //     'Content-Length': fileContent.length.toString(),
     //   },
     // });
-  } catch (error) {
-    console.error('[Download API] CloudBase 下载异常:', error);
-    return NextResponse.json(
-      { error: '从云存储读取文件失败' },
-      { status: 500 }
-    );
+  } catch (error: any) {
+    const errorMessage = error.message || error.toString();
+    console.error('[Download API] CloudBase 下载异常:', errorMessage);
+
+    // 根据错误类型返回适当的 HTTP 状态码和错误信息
+    if (errorMessage.includes('不存在') || errorMessage.includes('not found')) {
+      return NextResponse.json(
+        { error: `文件不存在（fileID: ${fileInfo.fileID}），请检查 fileID 配置是否正确` },
+        { status: 404 }
+      );
+    } else if (errorMessage.includes('无权限') || errorMessage.includes('permission')) {
+      return NextResponse.json(
+        { error: '无权限访问该文件，请检查 CloudBase 配置和权限设置' },
+        { status: 403 }
+      );
+    } else if (errorMessage.includes('初始化失败')) {
+      return NextResponse.json(
+        { error: '服务器配置错误：CloudBase 初始化失败，请检查环境变量配置（NEXT_PUBLIC_WECHAT_CLOUDBASE_ID, CLOUDBASE_SECRET_ID, CLOUDBASE_SECRET_KEY）' },
+        { status: 500 }
+      );
+    } else if (errorMessage.includes('超时')) {
+      return NextResponse.json(
+        { error: '文件下载超时，请稍后重试' },
+        { status: 504 }
+      );
+    } else {
+      return NextResponse.json(
+        { error: `文件下载失败: ${errorMessage}` },
+        { status: 500 }
+      );
+    }
   }
 }
 

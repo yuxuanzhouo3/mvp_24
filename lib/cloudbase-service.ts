@@ -275,26 +275,45 @@ export async function verifyToken(token: string): Promise<boolean> {
 /**
  * 从 CloudBase 下载文件
  * @param fileID CloudBase 文件 ID (格式: cloud://bucket/path/to/file)
- * @returns 文件内容的 Buffer，如果失败返回 null
+ * @returns 文件内容的 Buffer
+ * @throws 如果文件不存在、权限不足、网络错误等会抛出异常
  */
-export async function downloadFileFromCloudBase(fileID: string): Promise<Buffer | null> {
+export async function downloadFileFromCloudBase(fileID: string): Promise<Buffer> {
   try {
     console.log(" [CloudBase Service] 开始下载文件，fileID:", fileID);
 
     const app = initCloudBase();
+
+    // 验证 CloudBase 初始化
+    if (!app) {
+      throw new Error('CloudBase 初始化失败，请检查环境变量 NEXT_PUBLIC_WECHAT_CLOUDBASE_ID, CLOUDBASE_SECRET_ID, CLOUDBASE_SECRET_KEY');
+    }
+
     const res = await app.downloadFile({
       fileID: fileID,
     });
 
     if (!res || !res.fileContent) {
-      console.error(" [CloudBase Service] 文件内容为空");
-      return null;
+      throw new Error(`文件内容为空，fileID: ${fileID}（可能文件不存在或权限不足）`);
     }
 
-    console.log(" [CloudBase Service] 文件下载成功，大小:", res.fileContent.length);
+    console.log(" [CloudBase Service] 文件下载成功，大小:", res.fileContent.length, 'bytes');
     return res.fileContent;
   } catch (error: any) {
-    console.error(" [CloudBase Service] 文件下载失败:", error);
-    return null;
+    const errorMessage = error.message || error.toString();
+    console.error(" [CloudBase Service] 文件下载失败:", errorMessage);
+
+    // 根据错误类型提供更详细的错误信息
+    if (errorMessage.includes('404') || errorMessage.includes('not found')) {
+      throw new Error(`文件不存在: ${fileID}`);
+    } else if (errorMessage.includes('403') || errorMessage.includes('permission') || errorMessage.includes('Forbidden')) {
+      throw new Error(`无权限访问文件: ${fileID}`);
+    } else if (errorMessage.includes('timeout')) {
+      throw new Error(`文件下载超时，请检查网络或 CloudBase 服务状态`);
+    } else if (errorMessage.includes('CloudBase 初始化失败')) {
+      throw error;
+    } else {
+      throw new Error(`文件下载失败: ${errorMessage}`);
+    }
   }
 }

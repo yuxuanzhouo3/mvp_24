@@ -97,13 +97,21 @@ export default function DownloadPage() {
         }
       }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : '下载失败，请稍后重试';
+      let errorMessage = '下载失败，请稍后重试';
+
+      if (err instanceof Error) {
+        errorMessage = err.message;
+      } else if (typeof err === 'object' && err !== null) {
+        errorMessage = JSON.stringify(err);
+      }
+
       console.error('[Download] 错误:', errorMessage);
       setError(errorMessage);
-      // 3 秒后清除错误信息
-      setTimeout(() => setError(null), 3000);
+      // 5 秒后清除错误信息（给用户更多时间阅读）
+      setTimeout(() => setError(null), 5000);
     } finally {
       setDownloadingPlatform(null);
+      setDownloadingArch(null);
     }
   };
 
