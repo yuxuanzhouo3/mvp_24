@@ -1,0 +1,42 @@
+================================
+顶层作用域 process.env 访问 - 快速参考
+================================
+
+找到的文件总数: 7
+
+[高风险] lib/supabase-admin.ts
+  - 行 6-8: const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  - 行 7: const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  - 行 8: const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  - 问题: 关键基础设施模块，顶层直接初始化 Supabase 客户端
+
+[中风险] cloudbase-integration\test-connection.ts
+  - 行 11-13: const envId/secretId/secretKey = process.env...
+  - 问题: 测试脚本，可能被导入使用
+
+[中风险] scripts\cleanup-duplicate-payment-records.ts
+  - 行 5-6: const supabaseUrl/Key = process.env...!
+  - 问题: 使用非空断言，环境变量不存在时会失败
+
+[中风险] scripts\test-duplicate-payment-prevention.ts
+  - 行 5-6: const supabaseUrl/Key = process.env...!
+  - 问题: 使用非空断言，环境变量不存在时会失败
+
+[低风险] check-alipay-config.js
+  - 行 9: const isSandbox = process.env.ALIPAY_SANDBOX === "true";
+  - 问题: 纯粹的检查脚本
+
+[低风险] scripts\init-cloudbase-collections.ts
+  - 行 29-31: const cloudbaseId/secretId/secretKey = process.env... || "";
+  - 问题: 脚本，但有默认值和验证
+
+[低风险] test-p0-fix.js
+  - 行 11: const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+  - 问题: 测试脚本，有合理默认值
+
+================================
+优先修复顺序:
+1. lib/supabase-admin.ts (实现延迟初始化)
+2. cloudbase-integration/test-connection.ts
+3. scripts/cleanup-duplicate-payment-records.ts 及 test-duplicate-payment-prevention.ts
+4. 其他脚本文件改进错误处理

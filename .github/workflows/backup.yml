@@ -1,0 +1,40 @@
+name: Database Backup
+
+on:
+  schedule:
+    # 每天凌晨2点运行备份
+    - cron: "0 2 * * *"
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Supabase CLI
+        run: |
+          npm install -g supabase
+
+      - name: Run database backup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm db:backup
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: database-backup-${{ github.run_number }}
+          path: backups/
+          retention-days: 7
