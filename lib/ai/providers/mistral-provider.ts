@@ -22,15 +22,12 @@ export class MistralProvider extends BaseAIProvider {
   readonly name = "mistral";
   readonly models = [
     "mistral-tiny",
-    "mistral-large-latest",
-    "magistral-small-latest",
-    "magistral-medium-latest",
     "codestral-latest",
     "codestral-2412",
     "devstral-small-latest",
     "devstral-medium-latest",
   ];
-  readonly defaultModel = "mistral-large-latest";
+  readonly defaultModel = "mistral-tiny";
 
   private client: OpenAI;
   private modelInfoCache: Map<string, ModelInfo> = new Map();
@@ -78,54 +75,6 @@ export class MistralProvider extends BaseAIProvider {
       capabilities: {
         streaming: true,
         functionCalling: false,
-        vision: false,
-      },
-    });
-
-    this.modelInfoCache.set("mistral-large-latest", {
-      id: "mistral-large-latest",
-      name: "Mistral Large Latest",
-      provider: "mistral",
-      contextWindow: 32000,
-      pricing: {
-        prompt: 0.00024, // $0.24 per 1M tokens
-        completion: 0.00072, // $0.72 per 1M tokens
-      },
-      capabilities: {
-        streaming: true,
-        functionCalling: true,
-        vision: false,
-      },
-    });
-
-    this.modelInfoCache.set("magistral-small-latest", {
-      id: "magistral-small-latest",
-      name: "Magistral Small Latest",
-      provider: "mistral",
-      contextWindow: 16000,
-      pricing: {
-        prompt: 0.0001, // $0.10 per 1M tokens
-        completion: 0.0003, // $0.30 per 1M tokens
-      },
-      capabilities: {
-        streaming: true,
-        functionCalling: true,
-        vision: false,
-      },
-    });
-
-    this.modelInfoCache.set("magistral-medium-latest", {
-      id: "magistral-medium-latest",
-      name: "Magistral Medium Latest",
-      provider: "mistral",
-      contextWindow: 24000,
-      pricing: {
-        prompt: 0.00015, // $0.15 per 1M tokens
-        completion: 0.00045, // $0.45 per 1M tokens
-      },
-      capabilities: {
-        streaming: true,
-        functionCalling: true,
         vision: false,
       },
     });

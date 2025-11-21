@@ -105,17 +105,35 @@ export async function GET(
         );
       }
 
+      // 同时获取会话配置（用于前端显示锁定状态）
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      const sessionResult = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      const sessionData = sessionResult.data?.[0];
+      const multiAiConfig = sessionData?.multi_ai_config || null;
+
       return Response.json({
         messages: result.data || [],
         total: result.count || 0,
         limit,
         offset,
+        sessionConfig: multiAiConfig,
       });
     } else {
-      // 国际版：从 Supabase 的 gpt_sessions.messages 获取
+      // 国际版：从 Supabase 的 gpt_sessions.messages 和 multi_ai_config 获取
       const { data: session, error: sessionError } = await supabaseAdmin
         .from("gpt_sessions")
-        .select("messages")
+        .select("messages, multi_ai_config")
         .eq("id", sessionId)
         .eq("user_id", userId)
         .single();
@@ -137,11 +155,15 @@ export async function GET(
       // 计算总Token使用量
       const totalTokens = allMessages.reduce((sum: number, msg: any) => sum + (msg.tokens_used || 0), 0);
 
+      // 注意：与CloudBase一致，history API返回完整消息（不按agentId过滤）
+      // 按agentId过滤只在/api/chat/send中进行，用于实现上下文隔离
+
       return Response.json({
         messages: paginatedMessages,
         total: totalMessages,
         limit,
         offset,
+        sessionConfig: session.multi_ai_config || null,
         stats: {
           totalMessages,
           totalTokens,

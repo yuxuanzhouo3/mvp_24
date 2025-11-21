@@ -103,11 +103,25 @@ export function MarkdownRenderer({ content, className = "" }: MarkdownRendererPr
           ),
 
           // 段落
-          p: ({ children }) => (
-            <p className="text-sm leading-relaxed mb-3 text-gray-700 dark:text-gray-300">
-              {children}
-            </p>
-          ),
+          p: ({ children }) => {
+            // 检查子元素是否包含块级元素（如代码块）
+            const hasBlockElement = React.Children.toArray(children).some(
+              child =>
+                React.isValidElement(child) &&
+                (child.type === 'div' || child.type === 'pre')
+            );
+
+            if (hasBlockElement) {
+              // 如果包含块级元素，直接返回子元素，不包装在<p>中
+              return <>{children}</>;
+            }
+
+            return (
+              <p className="text-sm leading-relaxed mb-3 text-gray-700 dark:text-gray-300">
+                {children}
+              </p>
+            );
+          },
 
           // 列表
           ul: ({ children }) => (

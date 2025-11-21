@@ -6,10 +6,6 @@
 import { BaseAIProvider } from "./providers/base-provider";
 import { DashScopeProvider } from "./providers/dashscope-provider";
 import { MistralProvider } from "./providers/mistral-provider";
-import { StabilityAIProvider } from "./providers/stability-ai-provider";
-import { AssemblyAIProvider } from "./providers/assemblyai-provider";
-import { GladiaProvider } from "./providers/gladia-provider";
-import { ElevenLabsProvider } from "./providers/elevenlabs-provider";
 import { AIProviderError } from "./types";
 
 /**
@@ -54,46 +50,6 @@ class AIRouter {
           this.registerProvider(mistralProvider);
         } catch (error) {
           console.error("[Mistral] Failed to initialize:", error);
-        }
-      }
-
-      // Stability AI
-      if (process.env.STABILITY_API_KEY) {
-        try {
-          const stabilityProvider = new StabilityAIProvider();
-          this.registerProvider(stabilityProvider);
-        } catch (error) {
-          console.error("[Stability AI] Failed to initialize:", error);
-        }
-      }
-
-      // AssemblyAI
-      if (process.env.ASSEMBLYAI_API_KEY) {
-        try {
-          const assemblyProvider = new AssemblyAIProvider();
-          this.registerProvider(assemblyProvider);
-        } catch (error) {
-          console.error("[AssemblyAI] Failed to initialize:", error);
-        }
-      }
-
-      // Gladia
-      if (process.env.GLADIA_API_KEY) {
-        try {
-          const gladiaProvider = new GladiaProvider();
-          this.registerProvider(gladiaProvider);
-        } catch (error) {
-          console.error("[Gladia] Failed to initialize:", error);
-        }
-      }
-
-      // ElevenLabs
-      if (process.env.ELEVENLABS_API_KEY) {
-        try {
-          const elevenLabsProvider = new ElevenLabsProvider();
-          this.registerProvider(elevenLabsProvider);
-        } catch (error) {
-          console.error("[ElevenLabs] Failed to initialize:", error);
         }
       }
 

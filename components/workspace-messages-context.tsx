@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState } from "react";
 
 interface AIResponse {
   agentId: string;
@@ -42,87 +42,6 @@ export function WorkspaceMessagesProvider({
   const [currentSessionId, setCurrentSessionId] = useState<
     string | undefined
   >();
-  const [isHydrated, setIsHydrated] = useState(false);
-
-  // 在客户端水合时加载 localStorage
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    try {
-      const savedMessages = localStorage.getItem("workspace-messages");
-      const savedSessionId = localStorage.getItem("workspace-session-id");
-
-      console.log("🔄 [WorkspaceMessagesProvider] 从 localStorage 加载数据...");
-
-      if (savedMessages) {
-        try {
-          const parsedMessages = JSON.parse(savedMessages);
-          const restoredMessages = parsedMessages.map((msg: any) => {
-            // 确保 content 字段被正确处理
-            let restoredContent: string | AIResponse[];
-            if (msg.isMultiAI && Array.isArray(msg.content)) {
-              // 多AI响应：恢复为 AIResponse 数组
-              restoredContent = msg.content.map((aiResp: any) => ({
-                ...aiResp,
-                timestamp: new Date(aiResp.timestamp),
-              }));
-            } else {
-              // 普通文本内容
-              restoredContent = msg.content;
-            }
-
-            return {
-              ...msg,
-              timestamp: new Date(msg.timestamp),
-              content: restoredContent,
-            };
-          });
-          setMessages(restoredMessages);
-          console.log("✅ 成功加载", restoredMessages.length, "条消息");
-        } catch (error) {
-          console.error("❌ 解析消息失败:", error);
-          localStorage.removeItem("workspace-messages");
-        }
-      }
-
-      if (savedSessionId) {
-        setCurrentSessionId(savedSessionId);
-        console.log("✅ 成功加载会话 ID:", savedSessionId);
-      }
-    } catch (error) {
-      console.error("❌ 加载 localStorage 数据失败:", error);
-    }
-
-    setIsHydrated(true);
-  }, []);
-
-  // 当消息改变时保存到 localStorage
-  useEffect(() => {
-    if (!isHydrated) return;
-
-    try {
-      if (messages.length > 0) {
-        localStorage.setItem("workspace-messages", JSON.stringify(messages));
-        console.log("💾 已保存", messages.length, "条消息到 localStorage");
-      }
-    } catch (error) {
-      console.error("❌ 保存消息到 localStorage 失败:", error);
-    }
-  }, [messages, isHydrated]);
-
-  // 当会话 ID 改变时保存到 localStorage
-  useEffect(() => {
-    if (!isHydrated) return;
-
-    try {
-      if (currentSessionId) {
-        localStorage.setItem("workspace-session-id", currentSessionId);
-        console.log("💾 已保存会话 ID 到 localStorage:", currentSessionId);
-      }
-    } catch (error) {
-      console.error("❌ 保存会话 ID 失败:", error);
-    }
-  }, [currentSessionId, isHydrated]);
 
   const addMessage = (message: Message) => {
     setMessages((prev) => {
@@ -138,8 +57,6 @@ export function WorkspaceMessagesProvider({
   const clearMessages = () => {
     setMessages([]);
     setCurrentSessionId(undefined);
-    localStorage.removeItem("workspace-messages");
-    localStorage.removeItem("workspace-session-id");
     console.log("🗑️ 已清空所有消息和会话数据");
   };
 

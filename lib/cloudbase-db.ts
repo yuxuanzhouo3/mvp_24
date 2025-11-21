@@ -58,20 +58,26 @@ export async function getGptSessions(
 export async function createGptSession(
   userId: string,
   title: string,
-  model: string
+  model: string,
+  multiAiConfig: any = null
 ) {
   try {
     const db = getCloudBaseApp().database();
     const collection = db.collection("ai_conversations");
 
     const now = new Date().toISOString();
-    const sessionData = {
+    const sessionData: any = {
       user_id: userId,
       title: title.trim(),
       model,
       created_at: now,
       updated_at: now,
     };
+
+    // 添加多AI配置
+    if (multiAiConfig) {
+      sessionData.multi_ai_config = multiAiConfig;
+    }
 
     const result = await collection.add(sessionData);
 
@@ -143,11 +149,17 @@ export async function updateGptSession(
 
 /**
  * 获取会话消息 - 从 ai_conversations 中获取消息
+ * @param sessionId - 会话ID
+ * @param limit - 分页限制
+ * @param offset - 分页偏移
+ * @param agentId - 可选：用于多AI模式下过滤特定agent的消息
  */
 export async function getGptMessages(
   sessionId: string,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
+  agentId?: string,
+  filterByAgent: boolean = false
 ) {
   try {
     const db = getCloudBaseApp().database();
@@ -168,25 +180,63 @@ export async function getGptMessages(
     const messages = conversation.messages || [];
     const sessionModel = conversation.model || 'gpt-3.5-turbo';
 
-    // 应用分页,并给每条消息附加 model 字段（仅对非多AI消息）
-    const paginatedMessages = messages
-      .slice(offset, offset + limit)
+    // ========================================
+    // 核心过滤逻辑（与send/route.ts保持一致）
+    // filterByAgent=true: 按agentId过滤（用于send API，实现上下文隔离）
+    // filterByAgent=false: 返回完整消息（用于history API，显示所有响应）
+    // ========================================
+    const filteredMessages = messages
       .map((msg: any) => {
-        // 如果是多AI消息，保持原样
-        if (msg.isMultiAI) {
-          return msg;
+        // 如果是多AI消息，需要处理
+        if (msg.isMultiAI && Array.isArray(msg.content)) {
+          if (filterByAgent && agentId) {
+            // 模式1：按agentId过滤（用于send/route.ts的上下文隔离）
+            const relevantResponses = msg.content.filter(
+              (resp: any) => resp.agentId === agentId
+            );
+
+            // 如果找到该agentId的历史回复，保留
+            if (relevantResponses.length > 0) {
+              return {
+                role: msg.role,
+                content: relevantResponses.map((r: any) => r.content).join('\n'),
+                agentId: agentId,
+              };
+            } else {
+              // 该agentId在此多AI消息中没有回复，跳过
+              return null;
+            }
+          } else if (!filterByAgent) {
+            // 模式2：返回完整的多AI消息（用于history API）
+            return {
+              role: msg.role,
+              isMultiAI: true,
+              content: msg.content,
+              model: sessionModel,
+            };
+          } else {
+            // filterByAgent=true 但没有agentId，跳过多AI消息（保持隔离）
+            return null;
+          }
+        } else if (!msg.isMultiAI) {
+          // 单AI消息或用户消息，保留
+          return {
+            ...msg,
+            model: sessionModel
+          };
         }
-        // 单AI消息添加 model 字段
-        return {
-          ...msg,
-          model: sessionModel
-        };
-      });
+
+        return null;
+      })
+      .filter((msg: any) => msg !== null); // 移除null项
+
+    // 应用分页
+    const paginatedMessages = filteredMessages.slice(offset, offset + limit);
 
     return {
       data: paginatedMessages,
       error: null,
-      count: messages.length,
+      count: filteredMessages.length,
     };
   } catch (error) {
     console.error("[CloudBase] Failed to fetch messages:", error);

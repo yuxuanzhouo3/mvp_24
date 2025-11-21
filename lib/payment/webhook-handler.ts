@@ -475,18 +475,32 @@ export class WebhookHandler {
 
           // ✅ 提取Order ID (用于查找pending payment)
           // PAYMENT.CAPTURE.COMPLETED事件中,supplementary_data包含order_id
+          // 尝试多个字段来获取Order ID（因为不同PayPal事件格式不一致）
           if (data.supplementary_data?.related_ids?.order_id) {
             paypalOrderId = data.supplementary_data.related_ids.order_id;
+          } else if (data.links && data.links.length > 0) {
+            // 备选方案：从links中查找order_id
+            const orderLink = data.links.find((l: any) =>
+              l.rel === 'up' && (l.href?.includes('/orders/') || l.href?.includes('/checkouts/'))
+            );
+            if (orderLink?.href) {
+              const match = orderLink.href.match(/\/orders\/([A-Z0-9]+)/);
+              if (match?.[1]) {
+                paypalOrderId = match[1];
+              }
+            }
           }
 
           // 记录 PayPal 数据以便调试
           logInfo("PayPal payment success data", {
             subscriptionId,
+            paypalOrderId: paypalOrderId || "NOT_FOUND",
             dataKeys: Object.keys(data),
             hasAmount: !!data.amount,
             hasBillingInfo: !!data.billing_info,
             hasPurchaseUnits: !!data.purchase_units,
             hasCaptures: !!data.captures,
+            hasSupplementaryData: !!data.supplementary_data,
             id: data.id,
             eventType: data.event_type || "unknown",
           });
@@ -673,7 +687,16 @@ export class WebhookHandler {
             }
           }
         } else {
-          // Supabase用户：查询支付记录（不限制status）
+          // Supabase用户：查询支付记录（多策略查询）
+          logInfo("🔍 Querying Supabase for payment record (INTL mode)", {
+            provider,
+            subscriptionId,
+            userId,
+            paypalOrderId,
+            amount,
+          });
+
+          // 策略1：首先尝试通过 transaction_id 查询（用于一次性支付）
           let { data: paymentData } = await supabaseAdmin
             .from("payments")
             .select("*")
@@ -683,20 +706,79 @@ export class WebhookHandler {
             .maybeSingle();
 
           if (paymentData) {
-            logInfo("Payment record found from Supabase", {
+            logInfo("✅ Strategy 1: Payment found by transaction_id", {
               subscriptionId,
               provider,
+              transactionId: paymentData.transaction_id,
               hasMetadata: !!paymentData.metadata,
               metadata: paymentData.metadata,
-              billingCycle: paymentData.billing_cycle,
-              allFields: Object.keys(paymentData || {}),
             });
+            pendingPayment = paymentData;
           }
 
-          pendingPayment = paymentData;
+          // 策略2：如果没找到，对于 PayPal PAYMENT.CAPTURE.COMPLETED 事件，使用 order_id 查询
+          if (
+            !pendingPayment &&
+            provider === "paypal" &&
+            paypalOrderId
+          ) {
+            logWarn(
+              "Strategy 2: transaction_id not found, trying paypalOrderId",
+              {
+                subscriptionId,
+                paypalOrderId,
+                userId,
+              }
+            );
 
-          // 🔧 PayPal备选查询：如果通过transaction_id没找到，尝试通过userId+amount查找
-          // 这种情况可能发生在webhook数据结构变化时
+            // 首先尝试用 user_id 过滤
+            let paymentData2 = null;
+            if (userId) {
+              const { data: result } = await supabaseAdmin
+                .from("payments")
+                .select("*")
+                .eq("transaction_id", paypalOrderId)
+                .eq("user_id", userId)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              paymentData2 = result;
+            }
+
+            // 如果没找到且没有 user_id，或者 user_id 过滤失败，尝试不带 user_id 的查询
+            if (!paymentData2 && paypalOrderId) {
+              const { data: result } = await supabaseAdmin
+                .from("payments")
+                .select("*")
+                .eq("transaction_id", paypalOrderId)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              paymentData2 = result;
+              if (paymentData2) {
+                logInfo(
+                  "Strategy 2b: Found payment by paypalOrderId without user_id filter",
+                  { paypalOrderId, foundUserId: paymentData2.user_id }
+                );
+              }
+            }
+
+            if (paymentData2) {
+              pendingPayment = paymentData2;
+              logInfo(
+                `✅ Strategy 2: Found PayPal payment using paypalOrderId`,
+                {
+                  subscriptionId,
+                  paypalOrderId,
+                  userId,
+                  foundTransactionId: paymentData2.transaction_id,
+                  metadata: paymentData2.metadata,
+                }
+              );
+            }
+          }
+
+          // 策略3：尝试通过 userId + amount + provider 查询（备选方案）
           if (
             !pendingPayment &&
             provider === "paypal" &&
@@ -704,7 +786,7 @@ export class WebhookHandler {
             amount > 0
           ) {
             logWarn(
-              "PayPal: payment not found by transaction_id, trying user+amount match",
+              "Strategy 3: paypalOrderId also not found, trying user+amount",
               {
                 subscriptionId,
                 userId,
@@ -712,46 +794,78 @@ export class WebhookHandler {
               }
             );
 
-            const { data: paymentData2 } = await supabaseAdmin
+            const { data: paymentData3 } = await supabaseAdmin
               .from("payments")
               .select("*")
               .eq("user_id", userId)
               .eq("amount", amount)
               .eq("payment_method", provider)
+              .gte(
+                "created_at",
+                new Date(Date.now() - 15 * 60 * 1000).toISOString()
+              ) // 最近15分钟
               .order("created_at", { ascending: false })
               .limit(1)
               .maybeSingle();
 
-            if (paymentData2) {
-              pendingPayment = paymentData2;
-              logInfo(`Found PayPal payment using user+amount match`, {
-                subscriptionId,
-                userId,
-                amount,
-                foundTransactionId: paymentData2.transaction_id,
-                metadata: paymentData2.metadata,
-              });
+            if (paymentData3) {
+              pendingPayment = paymentData3;
+              logInfo(
+                `✅ Strategy 3: Found PayPal payment using user+amount`,
+                {
+                  subscriptionId,
+                  userId,
+                  amount,
+                  foundTransactionId: paymentData3.transaction_id,
+                  metadata: paymentData3.metadata,
+                }
+              );
             }
           }
-          // 如果没找到，对于支付宝，还需要尝试用 out_trade_no 字段查询
-          else if (!pendingPayment && provider === "alipay") {
-            const { data: paymentData2 } = await supabaseAdmin
+
+          // 策略4：对于支付宝，使用 out_trade_no 字段查询
+          if (!pendingPayment && provider === "alipay" && userId) {
+            logWarn(
+              "Strategy 4: Alipay transaction_id not found, trying out_trade_no",
+              { subscriptionId, userId }
+            );
+
+            const { data: paymentData4 } = await supabaseAdmin
               .from("payments")
               .select("*")
               .eq("out_trade_no", subscriptionId)
+              .eq("user_id", userId)
               .order("created_at", { ascending: false })
               .limit(1)
               .maybeSingle();
 
-            pendingPayment = paymentData2;
-
-            if (pendingPayment) {
-              logInfo(`Found payment using out_trade_no field`, {
-                subscriptionId,
-                provider,
-                paymentStatus: pendingPayment.status,
-              });
+            if (paymentData4) {
+              pendingPayment = paymentData4;
+              logInfo(
+                `✅ Strategy 4: Found Alipay payment using out_trade_no`,
+                {
+                  subscriptionId,
+                  provider,
+                  paymentStatus: paymentData4.status,
+                  metadata: paymentData4.metadata,
+                }
+              );
             }
+          }
+
+          // 如果仍然没找到，记录详细错误信息
+          if (!pendingPayment) {
+            logWarn(
+              `❌ Payment record not found in Supabase after all strategies`,
+              {
+                provider,
+                subscriptionId,
+                paypalOrderId,
+                userId,
+                amount,
+                note: "Will attempt to infer days from amount",
+              }
+            );
           }
         }
 
@@ -2177,7 +2291,7 @@ export class WebhookHandler {
     now: Date
   ): Promise<boolean> {
     try {
-      logInfo("Updating subscription status in Supabase", {
+      logInfo("Updating subscription status in Supabase (INTL mode)", {
         operationId,
         userId,
         subscriptionId,
@@ -2186,49 +2300,8 @@ export class WebhookHandler {
         days, // ✅ 新增：记录天数
       });
 
-      // 首先检查用户是否存在
-      const { data: userProfile, error: userError } = await supabaseAdmin
-        .from("user_profiles")
-        .select("id, subscription_plan, subscription_status")
-        .eq("id", userId)
-        .maybeSingle();
-
-      if (userError) {
-        logError(
-          "Failed to fetch user profile during subscription update",
-          userError,
-          {
-            operationId,
-            userId,
-            subscriptionId,
-            provider,
-          }
-        );
-        return false;
-      }
-
-      if (!userProfile) {
-        logSecurityEvent(
-          "User profile not found for subscription update",
-          userId,
-          undefined,
-          {
-            operationId,
-            subscriptionId,
-            provider,
-            status,
-          }
-        );
-        return false;
-      }
-
-      logInfo("User profile validated for subscription update", {
-        operationId,
-        userId,
-        currentPlan: userProfile.subscription_plan,
-        currentStatus: userProfile.subscription_status,
-        newStatus: status,
-      });
+      // ✅ 修复：user_profiles 表已被删除，直接处理订阅表
+      // 用户认证由上层 webhook 处理保证了 userId 的有效性
 
       // 检查是否已有活跃订阅
       const { data: existingSubscriptionData, error: checkError } =
@@ -2504,41 +2577,31 @@ export class WebhookHandler {
         });
       }
 
-      // 更新用户资料 - 确保状态一致性
-      if (subscription) {
-        logInfo("Updating user profile", {
-          operationId,
-          userId,
-          subscriptionId: subscription.id,
-          planId: subscription.plan_id,
-          status,
-        });
-
-        const { error: profileError } = await supabaseAdmin
-          .from("user_profiles")
-          .update({
-            subscription_plan: subscription.plan_id,
-            subscription_status: status,
-            updated_at: now.toISOString(),
-          })
-          .eq("id", userId);
-
-        if (profileError) {
-          logError("Failed to update user profile", profileError, {
+      // 安全检查：如果状态是active但仍没有subscription，这是错误
+      if (status === "active" && !subscription) {
+        logError(
+          "Critical: Failed to create or update subscription in active status",
+          new Error("Subscription is undefined after creation attempt"),
+          {
             operationId,
             userId,
-            subscriptionId: subscription.id,
+            subscriptionId,
+            status,
             provider,
-          });
-          // 不返回false，因为订阅已更新，profile更新失败不应该阻止整个流程
-        } else {
-          logBusinessEvent("user_profile_updated", userId, {
-            operationId,
-            subscriptionPlan: subscription.plan_id,
-            subscriptionStatus: status,
-          });
-        }
+          }
+        );
+        return false;
       }
+
+      // 订阅已在updateSubscriptionStatusSupabase中更新，包括current_period_end
+      // 用户信息通过直接查询subscriptions表获取（user_profiles表已被删除）
+      logInfo("Subscription updated successfully", {
+        operationId,
+        userId,
+        subscriptionId: subscription?.id,
+        status,
+        currentPeriodEnd: subscription?.current_period_end,
+      });
 
       // 如果有金额信息，记录支付
       if (amount && currency && subscription) {

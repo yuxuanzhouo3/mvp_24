@@ -149,17 +149,15 @@ export async function POST(req: NextRequest) {
 
     const userId = authResult.userId;
 
-    // 验证请求体
-    const bodyValidation = await ApiValidator.validateBody(
-      req,
-      commonSchemas.createSession
-    );
-
-    if (!bodyValidation.success) {
-      return Response.json({ error: bodyValidation.error }, { status: 400 });
-    }
-
-    const { title, model } = bodyValidation.data;
+    // 解析请求体（不使用validator，以支持新增的多AI字段）
+    const body = await req.json();
+    const {
+      title,
+      model,
+      isMultiAI = false,
+      selectedAgentIds = [],
+      collaborationMode = "parallel",
+    } = body;
 
     if (!title || !model) {
       return Response.json(
@@ -168,13 +166,41 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 验证多AI参数
+    if (isMultiAI) {
+      if (!Array.isArray(selectedAgentIds) || selectedAgentIds.length === 0) {
+        return Response.json(
+          { error: "selectedAgentIds must be a non-empty array for multi-AI sessions" },
+          { status: 400 }
+        );
+      }
+      if (selectedAgentIds.length > 10) {
+        return Response.json(
+          { error: "Maximum 10 agents per session" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // 构建multi_ai_config
+    const multiAiConfig = isMultiAI
+      ? {
+          isMultiAI: true,
+          selectedAgentIds,
+          collaborationMode,
+          lockedAt: new Date().toISOString(),
+          lockedBy: userId,
+        }
+      : null;
+
     // 根据区域选择数据库
     if (isChinaRegion()) {
       // 国内版：CloudBase
       const { data: session, error } = await createCloudBaseSession(
         userId,
         title,
-        model
+        model,
+        multiAiConfig
       );
 
       if (error || !session) {
@@ -194,13 +220,20 @@ export async function POST(req: NextRequest) {
       return Response.json({ session: normalizedSession }, { status: 201 });
     } else {
       // 国际版：Supabase
+      const sessionData: any = {
+        user_id: userId,
+        title: title.trim(),
+        model,
+      };
+
+      // 添加多AI配置
+      if (multiAiConfig) {
+        sessionData.multi_ai_config = multiAiConfig;
+      }
+
       const { data: session, error } = await supabaseAdmin
         .from("gpt_sessions")
-        .insert({
-          user_id: userId,
-          title: title.trim(),
-          model,
-        })
+        .insert(sessionData)
         .select()
         .single();
 

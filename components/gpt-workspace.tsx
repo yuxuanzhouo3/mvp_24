@@ -71,6 +71,7 @@ export function GPTWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [aiResponses, setAIResponses] = useState<AIResponse[]>([]);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [sessionConfig, setSessionConfig] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const { language } = useLanguage();
@@ -99,6 +100,103 @@ export function GPTWorkspace({
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, aiResponses, shouldAutoScroll]);
+
+  // 当会话ID改变时，从数据库加载历史消息
+  useEffect(() => {
+    const loadMessagesFromDatabase = async () => {
+      if (!currentSessionId) return;
+
+      try {
+        const { token } = await getClientAuthToken();
+        if (!token) return;
+
+        const response = await fetch(
+          `/api/chat/sessions/${currentSessionId}/messages`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        if (!response.ok) {
+          console.error("Failed to load messages:", response.status);
+          return;
+        }
+
+        const data = await response.json();
+        const loadedMessages = data.messages || [];
+        const loadedSessionConfig = data.sessionConfig || null;
+
+        // 转换数据库消息格式为前端格式
+        const formattedMessages = loadedMessages.map((msg: any) => ({
+          id: msg.id || `msg-${Date.now()}-${Math.random()}`,
+          role: msg.role,
+          content: msg.isMultiAI && Array.isArray(msg.content)
+            ? msg.content.map((r: any) => ({
+                agentId: r.agentId,
+                agentName: r.agentName,
+                content: r.content || "",
+                model: r.model,
+                tokens: r.tokens || 0,
+                cost: r.cost || 0,
+                status: "completed" as const,
+                timestamp: new Date(r.timestamp),
+              }))
+            : msg.content,
+          isMultiAI: msg.isMultiAI || false,
+          timestamp: new Date(msg.timestamp),
+        }));
+
+        // 如果数据库消息为空且当前正在处理，说明是新会话刚开始
+        // 不要用空数组覆盖本地的消息，防止"AI已就绪"界面闪现
+        if (formattedMessages.length === 0 && isProcessing) {
+          console.log("[GPTWorkspace] Skipping empty message load during active processing");
+          // 只加载会话配置，不更新消息列表
+          if (loadedSessionConfig) {
+            setSessionConfig(loadedSessionConfig);
+          }
+          return;
+        }
+
+        // 直接设置数据库消息（切换会话时替换本地消息）
+        setMessages(formattedMessages);
+
+        // 加载会话配置（用于显示AI锁定状态）
+        if (loadedSessionConfig) {
+          setSessionConfig(loadedSessionConfig);
+          console.log("[GPTWorkspace] Loaded session config:", loadedSessionConfig);
+
+          // 如果是多AI会话，恢复之前选择的AI
+          if (loadedSessionConfig.isMultiAI && loadedSessionConfig.selectedAgentIds) {
+            const restoredAIs = loadedSessionConfig.selectedAgentIds
+              .map((agentId: string) =>
+                availableAIs.find((ai) => ai.id === agentId)
+              )
+              .filter((ai: any) => ai !== undefined);
+
+            if (restoredAIs.length > 0) {
+              setSelectedGPTs(restoredAIs);
+              console.log("[GPTWorkspace] Restored selected AIs:", restoredAIs);
+            }
+          }
+        } else {
+          setSessionConfig(null);
+        }
+
+        console.log(
+          "[GPTWorkspace] Loaded",
+          formattedMessages.length,
+          "messages from database"
+        );
+      } catch (error) {
+        console.error("[GPTWorkspace] Failed to load messages from database:", error);
+      }
+    };
+
+    loadMessagesFromDatabase();
+  }, [currentSessionId, availableAIs]);
 
   const handleSend = async () => {
     if (!input.trim() || isProcessing) return;
@@ -373,16 +471,29 @@ export function GPTWorkspace({
         ? firstMessage.substring(0, 10) + "..."
         : firstMessage;
 
+      // 判断是否为多AI模式
+      const isMultiAI = selectedGPTs.length > 1;
+
+      const sessionData: any = {
+        title: title,
+        model: selectedGPTs[0]?.model || "gpt-3.5-turbo",
+      };
+
+      // 如果是多AI模式，添加配置参数
+      if (isMultiAI) {
+        sessionData.isMultiAI = true;
+        sessionData.selectedAgentIds = selectedGPTs.map(gpt => gpt.id);
+        sessionData.collaborationMode = "parallel";
+        console.log("[GPTWorkspace] Creating multi-AI session with agents:", sessionData.selectedAgentIds);
+      }
+
       const response = await fetch("/api/chat/sessions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          title: title,
-          model: selectedGPTs[0]?.model || "gpt-3.5-turbo",
-        }),
+        body: JSON.stringify(sessionData),
       });
 
       if (!response.ok) {
@@ -391,6 +502,7 @@ export function GPTWorkspace({
 
       const data = await response.json();
       console.log(`Session created:`, data.session);
+      setSessionConfig(data.session.multi_ai_config || null);
       return data.session.id;
     } catch (error) {
       console.error("Failed to create session:", error);
@@ -417,9 +529,12 @@ export function GPTWorkspace({
   const clearConversation = () => {
     setMessages([]);
     setCurrentSessionId(undefined);
-    localStorage.removeItem("workspace-messages");
-    localStorage.removeItem("workspace-session-id");
-    console.log("Cleared conversation from localStorage");
+    setSessionConfig(null);
+    setAIResponses([]);
+    setIsProcessing(false);
+    setError(null);
+    setInput("");
+    console.log("🗑️ 已清空对话");
   };
 
   const getStatusIcon = (status: string) => {
@@ -452,7 +567,7 @@ export function GPTWorkspace({
           </div>
         )}
 
-        {messages.length === 0 && selectedGPTs.length > 0 && (
+        {messages.length === 0 && selectedGPTs.length > 0 && !isProcessing && (
           <div className="text-center py-12">
             <Bot className="w-16 h-16 text-blue-500 mx-auto mb-4" />
             <h3 className="text-lg font-semibold text-gray-900 mb-2">
@@ -670,6 +785,8 @@ export function GPTWorkspace({
         selectedAIs={selectedGPTs}
         onAIsChange={setSelectedGPTs}
         availableAIs={availableAIs}
+        sessionId={currentSessionId}
+        sessionConfig={sessionConfig}
       />
 
       {/* 输入区域 */}

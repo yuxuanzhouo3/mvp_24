@@ -23,11 +23,28 @@ export abstract class AbstractPayPalProvider extends BasePaymentProvider {
   protected paypalConfig: PayPalConfig;
 
   constructor(config: any) {
-    // Set paypalConfig first before calling super()
+    // Call super first to initialize the parent class
+    super(config);
+
+    // 验证配置
+    const clientId = config.PAYPAL_CLIENT_ID || process.env.PAYPAL_CLIENT_ID || "";
+    const clientSecret = config.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_CLIENT_SECRET || "";
+
+    if (!clientId || !clientSecret) {
+      console.warn("⚠️ PayPal configuration warning:", {
+        hasClientId: !!clientId,
+        hasClientSecret: !!clientSecret,
+        envVars: {
+          PAYPAL_CLIENT_ID: !!process.env.PAYPAL_CLIENT_ID,
+          PAYPAL_CLIENT_SECRET: !!process.env.PAYPAL_CLIENT_SECRET,
+        }
+      });
+    }
+
+    // 构建 paypalConfig
     const paypalConfig: PayPalConfig = {
-      clientId: config.PAYPAL_CLIENT_ID || process.env.PAYPAL_CLIENT_ID || "",
-      clientSecret:
-        config.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_CLIENT_SECRET || "",
+      clientId,
+      clientSecret,
       proMonthlyPlanId:
         config.PAYPAL_PRO_MONTHLY_PLAN_ID ||
         process.env.PAYPAL_PRO_MONTHLY_PLAN_ID ||
@@ -49,23 +66,25 @@ export abstract class AbstractPayPalProvider extends BasePaymentProvider {
         "sandbox") as "sandbox" | "production",
     };
 
-    // Call super with config to initialize BasePaymentProvider
-    super(config);
-
-    // Set paypalConfig after super() call
+    // Set paypalConfig after super() is called
     this.paypalConfig = paypalConfig;
   }
 
   protected validateConfig(config: any): void {
-    // Validate PayPal configuration directly from config parameter
-    const clientId = config.PAYPAL_CLIENT_ID || process.env.PAYPAL_CLIENT_ID || "";
-    const clientSecret = config.PAYPAL_CLIENT_SECRET || process.env.PAYPAL_CLIENT_SECRET || "";
+    // 如果 paypalConfig 已设置，使用它进行验证；否则从 config/env 读取
+    const clientId = this.paypalConfig?.clientId ||
+                     config.PAYPAL_CLIENT_ID ||
+                     process.env.PAYPAL_CLIENT_ID ||
+                     "";
+    const clientSecret = this.paypalConfig?.clientSecret ||
+                         config.PAYPAL_CLIENT_SECRET ||
+                         process.env.PAYPAL_CLIENT_SECRET ||
+                         "";
 
-    if (!clientId) {
-      throw new Error("PayPal client ID is required");
-    }
-    if (!clientSecret) {
-      throw new Error("PayPal client secret is required");
+    if (!clientId || !clientSecret) {
+      console.warn("⚠️ PayPal 配置不完整，部分功能可能无法使用");
+      // 不抛出异常，允许应用继续运行（用于开发/演示环境）
+      return;
     }
   }
 

@@ -145,11 +145,7 @@ export type AIProviderName =
   | "glm" // 智谱清言
   | "spark" // 讯飞星火
   | "hunyuan" // 腾讯混元
-  | "mistral" // Mistral AI
-  | "stability" // Stability AI
-  | "assemblyai" // AssemblyAI
-  | "gladia" // Gladia
-  | "elevenlabs"; // ElevenLabs
+  | "mistral"; // Mistral AI
 
 /**
  * AI 能力标签

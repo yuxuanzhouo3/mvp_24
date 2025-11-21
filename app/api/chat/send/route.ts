@@ -149,6 +149,46 @@ export async function POST(req: NextRequest) {
     }
 
     // ========================================
+    // 3.5 验证多AI配置和agentId匹配
+    // ========================================
+    if (agentId) {
+      // 这是多AI模式的请求
+      const sessionConfig = session.multi_ai_config;
+
+      if (!sessionConfig || !sessionConfig.isMultiAI) {
+        return new Response(
+          JSON.stringify({
+            error: "This session is not configured for multi-AI mode",
+            sessionConfig: session.multi_ai_config,
+            detail: "agentId provided but session is single-AI"
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // 验证agentId是否在锁定的列表中
+      if (!sessionConfig.selectedAgentIds.includes(agentId)) {
+        return new Response(
+          JSON.stringify({
+            error: "Agent not in session configuration",
+            allowedAgents: sessionConfig.selectedAgentIds,
+            requestedAgent: agentId
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    } else if (session.multi_ai_config && session.multi_ai_config.isMultiAI) {
+      // 会话是多AI模式，但没有提供agentId
+      return new Response(
+        JSON.stringify({
+          error: "This session is multi-AI configured but no agentId provided",
+          expectedAgents: session.multi_ai_config.selectedAgentIds
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    // ========================================
     // 4. 获取用户订阅信息并检查限额
     // ========================================
     let subscriptionPlan = "free";
@@ -273,7 +313,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ========================================
-    // 5. 获取会话历史消息
+    // 5. 获取会话历史消息（带过滤）
     // ========================================
     let history: any[] = [];
 
@@ -297,22 +337,43 @@ export async function POST(req: NextRequest) {
         history = (conv.messages || [])
           .slice(-20) // 最近20条消息
           .map((msg: any) => {
-            // 如果是多AI消息,将AIResponse数组转换为字符串
+            // ========================================
+            // 核心过滤逻辑
+            // ========================================
+            // 如果是多AI消息，需要按agentId过滤
             if (msg.isMultiAI && Array.isArray(msg.content)) {
-              const aiResponses = msg.content
-                .map((resp: any) => `${resp.agentName}: ${resp.content}`)
-                .join('\n\n');
+              if (agentId) {
+                // 多AI模式：只获取当前agentId的回复
+                const relevantResponses = msg.content.filter(
+                  (resp: any) => resp.agentId === agentId
+                );
+
+                // 如果找到该agentId的历史回复，保留
+                if (relevantResponses.length > 0) {
+                  return {
+                    role: msg.role,
+                    content: relevantResponses.map((r: any) => r.content).join('\n'),
+                    agentId: agentId,
+                  };
+                } else {
+                  // 该agentId在此多AI消息中没有回复，跳过
+                  return null;
+                }
+              } else {
+                // 单AI模式：跳过多AI消息（保持隔离）
+                return null;
+              }
+            } else if (!msg.isMultiAI) {
+              // 单AI消息或用户消息，保留
               return {
                 role: msg.role,
-                content: aiResponses,
+                content: msg.content,
               };
             }
-            // 普通消息直接返回
-            return {
-              role: msg.role,
-              content: msg.content,
-            };
-          });
+
+            return null;
+          })
+          .filter((msg: any) => msg !== null); // 移除null项
       }
     } else {
       // 国际版：从 Supabase 获取消息（从 gpt_sessions.messages）
@@ -328,27 +389,53 @@ export async function POST(req: NextRequest) {
         const allMessages = result.data.messages;
         const recentMessages = allMessages.slice(-20);
 
-        history = recentMessages.map((msg: any) => {
-          // 提取内容文本
-          let contentStr = "";
+        history = recentMessages
+          .map((msg: any) => {
+            // ========================================
+            // 核心过滤逻辑
+            // ========================================
+            // 如果是多AI消息，需要按agentId过滤
+            if (msg.isMultiAI && Array.isArray(msg.content)) {
+              if (agentId) {
+                // 多AI模式：只获取当前agentId的回复
+                const relevantResponses = msg.content.filter(
+                  (resp: any) => resp.agentId === agentId
+                );
 
-          if (typeof msg.content === "string") {
-            contentStr = msg.content;
-          } else if (Array.isArray(msg.content)) {
-            // 多AI 响应：content 是数组，合并所有响应
-            contentStr = msg.content
-              .map((resp: any) => resp.content || "")
-              .join("\n\n---\n\n");
-          } else if (msg.content && typeof msg.content === "object") {
-            // 如果是对象，提取 content 字段
-            contentStr = msg.content.content || "";
-          }
+                // 如果找到该agentId的历史回复，保留
+                if (relevantResponses.length > 0) {
+                  return {
+                    role: msg.role,
+                    content: relevantResponses.map((r: any) => r.content).join('\n'),
+                    agentId: agentId,
+                  };
+                } else {
+                  // 该agentId在此多AI消息中没有回复，跳过
+                  return null;
+                }
+              } else {
+                // 单AI模式：跳过多AI消息（保持隔离）
+                return null;
+              }
+            } else if (!msg.isMultiAI) {
+              // 单AI消息或用户消息
+              let contentStr = "";
 
-          return {
-            role: msg.role,
-            content: contentStr,
-          };
-        });
+              if (typeof msg.content === "string") {
+                contentStr = msg.content;
+              } else if (msg.content && typeof msg.content === "object") {
+                contentStr = msg.content.content || "";
+              }
+
+              return {
+                role: msg.role,
+                content: contentStr,
+              };
+            }
+
+            return null;
+          })
+          .filter((msg: any) => msg !== null); // 移除null项
       }
     }
 
