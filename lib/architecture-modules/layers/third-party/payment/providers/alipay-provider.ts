@@ -424,30 +424,42 @@ export class AlipayProvider extends AbstractAlipayProvider {
   protected verifyCallbackSignature(params: any): boolean {
     try {
       console.log("Verifying Alipay callback signature:", params);
+      console.log("Environment check - NODE_ENV:", process.env.NODE_ENV, "ALIPAY_SANDBOX:", process.env.ALIPAY_SANDBOX);
 
       // 在开发/沙箱环境下，可以选择跳过签名验证
-      if (
-        process.env.NODE_ENV === "development" ||
-        process.env.ALIPAY_SANDBOX === "true"
-      ) {
+      // ✅ 修复：更稳健的环境检测（忽略大小写、trim）
+      const nodeEnv = (process.env.NODE_ENV || "").toLowerCase().trim();
+      const alipayEnv = (process.env.ALIPAY_SANDBOX || "").toLowerCase().trim();
+
+      if (nodeEnv === "development" || alipayEnv === "true") {
         console.log(
-          "Skipping signature verification in development/sandbox mode"
+          "⏭️  Skipping signature verification in development/sandbox mode",
+          { nodeEnv, alipayEnv }
         );
         return true;
       }
 
-      // 使用SDK验证回调签名
-      const isValid = this.alipaySdk.checkNotifySign(params);
+      // ✅ 修复：使用 checkNotifySignV2 替代 checkNotifySign
+      // checkNotifySignV2 默认不对 value 进行 decode，避免 URL 编码问题
+      // 参考：https://github.com/alipay/alipay-sdk-nodejs-all/issues/45
+      console.log("🔐 Using checkNotifySignV2 for signature verification (avoids decode issues)");
+      const isValid = this.alipaySdk.checkNotifySignV2(params);
 
       if (!isValid) {
-        console.error("Alipay callback signature verification failed");
+        console.error("❌ Alipay callback signature verification failed", {
+          paramsKeys: Object.keys(params),
+          hasSign: !!params.sign,
+          hasSignType: !!params.sign_type,
+        });
         return false;
       }
 
-      console.log("Alipay callback signature verified successfully");
+      console.log("✅ Alipay callback signature verified successfully");
       return true;
     } catch (error) {
-      console.error("Alipay signature verification error:", error);
+      console.error("❌ Alipay signature verification error:", error, {
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       return false;
     }
   }

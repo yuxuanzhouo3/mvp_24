@@ -10,7 +10,6 @@ import {
   Apple,
   Laptop,
   ChevronRight,
-  Loader2,
 } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
@@ -28,9 +27,6 @@ export default function DownloadPage() {
   const t = useTranslations(language);
   const [isChina, setIsChina] = useState(false);
   const [userPlatform, setUserPlatform] = useState<PlatformType | null>(null);
-  const [downloadingPlatform, setDownloadingPlatform] = useState<string | null>(null);
-  const [downloadingArch, setDownloadingArch] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsChina(isChinaRegion());
@@ -38,82 +34,6 @@ export default function DownloadPage() {
   }, []);
 
   const config = getDownloadConfig(isChina);
-
-  /**
-   * 处理下载逻辑
-   * - 国内版：调用 /api/downloads 端点从 CloudBase 下载
-   * - 国际版：直接重定向到 URL
-   */
-  const handleDownload = async (platform: PlatformType, arch?: string) => {
-    try {
-      setError(null);
-      setDownloadingPlatform(platform);
-      setDownloadingArch(arch || null);
-
-      if (isChina) {
-        // 国内版：通过 API 端点下载
-        console.log('[Download] 国内版下载，平台:', platform, '架构:', arch);
-        const archParam = arch ? `&arch=${arch}` : '';
-        const response = await fetch(`/api/downloads?platform=${platform}&region=CN${archParam}`);
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || '下载失败');
-        }
-
-        const data = await response.json();
-
-        if (data.success && data.downloadUrl) {
-          // 创建临时链接并触发下载
-          const link = document.createElement('a');
-          link.href = data.downloadUrl;
-          link.download = data.fileName;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          console.log('[Download] 下载完成:', data.fileName);
-        } else {
-          throw new Error('无法获取下载链接');
-        }
-      } else {
-        // 国际版：获取下载 URL 并用 window.open() 打开（避免 CORS 问题）
-        console.log('[Download] 国际版下载，平台:', platform, '架构:', arch);
-        const archParam = arch ? `&arch=${arch}` : '';
-        const response = await fetch(`/api/downloads?platform=${platform}&region=INTL${archParam}`);
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || '获取下载链接失败');
-        }
-
-        const data = await response.json();
-
-        if (data.success && data.downloadUrl) {
-          // 用 window.open() 打开下载链接（不受 CORS 限制）
-          window.open(data.downloadUrl, '_blank');
-          console.log('[Download] 已打开下载链接:', data.downloadUrl);
-        } else {
-          throw new Error('无法获取下载链接');
-        }
-      }
-    } catch (err) {
-      let errorMessage = '下载失败，请稍后重试';
-
-      if (err instanceof Error) {
-        errorMessage = err.message;
-      } else if (typeof err === 'object' && err !== null) {
-        errorMessage = JSON.stringify(err);
-      }
-
-      console.error('[Download] 错误:', errorMessage);
-      setError(errorMessage);
-      // 5 秒后清除错误信息（给用户更多时间阅读）
-      setTimeout(() => setError(null), 5000);
-    } finally {
-      setDownloadingPlatform(null);
-      setDownloadingArch(null);
-    }
-  };
 
   const getPlatformIcon = (platform: PlatformType, className = "w-6 h-6") => {
     switch (platform) {
@@ -195,43 +115,21 @@ export default function DownloadPage() {
           </div>
         </div>
 
-        {/* 错误提示 */}
-        {error && (
-          <div className="w-full max-w-lg mb-8 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-            {error}
-          </div>
-        )}
-
         {/* 3. 底部横排图标 (白底适配版) */}
         <div className="w-full flex flex-wrap justify-center gap-8 md:gap-16 pb-10">
           {config.downloads.map((download) => {
-            // 创建唯一的按钮 key，对于 macOS，包含架构信息
-            const buttonKey = download.arch
-              ? `${download.platform}-${download.arch}`
-              : download.platform;
             const isCurrent = userPlatform === download.platform;
-            const isDownloading =
-              downloadingPlatform === download.platform &&
-              (download.arch ? downloadingArch === download.arch : !downloadingArch);
 
             // 根据语言动态获取平台标签
-            let platformLabel = t.download.platform[download.platform as keyof typeof t.download.platform] as string;
-
-            // 对于 macOS，在标签后面添加架构信息
-            if (download.arch && download.platform === 'macos') {
-              const archLabel =
-                download.arch === 'intel'
-                  ? 'Intel'
-                  : 'Apple Silicon';
-              platformLabel = `${platformLabel} (${archLabel})`;
-            }
+            const platformLabel = t.download.platform[download.platform as keyof typeof t.download.platform];
 
             return (
-              <button
-                key={buttonKey}
-                onClick={() => handleDownload(download.platform, download.arch)}
-                disabled={isDownloading}
-                className="group flex flex-col items-center gap-4 transition-all duration-300 hover:-translate-y-2 bg-none border-none cursor-pointer"
+              <a
+                key={download.platform}
+                href={download.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group flex flex-col items-center gap-4 transition-all duration-300 hover:-translate-y-2"
               >
                 {/* 圆形图标容器 */}
                 <div
@@ -245,33 +143,26 @@ export default function DownloadPage() {
 
                     // 当前设备：强调边框
                     isCurrent &&
-                      "ring-2 ring-blue-500 ring-offset-2 ring-offset-white border-blue-200 bg-blue-50 text-blue-600",
-
-                    // 下载中的状态
-                    isDownloading && "opacity-70"
+                      "ring-2 ring-blue-500 ring-offset-2 ring-offset-white border-blue-200 bg-blue-50 text-blue-600"
                   )}
                 >
-                  {isDownloading ? (
-                    <Loader2 className="w-8 h-8 md:w-9 md:h-9 animate-spin" />
-                  ) : (
-                    getPlatformIcon(
-                      download.platform,
-                      "w-8 h-8 md:w-9 md:h-9 transition-transform duration-300 group-hover:scale-110"
-                    )
+                  {getPlatformIcon(
+                    download.platform,
+                    "w-8 h-8 md:w-9 md:h-9 transition-transform duration-300 group-hover:scale-110"
                   )}
                 </div>
 
                 {/* 文字标签 */}
                 <span
                   className={cn(
-                    "text-sm font-medium tracking-wide transition-colors text-center",
+                    "text-sm font-medium tracking-wide transition-colors",
                     "text-slate-500 group-hover:text-blue-600",
                     isCurrent && "text-blue-600 font-semibold"
                   )}
                 >
-                  {isDownloading ? (language === "zh" ? "下载中..." : "Downloading...") : platformLabel}
+                  {platformLabel}
                 </span>
-              </button>
+              </a>
             );
           })}
         </div>

@@ -198,30 +198,21 @@ async function handleChinaDownload(
 }
 
 /**
- * 处理国际版下载 - 返回 JSON 响应（避免 CORS 跨域问题）
+ * 处理国际版下载 - 重定向到配置的 URL
  */
-function handleIntlDownload(
-  platform: string,
-  arch?: 'intel' | 'apple-silicon' | null
-): NextResponse {
+function handleIntlDownload(platform: string): NextResponse {
   // 从配置文件读取国际版 URL
-  const downloadUrl = getDownloadUrl(platform as any, false, arch || undefined);
+  const downloadUrl = getDownloadUrl(platform as any, false);
 
   if (!downloadUrl) {
     return NextResponse.json(
-      { error: `不支持的平台或未配置下载链接: ${platform}${arch ? ' (' + arch + ')' : ''}` },
+      { error: `不支持的平台或未配置下载链接: ${platform}` },
       { status: 400 }
     );
   }
 
-  console.log('[Download API] 返回国际版下载 URL:', downloadUrl);
+  console.log('[Download API] 重定向到国际版 URL:', downloadUrl);
 
-  // 返回 JSON 响应，前端用 window.open() 打开（避免 CORS 问题）
-  return NextResponse.json({
-    success: true,
-    platform,
-    arch: arch || undefined,
-    region: 'INTL',
-    downloadUrl,
-  });
+  // HTTP 302 重定向到配置的下载链接
+  return NextResponse.redirect(downloadUrl, { status: 302 });
 }

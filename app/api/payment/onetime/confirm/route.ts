@@ -692,27 +692,40 @@ export async function GET(request: NextRequest) {
         days =
           alipayPendingPayment?.metadata?.days || (amount > 300 ? 365 : 30); // CNY pricing
 
-        // 验证支付宝回调签名（可选，在开发环境下跳过）
-        if (process.env.NODE_ENV === "production") {
-          const allParams: Record<string, string> = {};
-          searchParams.forEach((value, key) => {
-            allParams[key] = value;
-          });
+        // ✅ 修复：验证支付宝回调签名
+        // 对于同步 return，也需要验证签名（当不在沙箱环境时）
+        const allParams: Record<string, string> = {};
+        searchParams.forEach((value, key) => {
+          allParams[key] = value;
+        });
 
-          const isValid = await alipayProvider.verifyCallback(allParams);
-          if (!isValid) {
-            logWarn("Alipay callback signature verification failed", {
-              operationId,
-              userId: user.id,
-              outTradeNo,
-              tradeNo,
-            });
-            return NextResponse.json(
-              { success: false, error: "Invalid payment signature" },
-              { status: 400 }
-            );
-          }
+        console.log("🔐 [ALIPAY VERIFICATION] Calling verifyCallback", {
+          operationId,
+          hasSign: !!allParams.sign,
+          hasSignType: !!allParams.sign_type,
+          paramsKeys: Object.keys(allParams),
+        });
+
+        const isValid = await alipayProvider.verifyCallback(allParams);
+        if (!isValid) {
+          logWarn("Alipay callback signature verification failed", {
+            operationId,
+            userId: user.id,
+            outTradeNo,
+            tradeNo,
+            allParams, // 记录所有参数便于调试
+          });
+          return NextResponse.json(
+            { success: false, error: "Invalid payment signature" },
+            { status: 400 }
+          );
         }
+
+        console.log("✅ [ALIPAY VERIFICATION] Signature verified successfully", {
+          operationId,
+          outTradeNo,
+          tradeNo,
+        });
       } catch (error) {
         logError("Alipay verification error", error as Error, {
           operationId,
