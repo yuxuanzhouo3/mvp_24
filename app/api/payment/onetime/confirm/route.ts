@@ -661,6 +661,7 @@ export async function GET(request: NextRequest) {
             const db = getDatabase();
             const paymentsCollection = db.collection("payments");
 
+            // 使用 transaction_id 查找（transaction_id 就是 out_trade_no）
             const result = await paymentsCollection
               .where({
                 transaction_id: actualOutTradeNo,
@@ -669,6 +670,15 @@ export async function GET(request: NextRequest) {
               .get();
 
             alipayPendingPayment = result.data?.[0] || null;
+            
+            // 日志记录查询结果
+            logInfo("CloudBase pending payment lookup", {
+              operationId,
+              userId: user.id,
+              outTradeNo: actualOutTradeNo,
+              found: !!alipayPendingPayment,
+              metadata: alipayPendingPayment?.metadata,
+            });
           } catch (error) {
             logError(
               "Error fetching CloudBase pending payment",
@@ -694,6 +704,17 @@ export async function GET(request: NextRequest) {
 
         days =
           alipayPendingPayment?.metadata?.days || (amount > 300 ? 365 : 30); // CNY pricing
+
+        logInfo("Alipay days calculation in sync return", {
+          operationId,
+          userId: user.id,
+          outTradeNo: actualOutTradeNo,
+          days,
+          fromMetadata: !!alipayPendingPayment?.metadata?.days,
+          calculatedFromAmount: !alipayPendingPayment?.metadata?.days,
+          amount,
+          paymentFound: !!alipayPendingPayment,
+        });
 
         // ✅ 关键修复：同步 return 中支付宝不提供签名参数
         // 支付宝的 return_url 同步返回只包含 out_trade_no 和 trade_no

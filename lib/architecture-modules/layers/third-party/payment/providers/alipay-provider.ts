@@ -166,6 +166,8 @@ export class AlipayProvider extends AbstractAlipayProvider {
 
       // pageExec返回的是HTML表单字符串，直接返回
       return {
+        success: true,
+        paymentId: orderData.bizContent.out_trade_no,
         outTradeNo: orderData.bizContent.out_trade_no,
         payUrl: result,
         qrCode: null,
