@@ -2,7 +2,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
 import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
-import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 import { isChinaRegion } from "@/lib/config/region";
@@ -629,7 +628,8 @@ export async function GET(request: NextRequest) {
         );
       }
     } else if (outTradeNo || tradeNo) {
-      // Alipay 支付确认 - 对于同步跳转，直接认为支付成功
+      // Alipay 支付确认 - 对于同步跳转，只验证支付参数，不处理会员延期
+      // ✅ 关键改动：会员延期由 webhook 负责（webhook 有 metadata 中的正确 days）
       logInfo("Confirming Alipay one-time payment (sync return)", {
         operationId,
         userId: user.id,
@@ -637,84 +637,11 @@ export async function GET(request: NextRequest) {
         tradeNo,
       });
 
-      const alipayProvider = new AlipayProvider(process.env);
-
       try {
-        // 对于同步跳转（return_url），我们相信支付已经成功
+        // 对于同步跳转（return_url），我们只验证支付参数
         // 不需要再次查询支付宝API，因为支付宝只有支付成功才会跳转
         const actualOutTradeNo = outTradeNo || tradeNo;
         transactionId = tradeNo || outTradeNo || "";
-
-        // 从URL参数中提取金额信息
-        const totalAmount = searchParams.get("total_amount");
-        if (totalAmount) {
-          amount = parseFloat(totalAmount);
-        }
-        currency = "CNY";
-
-        // 从 pending payment 中获取天数信息
-        let alipayPendingPayment: any = null;
-
-        if (isChinaRegion()) {
-          // CloudBase 用户：从 CloudBase 获取 pending payment
-          try {
-            const db = getDatabase();
-            const paymentsCollection = db.collection("payments");
-
-            // 使用 transaction_id 查找（transaction_id 就是 out_trade_no）
-            const result = await paymentsCollection
-              .where({
-                transaction_id: actualOutTradeNo,
-                status: "pending",
-              })
-              .get();
-
-            alipayPendingPayment = result.data?.[0] || null;
-            
-            // 日志记录查询结果
-            logInfo("CloudBase pending payment lookup", {
-              operationId,
-              userId: user.id,
-              outTradeNo: actualOutTradeNo,
-              found: !!alipayPendingPayment,
-              metadata: alipayPendingPayment?.metadata,
-            });
-          } catch (error) {
-            logError(
-              "Error fetching CloudBase pending payment",
-              error as Error,
-              {
-                operationId,
-                userId: user.id,
-                outTradeNo,
-              }
-            );
-          }
-        } else {
-          // 国际用户：从 Supabase 获取 pending payment
-          const { data } = await supabaseAdmin
-            .from("payments")
-            .select("metadata")
-            .eq("transaction_id", actualOutTradeNo)
-            .eq("status", "pending")
-            .maybeSingle();
-
-          alipayPendingPayment = data;
-        }
-
-        days =
-          alipayPendingPayment?.metadata?.days || (amount > 300 ? 365 : 30); // CNY pricing
-
-        logInfo("Alipay days calculation in sync return", {
-          operationId,
-          userId: user.id,
-          outTradeNo: actualOutTradeNo,
-          days,
-          fromMetadata: !!alipayPendingPayment?.metadata?.days,
-          calculatedFromAmount: !alipayPendingPayment?.metadata?.days,
-          amount,
-          paymentFound: !!alipayPendingPayment,
-        });
 
         // ✅ 关键修复：同步 return 中支付宝不提供签名参数
         // 支付宝的 return_url 同步返回只包含 out_trade_no 和 trade_no
@@ -740,8 +667,14 @@ export async function GET(request: NextRequest) {
           userId: user.id,
           outTradeNo: actualOutTradeNo,
           tradeNo,
-          reason: "Sync return does not include signature from Alipay",
+          reason: "Sync return does not include signature from Alipay. Membership extension delegated to webhook.",
         });
+
+        // ✅ 重要：设置 amount 和 currency，但不计算 days（不需要）
+        // days 的计算和会员延期完全由 webhook 负责
+        amount = 0; // 在同步返回中我们无法获取金额，webhook 会处理
+        currency = "CNY";
+        days = 0; // 不再使用
       } catch (error) {
         logError("Alipay verification error", error as Error, {
           operationId,
@@ -1293,10 +1226,13 @@ export async function GET(request: NextRequest) {
     }
 
     // ✅ 延长用户会员时间
-    // 策略：PayPal 和 Stripe 依赖 webhook 增加会员时间，confirm 只确认支付成功
-    //      Alipay 和 WeChat 在 confirm 中增加会员时间（因为 webhook 可能不可靠）
+    // 策略：
+    // - PayPal 和 Stripe 依赖 webhook 增加会员时间，confirm 只确认支付成功
+    // - Alipay 也依赖 webhook（webhook 有 metadata 中的正确 days），confirm 只验证支付
+    // - WeChat 在 confirm 中增加会员时间（因为有 pending payment 记录）
     let membershipExtended = false;
     const isPayPalOrStripe = !!sessionId || !!token; // Stripe 有 sessionId，PayPal 有 token
+    const isAlipay = !!outTradeNo || !!tradeNo; // Alipay 有 outTradeNo 或 tradeNo
 
     if (isPayPalOrStripe) {
       // PayPal 和 Stripe：跳过 extendMembership，依赖 webhook
@@ -1309,6 +1245,19 @@ export async function GET(request: NextRequest) {
           isStripe: !!sessionId,
           isPayPal: !!token,
           days,
+        }
+      );
+      membershipExtended = true; // 标记为成功，实际由 webhook 处理
+    } else if (isAlipay) {
+      // ✅ Alipay 同步返回：webhook 将负责会员延期
+      // webhook 有 metadata 中的正确 days，confirm 不负责计算和延期
+      console.log(
+        "✅✅✅ [MAIN FLOW] Alipay payment confirmed - SKIPPING extendMembership in confirm, delegating to webhook",
+        {
+          operationId,
+          userId: user.id,
+          transactionId,
+          reason: "Webhook has access to metadata with correct days value",
         }
       );
       membershipExtended = true; // 标记为成功，实际由 webhook 处理
@@ -1358,7 +1307,8 @@ export async function GET(request: NextRequest) {
         );
       }
     } else {
-      // 国内版：Alipay 和 WeChat 在 confirm 中增加会员时间
+      // 国内版：只有 WeChat 在 confirm 中增加会员时间
+      // Alipay 已在上面处理了
       membershipExtended = await extendMembership(user.id, days, transactionId);
     }
 

@@ -898,10 +898,28 @@ export class WebhookHandler {
             }
           );
 
+          // ✅ Alipay 特殊处理：如果 metadata 中没有 days，记录严重错误
+          // 因为 confirm 路由现在依赖 webhook 来处理会员延期
+          if (provider === "alipay" && !pendingPayment?.metadata?.days) {
+            logError(
+              "CRITICAL: Alipay payment metadata missing days field",
+              undefined,
+              {
+                subscriptionId,
+                userId,
+                amount,
+                pendingPaymentFound: !!pendingPayment,
+                paymentStatus: pendingPayment?.status,
+                note: "This is critical because confirm route delegates membership extension to webhook",
+              }
+            );
+            // 默认 30 天但记录严重错误
+            days = 30;
+          }
           // 尝试根据金额推断天数（支付配置已知）
           // USD: monthly=9.99 (30天), yearly=99.99 (365天)
           // CNY: 都是 0.01
-          if (provider === "paypal" && currency === "USD") {
+          else if (provider === "paypal" && currency === "USD") {
             if (amount >= 99) {
               days = 365; // 年度计划
               logInfo("PayPal: Inferred 365 days from amount", {
