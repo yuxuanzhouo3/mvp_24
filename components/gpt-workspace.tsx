@@ -479,13 +479,16 @@ export function GPTWorkspace({
         model: selectedGPTs[0]?.model || "gpt-3.5-turbo",
       };
 
-      // 如果是多AI模式，添加配置参数
-      if (isMultiAI) {
-        sessionData.isMultiAI = true;
-        sessionData.selectedAgentIds = selectedGPTs.map(gpt => gpt.id);
-        sessionData.collaborationMode = "parallel";
-        console.log("[GPTWorkspace] Creating multi-AI session with agents:", sessionData.selectedAgentIds);
-      }
+      // ✅ 改进：无论单AI还是多AI，都传递配置参数
+      // 这样后端能统一处理agentId验证
+      sessionData.isMultiAI = isMultiAI;
+      sessionData.selectedAgentIds = selectedGPTs.map(gpt => gpt.id);
+      sessionData.collaborationMode = isMultiAI ? "parallel" : "single";
+
+      console.log(
+        `[GPTWorkspace] Creating ${isMultiAI ? "multi-AI" : "single-AI"} session with agents:`,
+        sessionData.selectedAgentIds
+      );
 
       const response = await fetch("/api/chat/sessions", {
         method: "POST",

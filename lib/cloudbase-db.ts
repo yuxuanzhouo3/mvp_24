@@ -74,7 +74,8 @@ export async function createGptSession(
       updated_at: now,
     };
 
-    // 添加多AI配置
+    // ✅ 改进：总是添加multi_ai_config（即使是单AI会话）
+    // 这样前端统一传递agentId时后端也能识别
     if (multiAiConfig) {
       sessionData.multi_ai_config = multiAiConfig;
     }

@@ -183,15 +183,15 @@ export async function POST(req: NextRequest) {
     }
 
     // 构建multi_ai_config
-    const multiAiConfig = isMultiAI
-      ? {
-          isMultiAI: true,
-          selectedAgentIds,
-          collaborationMode,
-          lockedAt: new Date().toISOString(),
-          lockedBy: userId,
-        }
-      : null;
+    // ✅ 无论是单AI还是多AI，都创建config对象
+    // 这样前端统一传递agentId时后端也能识别
+    const multiAiConfig = {
+      isMultiAI,
+      selectedAgentIds: isMultiAI ? selectedAgentIds : [selectedAgentIds?.[0] || ""],
+      collaborationMode: isMultiAI ? collaborationMode : "single",
+      lockedAt: new Date().toISOString(),
+      lockedBy: userId,
+    };
 
     // 根据区域选择数据库
     if (isChinaRegion()) {
@@ -226,10 +226,9 @@ export async function POST(req: NextRequest) {
         model,
       };
 
-      // 添加多AI配置
-      if (multiAiConfig) {
-        sessionData.multi_ai_config = multiAiConfig;
-      }
+      // ✅ 改进：总是添加多AI配置（即使是单AI会话）
+      // 这样前端统一传递agentId时后端也能识别
+      sessionData.multi_ai_config = multiAiConfig;
 
       const { data: session, error } = await supabaseAdmin
         .from("gpt_sessions")

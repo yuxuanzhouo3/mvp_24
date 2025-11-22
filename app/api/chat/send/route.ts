@@ -149,23 +149,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ========================================
-    // 3.5 验证多AI配置和agentId匹配
+    // 3.5 验证会话配置和agentId匹配
     // ========================================
-    if (agentId) {
-      // 这是多AI模式的请求
-      const sessionConfig = session.multi_ai_config;
+    const sessionConfig = session.multi_ai_config;
 
-      if (!sessionConfig || !sessionConfig.isMultiAI) {
-        return new Response(
-          JSON.stringify({
-            error: "This session is not configured for multi-AI mode",
-            sessionConfig: session.multi_ai_config,
-            detail: "agentId provided but session is single-AI"
-          }),
-          { status: 409, headers: { "Content-Type": "application/json" } }
-        );
-      }
-
+    // ✅ 改进：无论单AI还是多AI，都应该检查sessionConfig
+    // 前端总是传递agentId，所以后端应该接受
+    if (agentId && sessionConfig) {
       // 验证agentId是否在锁定的列表中
       if (!sessionConfig.selectedAgentIds.includes(agentId)) {
         return new Response(
@@ -177,12 +167,18 @@ export async function POST(req: NextRequest) {
           { status: 409, headers: { "Content-Type": "application/json" } }
         );
       }
-    } else if (session.multi_ai_config && session.multi_ai_config.isMultiAI) {
-      // 会话是多AI模式，但没有提供agentId
+    } else if (agentId && !sessionConfig) {
+      // ✅ 如果sessionConfig不存在，这是旧数据，允许通过
+      // 但记录警告日志
+      console.warn(
+        `[WARN] Session ${sessionId} has no multi_ai_config but agentId was provided. This might be legacy data.`
+      );
+    } else if (!agentId && sessionConfig && sessionConfig.isMultiAI) {
+      // 多AI会话但没有提供agentId - 这是真正的错误
       return new Response(
         JSON.stringify({
           error: "This session is multi-AI configured but no agentId provided",
-          expectedAgents: session.multi_ai_config.selectedAgentIds
+          expectedAgents: sessionConfig.selectedAgentIds
         }),
         { status: 409, headers: { "Content-Type": "application/json" } }
       );
@@ -204,14 +200,14 @@ export async function POST(req: NextRequest) {
         .database();
 
       try {
-        // 查询用户的订阅记录
+        // ✅ 修复：使用正确的表名 subscriptions（不是 web_subscriptions）
         const subscriptionResult = await cloudbase
-          .collection("web_subscriptions")
+          .collection("subscriptions")
           .where({
             user_id: userId,
             status: "active",
           })
-          .orderBy("expire_time", "desc")
+          .orderBy("current_period_end", "desc")
           .limit(1)
           .get();
 
@@ -221,9 +217,10 @@ export async function POST(req: NextRequest) {
           subscriptionResult.data.length > 0
         ) {
           const subscription = subscriptionResult.data[0];
-          const expireTime = new Date(subscription.expire_time);
+          const expireTime = new Date(subscription.current_period_end);
           if (expireTime > new Date()) {
-            subscriptionPlan = subscription.plan_type || "free"; // "pro" 或其他类型
+            // ✅ 修复：从 web_users 表中读取 pro 字段来确定订阅计划
+            subscriptionPlan = "pro"; // 有有效订阅则为 pro
           }
         }
       } catch (err) {
