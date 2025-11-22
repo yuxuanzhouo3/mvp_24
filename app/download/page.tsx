@@ -121,12 +121,33 @@ export default function DownloadPage() {
             const isCurrent = userPlatform === download.platform;
 
             // 根据语言动态获取平台标签
-            const platformLabel = t.download.platform[download.platform as keyof typeof t.download.platform];
+            const platformLabel =
+              t.download.platform[
+                download.platform as keyof typeof t.download.platform
+              ];
+
+            // ✅ 修复：为国内版本生成 API 调用 URL，国际版本使用直接 URL
+            const getDownloadLink = () => {
+              if (isChina && download.fileID) {
+                // 国内版：调用 /api/downloads API
+                const params = new URLSearchParams({
+                  platform: download.platform,
+                  region: "CN",
+                });
+                // 如果是 macOS，添加 arch 参数
+                if (download.platform === "macos" && download.arch) {
+                  params.append("arch", download.arch);
+                }
+                return `/api/downloads?${params.toString()}`;
+              }
+              // 国际版：直接使用 URL
+              return download.url || "#";
+            };
 
             return (
               <a
-                key={download.platform}
-                href={download.url}
+                key={`${download.platform}-${download.arch || "default"}`}
+                href={getDownloadLink()}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group flex flex-col items-center gap-4 transition-all duration-300 hover:-translate-y-2"
