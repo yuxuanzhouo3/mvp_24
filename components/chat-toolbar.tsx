@@ -32,8 +32,9 @@ export function ChatToolbar({
 }: ChatToolbarProps) {
   const [showAISelector, setShowAISelector] = useState(false);
 
-  // 会话创建且为多AI时，禁用AI选择
-  const isSessionLocked = sessionId && sessionConfig?.isMultiAI;
+  // ✅ 改进：会话创建且有 multi_ai_config 时，禁用AI选择
+  // 无论是单AI还是多AI，都应该被锁定
+  const isSessionLocked = sessionId && sessionConfig;
 
   // 显示当前选中的AI
   const getAIDisplayText = () => {

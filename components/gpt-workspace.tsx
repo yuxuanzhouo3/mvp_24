@@ -218,16 +218,6 @@ export function GPTWorkspace({
     setIsProcessing(true);
     setError(null);
 
-    // 初始化AI响应状态
-    const initialResponses: AIResponse[] = selectedGPTs.map((gpt) => ({
-      agentId: gpt.id,
-      agentName: gpt.name,
-      content: "",
-      status: "pending",
-      timestamp: new Date(),
-    }));
-    setAIResponses(initialResponses);
-
     try {
       // 获取认证 Token（支持 CloudBase 和 Supabase）
       const { token: authToken, error: authError } = await getClientAuthToken();
@@ -247,7 +237,34 @@ export function GPTWorkspace({
         setCurrentSessionId(sessId);
       }
 
-      // 并行模式：多个AI同时处理
+      // ✅ 改进：使用 sessionConfig 中锁定的 AI，而不是当前的 selectedGPTs
+      // 这样确保一旦创建会话，就不能再改 AI
+      const lockedAgentIds = sessionConfig?.selectedAgentIds ||
+                             selectedGPTs.map((gpt: AIAgent) => gpt.id);
+
+      const lockedAIs = lockedAgentIds
+        .map((agentId: string) => availableAIs.find((ai: AIAgent) => ai.id === agentId))
+        .filter((ai: AIAgent | undefined): ai is AIAgent => ai !== undefined);
+
+      if (lockedAIs.length === 0) {
+        toast.error("No AI selected", {
+          description: "Please select at least one AI",
+        });
+        setIsProcessing(false);
+        return;
+      }
+
+      // 初始化AI响应状态（使用锁定的AI）
+      const initialResponses: AIResponse[] = lockedAIs.map((gpt: AIAgent) => ({
+        agentId: gpt.id,
+        agentName: gpt.name,
+        content: "",
+        status: "pending",
+        timestamp: new Date(),
+      }));
+      setAIResponses(initialResponses);
+
+      // 并行模式：多个AI同时处理（使用锁定的AI）
       const finalResponses = await handleParallelMode(
         sessId,
         authToken,
@@ -289,7 +306,8 @@ export function GPTWorkspace({
                 agentId: r.agentId,
                 agentName: r.agentName,
                 content: r.content,
-                model: selectedGPTs.find(g => g.id === r.agentId)?.model || "",
+                // ✅ 使用 lockedAIs 中的 model，而不是 selectedGPTs
+                model: availableAIs.find(ai => ai.id === r.agentId)?.model || "",
                 status: r.status,
                 timestamp: r.timestamp,
               })),
@@ -321,7 +339,22 @@ export function GPTWorkspace({
     userMessage: string,
     responses: AIResponse[]
   ): Promise<AIResponse[]> => {
-    const promises = selectedGPTs.map(async (gpt) => {
+    // ✅ 改进：从 responses 中提取 agentId，确保使用锁定的 AI
+    // 而不是依赖外部的 selectedGPTs（可能被用户改变）
+    const lockedAgentIds = responses.map(r => r.agentId);
+    const aisByAgentId = new Map(availableAIs.map(ai => [ai.id, ai]));
+
+    const promises = lockedAgentIds.map(async (agentId) => {
+      const gpt = aisByAgentId.get(agentId);
+      if (!gpt) {
+        return {
+          agentId,
+          agentName: agentId,
+          content: "Error: AI not found",
+          status: "error" as const,
+          timestamp: new Date(),
+        } as AIResponse;
+      }
       try {
         // 更新状态为处理中
         setAIResponses((prev) =>
