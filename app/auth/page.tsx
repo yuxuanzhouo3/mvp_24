@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { getAuthClient } from "@/lib/auth/client";
 import { Eye, EyeOff, Mail, Lock, MessageSquare, Home } from "lucide-react";
 import { RegionType } from "@/lib/architecture-modules/core/types";
@@ -56,6 +57,9 @@ function AuthPageContent() {
   const [signupOtp, setSignupOtp] = useState("");
   const [signupOtpSent, setSignupOtpSent] = useState(false);
   const [signupStep, setSignupStep] = useState<"form" | "verify">("form");
+
+  // 隐私政策同意状态
+  const [agreeToPrivacy, setAgreeToPrivacy] = useState(false);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -114,6 +118,13 @@ function AuthPageContent() {
     setLoading(true);
     setError("");
 
+    // 验证隐私政策同意（中国版本登录也必须同意）
+    if (userRegion === RegionType.CHINA && !agreeToPrivacy) {
+      setError("请阅读并同意隐私政策");
+      setLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await authClient.signInWithPassword({
         email,
@@ -154,6 +165,13 @@ function AuthPageContent() {
 
     setLoading(true);
     setError("");
+
+    // 验证隐私政策同意（中国版本必须同意）
+    if (userRegion === RegionType.CHINA && !agreeToPrivacy) {
+      setError("请阅读并同意隐私政策");
+      setLoading(false);
+      return;
+    }
 
     // 验证密码
     if (password !== confirmPassword) {
@@ -210,6 +228,7 @@ function AuthPageContent() {
         setConfirmPassword("");
         setEmail("");
         setLoginMethod("password");
+        setAgreeToPrivacy(false);
         setLoading(false);
 
         // 重置到登录页面
@@ -251,6 +270,7 @@ function AuthPageContent() {
           setSignupOtp("");
           setSignupOtpSent(false);
           setLoginMethod("password");
+          setAgreeToPrivacy(false);
           setLoading(false);
 
           // 5秒后返回登录页面
@@ -283,6 +303,13 @@ function AuthPageContent() {
 
     setLoading(true);
     setError("");
+
+    // 验证隐私政策同意（中国版本登录也必须同意）
+    if (userRegion === RegionType.CHINA && !agreeToPrivacy) {
+      setError("请阅读并同意隐私政策");
+      setLoading(false);
+      return;
+    }
 
     try {
       if (!otpSent) {
@@ -802,6 +829,42 @@ function AuthPageContent() {
         </div>
       )}
 
+      {/* 隐私政策同意 - 中国版本强制同意 */}
+      {userRegion === RegionType.CHINA && (
+        <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+          <Checkbox
+            id="privacy-agree-signin"
+            checked={agreeToPrivacy}
+            onCheckedChange={(checked) =>
+              setAgreeToPrivacy(checked as boolean)
+            }
+            className="mt-1"
+          />
+          <label
+            htmlFor="privacy-agree-signin"
+            className="text-sm text-gray-700 cursor-pointer flex-1"
+          >
+            我已阅读并同意{" "}
+            <button
+              type="button"
+              className="text-blue-600 hover:underline"
+              onClick={() => router.push(buildUrl("/legal"))}
+            >
+              《隐私政策》
+            </button>
+            {" "}和{" "}
+            <button
+              type="button"
+              className="text-blue-600 hover:underline"
+              onClick={() => router.push(buildUrl("/legal"))}
+            >
+              《服务条款》
+            </button>
+            <span className="text-red-600 ml-1">*</span>
+          </label>
+        </div>
+      )}
+
       <Button type="submit" className="w-full" disabled={loading}>
         {buttonText}
       </Button>
@@ -818,6 +881,16 @@ function AuthPageContent() {
         onClick={() => router.push(buildUrl("/"))}
       >
         <Home className="h-4 w-4 mr-2" /> {t.auth.backToHome}
+      </Button>
+
+      {/* 隐私政策链接 */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className={`absolute top-4 ${debugRegion ? "right-48" : "right-4"}`}
+        onClick={() => router.push(buildUrl("/legal"))}
+      >
+        {language === "zh" ? "隐私政策" : "Privacy Policy"}
       </Button>
 
       {/* Debug信息显示 */}
@@ -1008,9 +1081,58 @@ function AuthPageContent() {
                   </div>
                 </div>
 
+                {/* 隐私政策同意 - 中国版本强制同意，国际版本可选 */}
+                <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                  <Checkbox
+                    id="privacy-agree"
+                    checked={agreeToPrivacy}
+                    onCheckedChange={(checked) =>
+                      setAgreeToPrivacy(checked as boolean)
+                    }
+                    disabled={signupStep === "verify"}
+                    className="mt-1"
+                  />
+                  <label
+                    htmlFor="privacy-agree"
+                    className="text-sm text-gray-700 cursor-pointer flex-1"
+                  >
+                    {userRegion === RegionType.CHINA ? (
+                      <>
+                        我已阅读并同意{" "}
+                        <button
+                          type="button"
+                          className="text-blue-600 hover:underline"
+                          onClick={() => router.push(buildUrl("/legal"))}
+                        >
+                          《隐私政策》
+                        </button>
+                        {" "}和{" "}
+                        <button
+                          type="button"
+                          className="text-blue-600 hover:underline"
+                          onClick={() => router.push(buildUrl("/legal"))}
+                        >
+                          《服务条款》
+                        </button>
+                        <span className="text-red-600 ml-1">*</span>
+                      </>
+                    ) : (
+                      <>
+                        I agree to the{" "}
+                        <button
+                          type="button"
+                          className="text-blue-600 hover:underline"
+                          onClick={() => router.push(buildUrl("/legal"))}
+                        >
+                          Privacy Policy
+                        </button>
+                      </>
+                    )}
+                  </label>
+                </div>
 
                 <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? "注册中..." : t.auth.register}
+                  {loading ? (userRegion === RegionType.CHINA ? "注册中..." : "Signing up...") : (userRegion === RegionType.CHINA ? t.auth.register : "Sign Up")}
                 </Button>
               </form>
 

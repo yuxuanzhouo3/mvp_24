@@ -8,6 +8,7 @@ import {
   ReactNode,
 } from "react";
 import type { Language } from "@/lib/i18n";
+import { isChinaDeployment } from "@/lib/config/deployment.config";
 
 interface LanguageContextType {
   language: Language;
@@ -28,8 +29,14 @@ const STORAGE_KEY = "preferred-language";
  * 功能：
  * 1. 管理全局语言状态
  * 2. 持久化到 localStorage
- * 3. 自动检测用户语言偏好（地理位置、浏览器语言）
- * 4. 提供语言切换功能
+ * 3. 根据部署区域自动设置默认语言（中国区域=中文，国际区域=英文）
+ * 4. 允许用户手动切换语言偏好
+ * 5. 提供语言切换功能
+ *
+ * 优先级：
+ * 1. localStorage 中的用户选择（最高优先级）
+ * 2. 部署区域设置（DEPLOYMENT_REGION）
+ * 3. 浏览器语言（备用方案）
  */
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [language, setLanguageState] = useState<Language>("zh");
@@ -45,40 +52,34 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     console.log("Saved language from localStorage:", saved);
 
     if (saved && (saved === "zh" || saved === "en")) {
-      console.log("Using saved language:", saved);
+      console.log("Using saved language from localStorage:", saved);
       setLanguageState(saved);
       return;
     }
 
-    // 优先级2: 从地理位置推断（middleware 设置的 header 或 cookie）
-    const regionCookie = document.cookie
-      .split("; ")
-      .find((row) => row.startsWith("X-User-Region="))
-      ?.split("=")[1];
+    // 优先级2: 根据部署区域推断默认语言
+    // 使用 deployment.config.ts 中的 DEPLOYMENT_REGION 配置
+    const isChinaRegion = isChinaDeployment();
+    console.log("Deployment region - is China:", isChinaRegion);
 
-    // 也检查 document.referrer 中的区域信息（从middleware传递）
-    const regionFromMeta = document
-      .querySelector('meta[name="x-user-region"]')
-      ?.getAttribute("content");
-
-    const userRegion = regionCookie || regionFromMeta;
-
-    if (userRegion === "CHINA") {
+    if (isChinaRegion) {
+      console.log("Setting language to zh (deployment region: CN)");
       setLanguageState("zh");
       localStorage.setItem(STORAGE_KEY, "zh");
       return;
     }
 
-    // 优先级3: 从浏览器语言检测
+    // 国际区域：首先检查浏览器语言
     const browserLang = navigator.language.toLowerCase();
     console.log("Browser language:", browserLang);
 
     if (browserLang.startsWith("zh")) {
-      console.log("Setting language to zh (browser)");
-      setLanguageState("zh");
-      localStorage.setItem(STORAGE_KEY, "zh");
+      // 浏览器是中文，但部署在国际区域，使用英文
+      console.log("Browser is zh, but deployment is INTL, using en");
+      setLanguageState("en");
+      localStorage.setItem(STORAGE_KEY, "en");
     } else {
-      console.log("Setting language to en (browser)");
+      console.log("Setting language to en (browser/deployment region: INTL)");
       setLanguageState("en");
       localStorage.setItem(STORAGE_KEY, "en");
     }
