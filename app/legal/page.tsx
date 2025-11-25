@@ -544,103 +544,185 @@ export default function LegalPage() {
                 </div>
               ) : (
                 <div className="prose prose-sm max-w-none space-y-6">
-                  {/* Information We Collect */}
+                  {/* 信息收集 */}
                   <section>
                     <h2 className="text-2xl font-bold mt-6 mb-4">
-                      Information We Collect
+                      1. 信息收集
+                    </h2>
+                    <p className="text-gray-700">我们收集以下类型的信息：</p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>
+                        <strong>账户信息：</strong>
+                        邮箱、用户名、密码（加密存储）、微信昵称、头像、OpenID
+                      </li>
+                      <li>
+                        <strong>使用数据：</strong>
+                        对话记录、收藏内容、访问记录、搜索历史
+                      </li>
+                      <li>
+                        <strong>设备信息：</strong>
+                        设备型号、操作系统版本、浏览器类型、IP地址
+                      </li>
+                      <li>
+                        <strong>位置信息：</strong>
+                        用于推荐本地化内容（可选，用户可拒绝）
+                      </li>
+                    </ul>
+                  </section>
+
+                  {/* 信息使用 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      2. 信息使用
+                    </h2>
+                    <p className="text-gray-700">我们使用收集的信息用于：</p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>提供和改善服务</li>
+                      <li>个性化用户体验</li>
+                      <li>技术支持和客服服务</li>
+                      <li>安全监控和欺诈防护</li>
+                    </ul>
+                  </section>
+
+                  {/* 信息保护 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      3. 信息保护
                     </h2>
                     <p className="text-gray-700">
-                      We collect only information necessary to provide chat
-                      services:
+                      我们采用行业标准的安全措施保护您的信息：
+                    </p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>数据加密传输和存储</li>
+                      <li>访问控制和身份验证</li>
+                      <li>定期安全审计</li>
+                      <li>员工保密培训</li>
+                    </ul>
+                  </section>
+
+                  {/* 信息共享 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      4. 信息共享
+                    </h2>
+                    <p className="text-gray-700">
+                      我们不会出售、出租或交易您的个人信息。仅在以下情况下共享：
+                    </p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>获得您的明确同意</li>
+                      <li>法律要求或法院命令</li>
+                      <li>保护我们的权利和财产</li>
+                      <li>与可信第三方服务提供商（如支付处理）</li>
+                    </ul>
+                  </section>
+
+                  {/* 数据保留 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      5. 数据保留
+                    </h2>
+                    <p className="text-gray-700">
+                      我们根据以下原则保留您的数据：
                     </p>
                     <ul className="list-disc pl-6 space-y-2 text-gray-700">
                       <li>
-                        Login credentials (WeChat nickname, avatar, OpenID, or
-                        Email)
+                        <strong>账户信息：</strong>账户存在期间
                       </li>
                       <li>
-                        Chat content (used for AI responses; can be deleted at
-                        any time)
+                        <strong>使用数据：</strong>最多 3 年
                       </li>
-                      <li>Basic device information (model, OS version)</li>
                       <li>
-                        Payment records (processed via WeChat / Alipay / Stripe
-                        / PayPal)
+                        <strong>法律要求：</strong>根据相关法律要求（如税务记录
+                        7 年）
+                      </li>
+                    </ul>
+                  </section>
+
+                  {/* 您的权利 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      6. 您的权利
+                    </h2>
+                    <p className="text-gray-700">
+                      根据《个人信息保护法》，您拥有以下权利：
+                    </p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>
+                        <strong>访问权：</strong>查看和访问您的个人信息
+                      </li>
+                      <li>
+                        <strong>更正权：</strong>更正不准确的信息
+                      </li>
+                      <li>
+                        <strong>删除权：</strong>删除您的账户和数据
+                      </li>
+                      <li>
+                        <strong>限制权：</strong>限制信息处理
+                      </li>
+                      <li>
+                        <strong>携带权：</strong>
+                        获取您的数据副本并转移至其他服务
                       </li>
                     </ul>
                     <p className="text-gray-700 mt-4">
-                      We do not collect advertising, analytics, or tracking
-                      data.
+                      如需行使这些权利，请发送邮件至
+                      mornscience@gmail.com，我们将在 30
+                      个工作日内处理您的请求。
                     </p>
                   </section>
 
-                  {/* How We Use Data */}
+                  {/* Cookie 和跟踪技术 */}
                   <section>
                     <h2 className="text-2xl font-bold mt-6 mb-4">
-                      How We Use Data
-                    </h2>
-                    <p className="text-gray-700">Data is used to:</p>
-                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
-                      <li>Provide AI chat services</li>
-                      <li>Verify and manage payment status</li>
-                      <li>Deliver basic customer support</li>
-                      <li>Ensure service security</li>
-                    </ul>
-                    <p className="text-gray-700 mt-4">
-                      We do not sell or share user data with third parties.
-                    </p>
-                  </section>
-
-                  {/* Data Storage and Security */}
-                  <section>
-                    <h2 className="text-2xl font-bold mt-6 mb-4">
-                      Data Storage and Security
-                    </h2>
-                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
-                      <li>
-                        <strong>{isChina ? "China" : "International"}:</strong>{" "}
-                        {isChina ? "CloudBase" : "Supabase"}
-                      </li>
-                    </ul>
-                    <p className="text-gray-700 mt-4">
-                      All data is encrypted during transmission and at rest.
-                    </p>
-                  </section>
-
-                  {/* User Rights */}
-                  <section>
-                    <h2 className="text-2xl font-bold mt-6 mb-4">
-                      User Rights
-                    </h2>
-                    <p className="text-gray-700">Users may at any time:</p>
-                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
-                      <li>Delete individual chats</li>
-                      <li>Delete their account</li>
-                      <li>
-                        Request complete deletion of personal data by emailing:
-                        mornscience@gmail.com
-                      </li>
-                    </ul>
-                  </section>
-
-                  {/* Children */}
-                  <section>
-                    <h2 className="text-2xl font-bold mt-6 mb-4">Children</h2>
-                    <p className="text-gray-700">
-                      Services are not intended for children under 13. Parents
-                      or guardians should ensure compliance.
-                    </p>
-                  </section>
-
-                  {/* Policy Updates */}
-                  <section>
-                    <h2 className="text-2xl font-bold mt-6 mb-4">
-                      Policy Updates
+                      7. Cookie 和跟踪技术
                     </h2>
                     <p className="text-gray-700">
-                      We may update this policy; users will be informed of
-                      significant changes.
+                      我们使用 Cookie 和类似技术来：
                     </p>
+                    <ul className="list-disc pl-6 space-y-2 text-gray-700">
+                      <li>记住您的偏好设置</li>
+                      <li>分析使用模式</li>
+                      <li>改善用户体验</li>
+                    </ul>
+                    <p className="text-gray-700 mt-4">
+                      您可以通过浏览器设置管理 Cookie 偏好。
+                    </p>
+                  </section>
+
+                  {/* 儿童隐私 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      8. 儿童隐私
+                    </h2>
+                    <p className="text-gray-700">
+                      我们的服务不针对 14
+                      岁以下的儿童。如果我们发现收集了儿童的个人信息，将立即删除。
+                    </p>
+                  </section>
+
+                  {/* 隐私政策更新 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      9. 隐私政策更新
+                    </h2>
+                    <p className="text-gray-700">
+                      我们可能不时更新本隐私政策。重大变更将通过应用内通知告知您。
+                    </p>
+                  </section>
+
+                  {/* 联系我们 */}
+                  <section>
+                    <h2 className="text-2xl font-bold mt-6 mb-4">
+                      10. 联系我们
+                    </h2>
+                    <p className="text-gray-700">
+                      如果您对本隐私政策有任何疑问，请发送邮件至：
+                    </p>
+                    <div className="bg-gray-100 p-6 rounded-lg mt-4">
+                      <p className="text-gray-700">
+                        <strong>邮箱：</strong>mornscience@gmail.com
+                      </p>
+                    </div>
                   </section>
                 </div>
               )}
