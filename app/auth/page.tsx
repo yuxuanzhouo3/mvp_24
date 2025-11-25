@@ -296,7 +296,6 @@ function AuthPageContent() {
     }
   };
 
-
   const handleOtpSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loading) return;
@@ -835,9 +834,7 @@ function AuthPageContent() {
           <Checkbox
             id="privacy-agree-signin"
             checked={agreeToPrivacy}
-            onCheckedChange={(checked) =>
-              setAgreeToPrivacy(checked as boolean)
-            }
+            onCheckedChange={(checked) => setAgreeToPrivacy(checked as boolean)}
             className="mt-1"
           />
           <label
@@ -848,15 +845,15 @@ function AuthPageContent() {
             <button
               type="button"
               className="text-blue-600 hover:underline"
-              onClick={() => router.push(buildUrl("/legal"))}
+              onClick={() => router.push(buildUrl("/privacy"))}
             >
               《隐私政策》
-            </button>
-            {" "}和{" "}
+            </button>{" "}
+            和{" "}
             <button
               type="button"
               className="text-blue-600 hover:underline"
-              onClick={() => router.push(buildUrl("/legal"))}
+              onClick={() => router.push(buildUrl("/privacy"))}
             >
               《服务条款》
             </button>
@@ -888,7 +885,7 @@ function AuthPageContent() {
         variant="ghost"
         size="sm"
         className={`absolute top-4 ${debugRegion ? "right-48" : "right-4"}`}
-        onClick={() => router.push(buildUrl("/legal"))}
+        onClick={() => router.push(buildUrl("/privacy"))}
       >
         {language === "zh" ? "隐私政策" : "Privacy Policy"}
       </Button>
@@ -1102,15 +1099,15 @@ function AuthPageContent() {
                         <button
                           type="button"
                           className="text-blue-600 hover:underline"
-                          onClick={() => router.push(buildUrl("/legal"))}
+                          onClick={() => router.push(buildUrl("/privacy"))}
                         >
                           《隐私政策》
-                        </button>
-                        {" "}和{" "}
+                        </button>{" "}
+                        和{" "}
                         <button
                           type="button"
                           className="text-blue-600 hover:underline"
-                          onClick={() => router.push(buildUrl("/legal"))}
+                          onClick={() => router.push(buildUrl("/privacy"))}
                         >
                           《服务条款》
                         </button>
@@ -1122,7 +1119,7 @@ function AuthPageContent() {
                         <button
                           type="button"
                           className="text-blue-600 hover:underline"
-                          onClick={() => router.push(buildUrl("/legal"))}
+                          onClick={() => router.push(buildUrl("/privacy"))}
                         >
                           Privacy Policy
                         </button>
@@ -1132,7 +1129,13 @@ function AuthPageContent() {
                 </div>
 
                 <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? (userRegion === RegionType.CHINA ? "注册中..." : "Signing up...") : (userRegion === RegionType.CHINA ? t.auth.register : "Sign Up")}
+                  {loading
+                    ? userRegion === RegionType.CHINA
+                      ? "注册中..."
+                      : "Signing up..."
+                    : userRegion === RegionType.CHINA
+                    ? t.auth.register
+                    : "Sign Up"}
                 </Button>
               </form>
 
