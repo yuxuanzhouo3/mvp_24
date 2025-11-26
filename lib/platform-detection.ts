@@ -3,7 +3,7 @@
  * 用于识别应用是在浏览器还是套壳 App 中运行
  */
 
-export type PlatformType = 'web' | 'ios-app' | 'android-app' | 'desktop-app' | 'unknown';
+export type PlatformType = 'web' | 'ios-app' | 'android-app' | 'harmonyos-app' | 'desktop-app' | 'unknown';
 
 export interface PlatformInfo {
   type: PlatformType;
@@ -53,7 +53,18 @@ export function detectPlatform(): PlatformInfo {
     };
   }
 
-  // 3. 检测 Android 套壳
+  // 3. 检测鸿蒙套壳（需要在 Android 检测之前，因为鸿蒙的 UA 通常包含 Android）
+  if (checkHarmonyOSApp(ua)) {
+    return {
+      type: 'harmonyos-app',
+      isApp: true,
+      isWeb: false,
+      isMobile: true,
+      isDesktop: false,
+    };
+  }
+
+  // 4. 检测 Android 套壳
   if (checkAndroidApp(ua, isInAppBrowser)) {
     return {
       type: 'android-app',
@@ -99,6 +110,39 @@ function checkDesktopApp(ua: string): boolean {
 
   if (!hasChrome && !hasSafari && !hasFirefox) {
     // 可能是自定义 WebView
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * 检测是否为鸿蒙套壳应用
+ *
+ * 鸿蒙系统（HarmonyOS）的 WebView 特征：
+ * - UA 中包含 "HarmonyOS" 关键字
+ * - UA 中包含 "Huawei" 或 "HONOR"（华为或荣耀设备）
+ * - 某些情况下会有 "ohos" 标识（开源鸿蒙）
+ */
+function checkHarmonyOSApp(ua: string): boolean {
+  // 1. 直接检测 HarmonyOS 关键字
+  if (/harmonyos|ohos/i.test(ua)) {
+    return true;
+  }
+
+  // 2. 检测华为/荣耀设备 + WebView 特征
+  // 华为和荣耀设备上的浏览器通常会有特定的 UA 标识
+  const isHuaweiOrHonor = /huawei|honor/i.test(ua);
+  if (isHuaweiOrHonor) {
+    // 检查是否是 WebView（没有完整的 Chrome 标识）
+    const hasChrome = /chrome\/[\d.]+/i.test(ua);
+    if (!hasChrome && /android/i.test(ua)) {
+      return true;
+    }
+  }
+
+  // 3. 检测鸿蒙特定的注入对象
+  if ((window as any).HarmonyOS || (window as any).OHOSInterface) {
     return true;
   }
 
