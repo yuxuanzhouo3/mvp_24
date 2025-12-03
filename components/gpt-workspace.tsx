@@ -232,15 +232,19 @@ export function GPTWorkspace({
 
       // 如果没有sessionId，先创建会话
       let sessId = currentSessionId;
+      let isNewSession = false;
       if (!sessId) {
+        isNewSession = true;
         sessId = await createSession(authToken, userMessage.content as string);
         setCurrentSessionId(sessId);
       }
 
       // ✅ 改进：使用 sessionConfig 中锁定的 AI，而不是当前的 selectedGPTs
       // 这样确保一旦创建会话，就不能再改 AI
-      const lockedAgentIds = sessionConfig?.selectedAgentIds ||
-                             selectedGPTs.map((gpt: AIAgent) => gpt.id);
+      // 对于新建会话，必须使用 selectedGPTs（sessionConfig还没有更新）
+      const lockedAgentIds = !isNewSession && sessionConfig?.selectedAgentIds
+                             ? sessionConfig.selectedAgentIds
+                             : selectedGPTs.map((gpt: AIAgent) => gpt.id);
 
       const lockedAIs = lockedAgentIds
         .map((agentId: string) => availableAIs.find((ai: AIAgent) => ai.id === agentId))
@@ -570,6 +574,7 @@ export function GPTWorkspace({
     setIsProcessing(false);
     setError(null);
     setInput("");
+    setSelectedGPTs([]);
     console.log("🗑️ 已清空对话");
   };
 

@@ -79,6 +79,7 @@ function PlatformContent() {
     setCurrentSessionId(null);
     setContextSessionId(undefined);
     clearMessages();
+    setSelectedGPTs([]);
   };
 
   // 选择历史对话 - 加载对话消息
