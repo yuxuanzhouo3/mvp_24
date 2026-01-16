@@ -17,6 +17,13 @@ import {
 } from "@/lib/payment-config";
 import type { PaymentMethod, BillingCycle } from "@/lib/payment-config";
 
+const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
+
+function detectAlipayProductMode(request: NextRequest): "wap" | "page" {
+  const userAgent = request.headers.get("user-agent") || "";
+  return MOBILE_USER_AGENT.test(userAgent) ? "wap" : "page";
+}
+
 export async function POST(request: NextRequest) {
   // 应用速率限制
   return new Promise<NextResponse>((resolve) => {
@@ -218,18 +225,29 @@ async function handlePaymentCreate(request: NextRequest) {
         const paypalProvider = new PayPalProvider(process.env);
         result = await paypalProvider.createOnetimePayment(order);
       } else if (method === "alipay") {
+        const alipayProductMode =
+          channel === "app" ? "wap" : detectAlipayProductMode(request);
+
         logInfo("Creating Alipay payment", {
           operationId,
           userId: user.id,
           amount,
           channel,
+          productMode: alipayProductMode,
         });
         const alipayProvider = new AlipayProvider(process.env);
+        // 强制走手机网站支付（H5/WAP）。
+        // 说明：套壳 WebView 场景下，原生 deeplink (alipays://) 往往会被拦截/双弹，且你明确不走原生支付。
         if (channel === "app") {
-          result = await alipayProvider.createAppPayment(order);
-        } else {
-          result = await alipayProvider.createPayment(order);
+          logWarn("Alipay channel=app ignored; forcing H5/WAP", {
+            operationId,
+            userId: user.id,
+          });
         }
+        result = await alipayProvider.createPayment({
+          ...order,
+          productMode: alipayProductMode,
+        });
       } else if (method === "wechat") {
         logInfo("Creating WeChat payment", {
           operationId,

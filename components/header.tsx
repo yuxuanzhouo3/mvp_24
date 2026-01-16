@@ -4,16 +4,17 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  Globe,
-  WorkflowIcon as Workspace,
-  Library,
-  Download,
-  FileText,
-  CreditCard,
-  Menu,
-  Plus,
-  MessageSquare,
-  Trash2,
+  Globe, 
+  WorkflowIcon as Workspace, 
+  Library, 
+  Download, 
+  FileText, 
+  CreditCard, 
+  Menu, 
+  Plus, 
+  MessageSquare, 
+  Trash2, 
+  Star 
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { UserMenu } from "./user-menu";
@@ -29,6 +30,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { toast } from "sonner";
+import {
+  setPendingFavoriteScroll,
+  useMessageFavorites,
+} from "@/hooks/use-message-favorites";
 
 interface ChatSession {
   id: string;
@@ -58,6 +63,7 @@ export function Header({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const favorites = useMessageFavorites();
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -160,7 +166,7 @@ export function Header({
         </Button>
 
         <div className="flex items-center gap-1 sm:gap-2">
-          <div className="w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
+          <div className="hidden sm:flex w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg items-center justify-center flex-shrink-0">
             <span className="text-white font-bold text-xs sm:text-sm">AI</span>
           </div>
           {/* 标题和徽章 - 移动端隐藏 */}
@@ -230,7 +236,7 @@ export function Header({
           onClick={() => {
             toggleLanguage();
           }}
-          className="flex items-center gap-1 text-xs sm:text-sm"
+          className="hidden sm:flex items-center gap-1 text-xs sm:text-sm"
           title={language === "zh" ? "English" : "中文"}
         >
           <Globe className="w-4 h-4 flex-shrink-0" />
@@ -284,6 +290,46 @@ export function Header({
               </div>
             ) : (
               <div className="space-y-1 py-2">
+                {/* 收藏对话（单条消息收藏） */}
+                <div className="px-1 pb-1">
+                  <div className="flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500">
+                    <span>{language === "zh" ? "收藏对话" : "Favorites"}</span>
+                    <span className="text-xs text-gray-400">{favorites.items.length}</span>
+                  </div>
+
+                  {favorites.items.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-gray-400">
+                      {language === "zh" ? "暂无收藏" : "No favorites"}
+                    </div>
+                  ) : (
+                    <div className="space-y-1 mb-2">
+                      {favorites.items.map((fav) => {
+                        const sessionTitle =
+                          sessions.find((s) => s.id === fav.sessionId)?.title ||
+                          (language === "zh" ? "新对话" : "New Chat");
+                        return (
+                          <div
+                            key={fav.id}
+                            className="group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-blue-50 transition-colors"
+                            onClick={() => {
+                              if (!fav.sessionId) return;
+                              setPendingFavoriteScroll(fav.sessionId, fav.anchorId);
+                              handleSessionClick(fav.sessionId);
+                            }}
+                            title={fav.preview}
+                          >
+                            <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm truncate">{fav.preview || "(空)"}</div>
+                              <div className="text-[11px] truncate text-gray-500">{sessionTitle}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
                 {sessions.map((session) => (
                   <div
                     key={session.id}

@@ -3,9 +3,13 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Plus, MessageSquare, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, MessageSquare, Trash2, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Star } from "lucide-react";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { toast } from "sonner";
+import {
+  setPendingFavoriteScroll,
+  useMessageFavorites,
+} from "@/hooks/use-message-favorites";
 
 interface ChatSession {
   id: string;
@@ -28,6 +32,7 @@ export function ChatHistorySidebar({
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const favorites = useMessageFavorites();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
     今天: true,
     昨天: true,
@@ -220,6 +225,53 @@ export function ChatHistorySidebar({
             </div>
           ) : (
             <div className="space-y-2 pb-4">
+              {/* 收藏对话（单条消息收藏） */}
+              <div className="px-1">
+                <div className="flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500">
+                  <span>收藏对话</span>
+                  <span className="text-xs text-gray-400">{favorites.items.length}</span>
+                </div>
+
+                {favorites.items.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-gray-400">暂无收藏</div>
+                ) : (
+                  <div className="space-y-1 mb-2">
+                    {favorites.items.map((fav) => {
+                      const sessionTitle =
+                        sessions.find((s) => s.id === fav.sessionId)?.title || "新对话";
+                      return (
+                        <div
+                          key={fav.id}
+                          className="group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-all duration-150 hover:bg-blue-50"
+                          onClick={() => {
+                            if (!fav.sessionId) return;
+                            setPendingFavoriteScroll(fav.sessionId, fav.anchorId);
+                            onSessionSelect(fav.sessionId);
+                          }}
+                          title={fav.preview}
+                        >
+                          <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm truncate text-gray-800">{fav.preview || "(空)"}</div>
+                            <div className="text-[11px] truncate text-gray-500">{sessionTitle}</div>
+                          </div>
+                          <button
+                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-blue-100 rounded flex-shrink-0"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              favorites.remove(fav.id);
+                            }}
+                            title="取消收藏"
+                          >
+                            <Trash2 className="h-3 w-3 text-gray-500" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {Object.entries(groupedSessions).map(([group, groupSessions]) => {
                 if (groupSessions.length === 0) return null;
 

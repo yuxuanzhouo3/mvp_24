@@ -56,6 +56,7 @@ export class AlipayProvider extends AbstractAlipayProvider {
         "",
       notifyUrl: `${appUrl}/api/payment/webhook/alipay`,
       returnUrl: `${appUrl}/payment/success`,
+      quitUrl: `${appUrl}`,
       gatewayUrl:
         config.ALIPAY_GATEWAY_URL ||
         process.env.ALIPAY_GATEWAY_URL ||
@@ -177,7 +178,7 @@ export class AlipayProvider extends AbstractAlipayProvider {
 
     // 支持切换产品/接口：page(电脑网站) 或 wap(手机网站)
     const productMode = (
-      process.env.ALIPAY_PRODUCT_MODE || "page"
+      order.productMode || process.env.ALIPAY_PRODUCT_MODE || "wap"
     ).toLowerCase();
     const isWap = productMode === "wap";
 
@@ -197,6 +198,7 @@ export class AlipayProvider extends AbstractAlipayProvider {
       // 这是webhook被调用的关键配置
       notify_url: this.alipayConfig.notifyUrl,
       return_url: this.alipayConfig.returnUrl,
+      quit_url: this.alipayConfig.quitUrl,
     };
 
     return {
@@ -212,6 +214,7 @@ export class AlipayProvider extends AbstractAlipayProvider {
       // 按照支付宝官方文档，return_url和notify_url都需要在pageExec的第二个参数中
       const result = await this.alipaySdk.pageExec(orderData.method, {
         return_url: orderData.bizContent.return_url,
+        quit_url: orderData.bizContent.quit_url,
         notify_url: orderData.bizContent.notify_url,
         bizContent: orderData.bizContent,
       });

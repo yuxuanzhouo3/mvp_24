@@ -164,9 +164,9 @@ export function PaymentForm({
         headers,
         body: JSON.stringify({
           method: selectedMethod,
-          // 在 GoNative/Median 套壳内，支付宝改走 App 通道（返回 orderString）
-          ...((selectedMethod === "alipay" || selectedMethod === "wechat") &&
-          isGoNativeShell()
+          // 在 GoNative/Median 套壳内：仅微信可走 App 通道（拉起原生支付）。
+          // 支付宝强制走手机网站支付（H5/WAP）以避免 deeplink/原生通道。
+          ...(selectedMethod === "wechat" && isGoNativeShell()
             ? { channel: "app" }
             : {}),
           billingCycle,
@@ -212,8 +212,7 @@ export function PaymentForm({
               paymentMethod: selectedMethod,
               // 仅在套壳环境下我们才会附加 channel=app
               channel:
-                (selectedMethod === "alipay" || selectedMethod === "wechat") &&
-                isGoNativeShell()
+                selectedMethod === "wechat" && isGoNativeShell()
                   ? "app"
                   : existing?.channel,
               updatedAt: Date.now(),

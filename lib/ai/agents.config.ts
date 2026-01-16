@@ -133,7 +133,7 @@ export function getPremiumAgents(): AIAgentConfig[] {
 export const COLLABORATION_MODES = {
   sequential: {
     id: "sequential",
-    name: "顺序协作",
+    name: "顺序模式",
     nameEn: "Sequential",
     description: "AI按顺序处理，后一个AI可以看到前一个的结果",
     descriptionEn: "AIs process sequentially, each seeing previous results",
@@ -141,7 +141,7 @@ export const COLLABORATION_MODES = {
   },
   parallel: {
     id: "parallel",
-    name: "并行协作",
+    name: "并行模式",
     nameEn: "Parallel",
     description: "AI同时独立处理，提供多角度分析",
     descriptionEn:

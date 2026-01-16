@@ -32,6 +32,8 @@ import {
   Copy,
   Share2,
   Download,
+  X,
+  Star,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Progress } from "@/components/ui/progress";
@@ -42,6 +44,11 @@ import { useWorkspaceMessages } from "@/components/workspace-messages-context";
 import { ChatToolbar } from "@/components/chat-toolbar";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { TASK_GRAPH_PRESETS } from "@/data/task-graph-presets";
+import {
+  clearPendingFavoriteScroll,
+  peekPendingFavoriteScroll,
+  useMessageFavorites,
+} from "@/hooks/use-message-favorites";
 import {
   topoLayers,
   type TaskGraphExecutionRun,
@@ -106,10 +113,23 @@ export function GPTWorkspace({
   const [taskGraphPresetId, setTaskGraphPresetId] = useState<string>(TASK_GRAPH_PRESETS[0]?.id || "general");
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [sessionConfig, setSessionConfig] = useState<any>(null);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [taskGraphNavOpen, setTaskGraphNavOpen] = useState(true);
+  const [taskGraphNavDismissed, setTaskGraphNavDismissed] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const { language } = useLanguage();
   const t = useTranslations(language);
+
+  const favorites = useMessageFavorites();
+
+  const getMessageAnchorId = (messageId: string) => `chat-message-${messageId}`;
+
+  const buildFavoriteId = (sessionId: string | undefined, anchorId: string) =>
+    `${sessionId || "no-session"}:${anchorId}`;
+
+  const getTaskGraphNodeAnchorId = (messageId: string, nodeId: string) =>
+    `task-graph-${messageId}-node-${nodeId}`;
 
   const effectiveCollaborationMode: "parallel" | "sequential" | "deep" | "graph" =
     sessionConfig?.collaborationMode === "sequential"
@@ -145,6 +165,44 @@ export function GPTWorkspace({
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, aiResponses, shouldAutoScroll]);
+
+  // 从“收藏对话”点击进入会话后，自动滚动到收藏的那条消息
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const pending = peekPendingFavoriteScroll();
+    if (!pending) return;
+    if (pending.sessionId !== currentSessionId) return;
+
+    // Prevent auto-scroll-to-bottom from fighting the jump.
+    setShouldAutoScroll(false);
+
+    const tryScroll = () => {
+      const el = document.getElementById(pending.anchorId);
+      if (!el) return false;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      clearPendingFavoriteScroll();
+      return true;
+    };
+
+    // Try immediately; if messages haven't rendered yet, retry for a short window.
+    if (tryScroll()) return;
+
+    let attempts = 0;
+    const maxAttempts = 25; // ~5s at 200ms
+    const intervalMs = 200;
+    const intervalId = window.setInterval(() => {
+      attempts += 1;
+      if (tryScroll()) {
+        window.clearInterval(intervalId);
+        return;
+      }
+      if (attempts >= maxAttempts) {
+        window.clearInterval(intervalId);
+      }
+    }, intervalMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [currentSessionId, messages]);
 
   // 当会话ID改变时，从数据库加载历史消息
   useEffect(() => {
@@ -1326,8 +1384,106 @@ export function GPTWorkspace({
     }
   };
 
+  const latestTaskGraphMessage = (() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m?.role !== "assistant") continue;
+      if (!(m as any).taskGraph?.spec) continue;
+      if (!m.isMultiAI || !Array.isArray(m.content)) continue;
+      return m;
+    }
+    return null;
+  })();
+
+  const latestTaskGraphSpec = (latestTaskGraphMessage as any)?.taskGraph
+    ?.spec as TaskGraphSpec | undefined;
+
+  const latestTaskGraphOrderedNodeIds = latestTaskGraphSpec
+    ? topoLayers(latestTaskGraphSpec).flat()
+    : [];
+
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
+      {/* Task Graph step navigator (floating) */}
+      {!taskGraphNavDismissed && latestTaskGraphMessage && latestTaskGraphSpec && (
+        <div className="fixed right-3 sm:right-4 bottom-24 sm:bottom-6 z-50 w-[260px] sm:w-[320px]">
+          <Card className="border-gray-200 bg-white shadow-lg">
+            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-100">
+              <button
+                type="button"
+                className="flex items-center gap-2 min-w-0"
+                onClick={() => setTaskGraphNavOpen((v) => !v)}
+                aria-label="切换任务图步骤导航展开/收起"
+              >
+                <GitBranch className="w-4 h-4 text-blue-600 flex-shrink-0" />
+                <div className="text-sm font-semibold text-gray-900 truncate">
+                  步骤导航（{latestTaskGraphOrderedNodeIds.length}）
+                </div>
+                <ChevronDown
+                  className={`w-4 h-4 text-gray-500 transition-transform ${
+                    taskGraphNavOpen ? "-rotate-180" : ""
+                  }`}
+                />
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-gray-400 hover:text-gray-700"
+                onClick={() => setTaskGraphNavDismissed(true)}
+                title={language === "zh" ? "关闭" : "Close"}
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            {taskGraphNavOpen && (
+              <div className="max-h-[280px] overflow-auto p-2">
+                <div className="space-y-1">
+                  {latestTaskGraphOrderedNodeIds.map((nodeId, idx) => {
+                    const node = latestTaskGraphSpec.nodes.find((n) => n.id === nodeId);
+                    const resp = (latestTaskGraphMessage.content as AIResponse[]).find(
+                      (r) => r.nodeId === nodeId
+                    );
+                    const title = node?.title || resp?.nodeTitle || nodeId;
+                    const status = resp?.status;
+                    const anchorId = getTaskGraphNodeAnchorId(latestTaskGraphMessage.id, nodeId);
+
+                    return (
+                      <button
+                        key={nodeId}
+                        type="button"
+                        className="w-full text-left px-2 py-1.5 rounded-md hover:bg-blue-50 flex items-start gap-2"
+                        onClick={() => {
+                          const el = document.getElementById(anchorId);
+                          if (el) {
+                            el.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }
+                        }}
+                      >
+                        <div
+                          className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${getStatusColor(
+                            status || "pending"
+                          )}`}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-gray-900 truncate">
+                            {idx + 1}. {title}
+                          </div>
+                          <div className="text-[11px] text-gray-500 truncate">
+                            {resp?.agentName || node?.agentId || "AI"}
+                            {resp?.model ? ` · ${resp.model}` : ""}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* 聊天区域 */}
       <div
         ref={chatContainerRef}
@@ -1374,16 +1530,52 @@ export function GPTWorkspace({
         )}
 
         {messages.map((message) => (
-          <div key={message.id}>
+          <div key={message.id} id={getMessageAnchorId(message.id)}>
             {message.role === "user" ? (
               // 用户消息
               <div className="flex items-start gap-2 sm:gap-3 justify-end">
-                <div className="inline-block max-w-xs sm:max-w-2xl lg:max-w-3xl">
+                <div className="inline-block max-w-xs sm:max-w-2xl lg:max-w-3xl group">
                   <Card className="inline-block p-3 sm:p-4 bg-blue-500 text-white">
                     <p className="text-sm whitespace-pre-wrap break-words">
                       {typeof message.content === "string" ? message.content : ""}
                     </p>
                   </Card>
+
+                  <div className="flex justify-end mt-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-7 w-7 text-white/80 hover:text-white hover:bg-white/10 transition-opacity ${
+                        favorites.isFavorite(
+                          buildFavoriteId(currentSessionId, getMessageAnchorId(message.id))
+                        )
+                          ? "opacity-100"
+                          : "opacity-0 group-hover:opacity-100"
+                      }`}
+                      onClick={() => {
+                        const anchorId = getMessageAnchorId(message.id);
+                        favorites.toggle({
+                          id: buildFavoriteId(currentSessionId, anchorId),
+                          sessionId: currentSessionId || "",
+                          anchorId,
+                          role: "user",
+                          preview:
+                            typeof message.content === "string" ? message.content : "",
+                        });
+                      }}
+                      title={language === "zh" ? "收藏这条对话" : "Favorite message"}
+                    >
+                      <Star
+                        className={`w-3.5 h-3.5 ${
+                          favorites.isFavorite(
+                            buildFavoriteId(currentSessionId, getMessageAnchorId(message.id))
+                          )
+                            ? "text-white"
+                            : "text-white/80"
+                        }`}
+                      />
+                    </Button>
+                  </div>
                 </div>
                 <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
                   <User className="w-5 h-5 text-white" />
@@ -1402,58 +1594,18 @@ export function GPTWorkspace({
                   </div>
                 )}
 
-                {/* Task Graph circuit view (if present) */}
-                {(message as any).taskGraph?.spec && (
-                  <Card className="p-3 sm:p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
-                    <div className="flex items-center gap-2 mb-3">
-                      <GitBranch className="w-4 h-4 text-blue-600" />
-                      <div className="text-sm font-semibold text-blue-900">任务图（2.0）</div>
-                      <Badge variant="outline" className="text-xs">
-                        {((message as any).taskGraph?.spec?.nodes?.length as number) || 0} 节点
-                      </Badge>
-                    </div>
-                    <div className="space-y-3">
-                      {topoLayers((message as any).taskGraph.spec as TaskGraphSpec).map(
-                        (layer, idx, arr) => (
-                          <div key={`layer-${idx}`} className="flex items-center flex-wrap gap-2">
-                            {layer.map((nodeId) => {
-                              const specNode = ((message as any).taskGraph.spec as TaskGraphSpec).nodes.find(
-                                (n) => n.id === nodeId
-                              );
-                              const resp = (message.content as AIResponse[]).find(
-                                (r) => r.nodeId === nodeId
-                              );
-                              return (
-                                <div key={nodeId} className="flex items-center gap-2">
-                                  <Card className="px-3 py-2 bg-white border-gray-200 min-w-[180px]">
-                                    <div className="text-xs font-semibold text-gray-800 line-clamp-1">
-                                      {specNode?.title || nodeId}
-                                    </div>
-                                    <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
-                                      {(resp?.agentName || specNode?.agentId || "AI") +
-                                        (resp?.model ? ` · ${resp.model}` : "")}
-                                    </div>
-                                  </Card>
-                                  {idx < arr.length - 1 && (
-                                    <div className="h-px w-6 bg-blue-200" />
-                                  )}
-                                </div>
-                              );
-                            })}
-                            {idx < arr.length - 1 && (
-                              <ArrowRight className="w-4 h-4 text-blue-300" />
-                            )}
-                          </div>
-                        )
-                      )}
-                    </div>
-                  </Card>
-                )}
+                {(message.content as AIResponse[]).map((aiResp, idx) => {
+                  const anchorId = aiResp.nodeId
+                    ? getTaskGraphNodeAnchorId(message.id, aiResp.nodeId)
+                    : `chat-message-${message.id}-ai-${aiResp.agentId}-${idx}`;
+                  const favoriteId = buildFavoriteId(currentSessionId, anchorId);
+                  const isFav = favorites.isFavorite(favoriteId);
 
-                {(message.content as AIResponse[]).map((aiResp, idx) => (
+                  return (
                   <div
                     key={aiResp.nodeId || `${aiResp.agentId}-${idx}`}
                     className="flex items-start space-x-3 group"
+                    id={anchorId}
                   >
                     <div
                       className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${getStatusColor(
@@ -1495,6 +1647,25 @@ export function GPTWorkspace({
                       {/* 消息操作按钮 */}
                       {aiResp.status === "completed" && aiResp.content && (
                         <div className="flex items-center gap-0.5 mt-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={`h-7 w-7 text-gray-400 hover:text-blue-600 hover:bg-blue-50 ${
+                              isFav ? "text-blue-600" : ""
+                            }`}
+                            onClick={() => {
+                              favorites.toggle({
+                                id: favoriteId,
+                                sessionId: currentSessionId || "",
+                                anchorId,
+                                role: "assistant",
+                                preview: aiResp.content,
+                              });
+                            }}
+                            title={language === "zh" ? "收藏这条对话" : "Favorite message"}
+                          >
+                            <Star className="w-3.5 h-3.5" />
+                          </Button>
                           <Button 
                             variant="ghost" 
                             size="icon" 
@@ -1547,11 +1718,60 @@ export function GPTWorkspace({
                     </div>
 
                   </div>
-                ))}
+                );
+                })}
+
+                {/* Task Graph circuit view (if present) - moved to bottom */}
+                {(message as any).taskGraph?.spec && (
+                  <Card className="p-3 sm:p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+                    <div className="flex items-center gap-2 mb-3">
+                      <GitBranch className="w-4 h-4 text-blue-600" />
+                      <div className="text-sm font-semibold text-blue-900">任务图模式（2.0）</div>
+                      <Badge variant="outline" className="text-xs">
+                        {((message as any).taskGraph?.spec?.nodes?.length as number) || 0} 节点
+                      </Badge>
+                    </div>
+                    <div className="space-y-3">
+                      {topoLayers((message as any).taskGraph.spec as TaskGraphSpec).map(
+                        (layer, idx, arr) => (
+                          <div key={`layer-${idx}`} className="flex items-center flex-wrap gap-2">
+                            {layer.map((nodeId) => {
+                              const specNode = ((message as any).taskGraph.spec as TaskGraphSpec).nodes.find(
+                                (n) => n.id === nodeId
+                              );
+                              const resp = (message.content as AIResponse[]).find(
+                                (r) => r.nodeId === nodeId
+                              );
+                              return (
+                                <div key={nodeId} className="flex items-center gap-2">
+                                  <Card className="px-3 py-2 bg-white border-gray-200 min-w-[180px]">
+                                    <div className="text-xs font-semibold text-gray-800 line-clamp-1">
+                                      {specNode?.title || nodeId}
+                                    </div>
+                                    <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
+                                      {(resp?.agentName || specNode?.agentId || "AI") +
+                                        (resp?.model ? ` · ${resp.model}` : "")}
+                                    </div>
+                                  </Card>
+                                  {idx < arr.length - 1 && (
+                                    <div className="h-px w-6 bg-blue-200" />
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {idx < arr.length - 1 && (
+                              <ArrowRight className="w-4 h-4 text-blue-300" />
+                            )}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </Card>
+                )}
               </div>
             ) : message.role === "assistant" ? (
               // 单个AI响应（历史消息）
-              <div className="flex items-start space-x-3 group">
+              <div className="flex items-start space-x-3 group" id={getMessageAnchorId(message.id)}>
                 <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 bg-green-500">
                   {getStatusIcon("completed")}
                 </div>
@@ -1580,6 +1800,30 @@ export function GPTWorkspace({
                   {/* 消息操作按钮 */}
                   {typeof message.content === "string" && message.content && (
                     <div className="flex items-center gap-0.5 mt-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={`h-7 w-7 text-gray-400 hover:text-blue-600 hover:bg-blue-50 ${
+                          favorites.isFavorite(
+                            buildFavoriteId(currentSessionId, getMessageAnchorId(message.id))
+                          )
+                            ? "text-blue-600"
+                            : ""
+                        }`}
+                        onClick={() => {
+                          const anchorId = getMessageAnchorId(message.id);
+                          favorites.toggle({
+                            id: buildFavoriteId(currentSessionId, anchorId),
+                            sessionId: currentSessionId || "",
+                            anchorId,
+                            role: "assistant",
+                            preview: message.content as string,
+                          });
+                        }}
+                        title={language === "zh" ? "收藏这条对话" : "Favorite message"}
+                      >
+                        <Star className="w-3.5 h-3.5" />
+                      </Button>
                       <Button 
                         variant="ghost" 
                         size="icon" 
@@ -1657,7 +1901,7 @@ export function GPTWorkspace({
               <Card className="p-3 bg-white/60 border-blue-100 mb-4">
                 <div className="flex items-center gap-2 mb-2">
                   <GitBranch className="w-4 h-4 text-blue-600" />
-                  <div className="text-sm font-semibold text-blue-900">任务图执行中</div>
+                  <div className="text-sm font-semibold text-blue-900">任务图模式执行中</div>
                   <Badge variant="outline" className="text-xs">
                     {activeTaskGraphSpec.nodes.length} 节点
                   </Badge>
@@ -1830,7 +2074,7 @@ export function GPTWorkspace({
 
       {/* 统一输入区域 */}
       <div className="p-2 sm:p-3 bg-white">
-        <div className="max-w-4xl mx-auto border border-gray-200 rounded-xl sm:rounded-2xl shadow-sm bg-white flex flex-col relative overflow-hidden">
+        <div className="max-w-4xl mx-auto border border-gray-200 rounded-xl sm:rounded-2xl shadow-sm bg-white flex flex-col relative">
           {/* 输入框 */}
           <Textarea
             value={input}
@@ -1847,81 +2091,101 @@ export function GPTWorkspace({
           />
 
           {/* 底部工具栏 */}
-          <div className="px-2 sm:px-3 py-1.5 sm:py-2 border-t border-gray-100 bg-gray-50/30">
+          <div className="px-2 sm:px-3 py-1.5 sm:py-2 border-t border-gray-100 bg-gray-50/30 rounded-b-xl sm:rounded-b-2xl">
             <div className="flex items-center justify-between gap-1 sm:gap-2">
-              {/* 左侧：模式切换 */}
-              <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0">
+              {/* 左侧：模式选择按钮 */}
+              <div className="flex items-center gap-1 sm:gap-1.5 flex-shrink-0 relative">
                 <Button
-                  variant={effectiveCollaborationMode === "parallel" ? "secondary" : "outline"}
+                  variant="outline"
                   size="sm"
-                  className={`h-7 sm:h-8 px-1.5 sm:px-2.5 rounded-lg gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-medium flex-shrink-0 transition-all ${
-                    effectiveCollaborationMode === "parallel"
-                      ? "bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100"
-                      : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setCollaborationMode("parallel")}
-                  title="并行模式"
+                  className="h-7 sm:h-8 px-2 sm:px-3 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 flex-shrink-0"
+                  onClick={() => setModeMenuOpen(!modeMenuOpen)}
+                  title="选择协作模式"
                 >
-                  <Layers className={`w-3.5 h-3.5 ${effectiveCollaborationMode === "parallel" ? "text-blue-500" : "text-gray-400"}`} />
-                  <span>并行</span>
-                </Button>
-                <Button
-                  variant={effectiveCollaborationMode === "sequential" ? "secondary" : "outline"}
-                  size="sm"
-                  className={`h-7 sm:h-8 px-1.5 sm:px-2.5 rounded-lg gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-medium flex-shrink-0 transition-all ${
-                    effectiveCollaborationMode === "sequential"
-                      ? "bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100"
-                      : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setCollaborationMode("sequential")}
-                  title="顺序模式"
-                >
-                  <ListOrdered className={`w-3.5 h-3.5 ${effectiveCollaborationMode === "sequential" ? "text-orange-500" : "text-gray-400"}`} />
-                  <span>顺序</span>
-                </Button>
-                <Button
-                  variant={effectiveCollaborationMode === "deep" ? "secondary" : "outline"}
-                  size="sm"
-                  className={`h-7 sm:h-8 px-1.5 sm:px-2.5 rounded-lg gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-medium flex-shrink-0 transition-all ${
-                    effectiveCollaborationMode === "deep"
-                      ? "bg-purple-50 text-purple-600 border-purple-200 hover:bg-purple-100"
-                      : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setCollaborationMode("deep")}
-                  title="深度思考"
-                >
-                  <Brain className={`w-3.5 h-3.5 ${effectiveCollaborationMode === "deep" ? "text-purple-500" : "text-gray-400"}`} />
-                  <span>深度</span>
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>
+                    {effectiveCollaborationMode === "sequential"
+                      ? "顺序模式"
+                      : effectiveCollaborationMode === "deep"
+                        ? "深度模式"
+                        : effectiveCollaborationMode === "graph"
+                          ? "任务图模式"
+                          : "并行模式"}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${modeMenuOpen ? "-rotate-180" : ""}`} />
                 </Button>
 
-                <Button
-                  variant={effectiveCollaborationMode === "graph" ? "secondary" : "outline"}
-                  size="sm"
-                  className={`h-7 sm:h-8 px-1.5 sm:px-2.5 rounded-lg gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-medium flex-shrink-0 transition-all ${
-                    effectiveCollaborationMode === "graph"
-                      ? "bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100"
-                      : "border-gray-200 text-gray-500 hover:bg-gray-50"
-                  }`}
-                  onClick={() => setCollaborationMode("graph")}
-                  title="任务图（拆分并编排执行）"
-                >
-                  <GitBranch className={`w-3.5 h-3.5 ${effectiveCollaborationMode === "graph" ? "text-indigo-600" : "text-gray-400"}`} />
-                  <span>任务图</span>
-                </Button>
+                {modeMenuOpen && (
+                  <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 w-max flex flex-col gap-1">
+                    <Button
+                      variant={effectiveCollaborationMode === "parallel" ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs flex items-center gap-2 justify-start min-w-max"
+                      onClick={() => {
+                        setCollaborationMode("parallel");
+                        setModeMenuOpen(false);
+                      }}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>并行模式</span>
+                    </Button>
 
-                {effectiveCollaborationMode === "graph" && (
-                  <select
-                    className="h-7 sm:h-8 px-2 rounded-lg border border-gray-200 bg-white text-[10px] sm:text-xs text-gray-700"
-                    value={taskGraphPresetId}
-                    onChange={(e) => setTaskGraphPresetId(e.target.value)}
-                    aria-label="任务图模板"
-                  >
-                    {TASK_GRAPH_PRESETS.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
+                    <Button
+                      variant={effectiveCollaborationMode === "sequential" ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs flex items-center gap-2 justify-start min-w-max"
+                      onClick={() => {
+                        setCollaborationMode("sequential");
+                        setModeMenuOpen(false);
+                      }}
+                    >
+                      <ListOrdered className="w-3.5 h-3.5" />
+                      <span>顺序模式</span>
+                    </Button>
+
+                    <Button
+                      variant={effectiveCollaborationMode === "deep" ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs flex items-center gap-2 justify-start min-w-max"
+                      onClick={() => {
+                        setCollaborationMode("deep");
+                        setModeMenuOpen(false);
+                      }}
+                    >
+                      <Brain className="w-3.5 h-3.5" />
+                      <span>深度模式</span>
+                    </Button>
+
+                    <Button
+                      variant={effectiveCollaborationMode === "graph" ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 px-2 text-xs flex items-center gap-2 justify-start min-w-max"
+                      onClick={() => {
+                        setCollaborationMode("graph");
+                        setModeMenuOpen(false);
+                      }}
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                      <span>任务图模式</span>
+                    </Button>
+
+                    {effectiveCollaborationMode === "graph" && (
+                      <div className="border-t border-gray-200 pt-1 mt-1">
+                        <select
+                          className="h-7 px-2 rounded-lg border border-gray-200 bg-white text-[10px] sm:text-xs text-gray-700 w-full"
+                          value={taskGraphPresetId}
+                          onChange={(e) => setTaskGraphPresetId(e.target.value)}
+                          aria-label="任务图模板"
+                        >
+                          {TASK_GRAPH_PRESETS.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
 

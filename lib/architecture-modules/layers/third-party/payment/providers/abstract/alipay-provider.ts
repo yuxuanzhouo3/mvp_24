@@ -16,6 +16,7 @@ export interface AlipayConfig {
   alipayPublicKey: string;
   notifyUrl: string;
   returnUrl?: string;
+  quitUrl?: string; // 用户取消支付时的重定向URL
   gatewayUrl?: string; // 支付宝网关地址
   // 证书模式可选字段
   certMode?: boolean; // 是否启用证书模式

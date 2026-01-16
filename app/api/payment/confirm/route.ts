@@ -234,20 +234,39 @@ export async function GET(request: NextRequest) {
             }
           }
         } else {
-          const membershipExtended = await extendMembership(
-            user.id,
-            days,
-            transactionId
-          );
-          if (!membershipExtended) {
-            logWarn(
-              "Failed to extend membership for already-processed payment",
+          // 中国区域：PayPal/Stripe 和支付宝都由 webhook 处理延期，confirm 只做状态确认
+          const isPayPalOrStripe = !!sessionId || !!token;
+          const isAlipay = !!outTradeNo || !!tradeNo;
+
+          if (isPayPalOrStripe || isAlipay) {
+            console.log(
+              "✅✅✅ [ALREADY-PROCESSED FLOW] PayPal/Stripe/Alipay payment - SKIPPING extendMembership in confirm, relying on webhook",
               {
                 operationId,
                 userId: user.id,
                 transactionId,
+                isPayPal: !!token,
+                isStripe: !!sessionId,
+                isAlipay,
+                days,
               }
             );
+          } else {
+            const membershipExtended = await extendMembership(
+              user.id,
+              days,
+              transactionId
+            );
+            if (!membershipExtended) {
+              logWarn(
+                "Failed to extend membership for already-processed payment",
+                {
+                  operationId,
+                  userId: user.id,
+                  transactionId,
+                }
+              );
+            }
           }
         }
       }

@@ -166,16 +166,17 @@ export function Sidebar({
 
         {/* Collaboration Mode */}
         <div>
-          <h3 className="font-semibold text-gray-900 mb-3">
+          <h3 className="font-semibold text-gray-900 mb-2">
             {t.sidebar.collaborationMode}
           </h3>
 
-          <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2 mb-3">
             <Button
               variant={
                 collaborationMode === "sequential" ? "default" : "outline"
               }
-              className="w-full justify-start"
+              size="sm"
+              className="justify-start"
               onClick={() => {
                 if (isTemplateSelected) {
                   setCollaborationMode("sequential");
@@ -183,39 +184,36 @@ export function Sidebar({
               }}
               disabled={!isTemplateSelected}
             >
-              <ArrowRight className="w-4 h-4 mr-2" />
-              {t.sidebar.sequential}
-              {!isTemplateSelected && (
-                <span className="ml-2 text-xs opacity-60">
-                  ({t.sidebar.templatesOnly})
-                </span>
-              )}
+              <ArrowRight className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+              <span>{t.sidebar.sequential}</span>
             </Button>
 
             <Button
               variant={collaborationMode === "parallel" ? "default" : "outline"}
-              className="w-full justify-start"
+              size="sm"
+              className="justify-start"
               onClick={() => setCollaborationMode("parallel")}
             >
-              <ArrowDown className="w-4 h-4 mr-2" />
-              {t.sidebar.parallel}
+              <ArrowDown className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+              <span>{t.sidebar.parallel}</span>
             </Button>
           </div>
 
-          <div className="mt-3 p-3 bg-blue-50 rounded-lg">
+          {!isTemplateSelected && (
+            <div className="text-xs text-blue-600 mb-2">
+              {t.sidebar.selectTemplate}
+            </div>
+          )}
+
+          <div className="p-3 bg-blue-50 rounded-lg">
             <div className="flex items-center space-x-2 text-blue-700 text-sm">
-              <Zap className="w-4 h-4" />
+              <Zap className="w-4 h-4 flex-shrink-0" />
               <span>
                 {isTemplateSelected && collaborationMode === "sequential"
                   ? t.sidebar.sequentialDesc
                   : t.sidebar.parallelDesc}
               </span>
             </div>
-            {!isTemplateSelected && (
-              <div className="text-xs text-blue-600 mt-2">
-                {t.sidebar.selectTemplate}
-              </div>
-            )}
           </div>
         </div>
       </div>

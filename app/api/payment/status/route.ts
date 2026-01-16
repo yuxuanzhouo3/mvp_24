@@ -173,49 +173,8 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 3.2 如果是支付宝支付：在本地 pending 时，主动查询支付宝服务器（本地开发/内网环境 webhook 通常收不到）
-    if (paymentMethod === "alipay" && finalStatus !== "completed") {
-      try {
-        const now = Date.now();
-        const last = alipayQueryThrottle.get(paymentId) || 0;
-        if (now - last >= 5000) {
-          alipayQueryThrottle.set(paymentId, now);
-
-          const alipayProvider = new AlipayProvider(process.env);
-          const confirmation = await alipayProvider.confirmPayment(paymentId);
-          if (confirmation?.success) {
-            finalStatus = "completed";
-
-            // 更新本地数据库（后续轮询直接命中本地 completed）
-            try {
-              const updatedAt = new Date().toISOString();
-              if (isChinaRegion()) {
-                const db = getDatabase();
-                await db.collection("payments").doc(paymentRecord._id).update({
-                  status: "completed",
-                  updated_at: updatedAt,
-                });
-              } else {
-                await supabaseAdmin
-                  .from("payments")
-                  .update({
-                    status: "completed",
-                    updated_at: updatedAt,
-                  })
-                  .eq("id", paymentRecord.id);
-              }
-            } catch (updateError) {
-              console.error("Error updating Alipay payment status:", updateError);
-              // 返回 completed 给前端，不阻断
-            }
-          }
-        }
-      } catch (alipayError) {
-        console.error("Error querying Alipay status:", alipayError);
-        // 查询失败时，使用本地状态
-        finalStatus = paymentRecord.status || "pending";
-      }
-    }
+    // 注意：不再主动查询支付宝服务器，状态仅来自数据库和 webhook 更新
+    // 这样避免重复触发业务逻辑，确保 webhook 作为唯一处理来源
 
     // 4. 返回支付状态
     return NextResponse.json(

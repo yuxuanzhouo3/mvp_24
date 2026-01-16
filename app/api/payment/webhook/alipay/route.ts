@@ -92,6 +92,25 @@ export async function POST(request: NextRequest) {
     console.log("📊 [Alipay Webhook] 处理结果:", success ? "✅ 成功" : "❌ 失败");
 
     if (success) {
+      // 更新支付记录状态为 completed
+      if (isChinaRegion()) {
+        try {
+          const db = getDatabase();
+          await db.collection("payments").where({
+            out_trade_no: params.out_trade_no,
+          }).update({
+            status: "completed",
+            transaction_id: params.trade_no,
+            updated_at: new Date().toISOString(),
+          });
+          console.log("✅ [Alipay Webhook] 支付记录状态已更新为 completed");
+        } catch (error) {
+          logError("Error updating payment status in webhook", error as Error, {
+            outTradeNo: params.out_trade_no,
+          });
+        }
+      }
+
       // 记录webhook事件为已处理
       if (isChinaRegion()) {
         try {

@@ -90,62 +90,16 @@ function PaymentSuccessContent() {
             if (res.ok) {
               const data = await res.json();
               if (data?.status === "completed") {
-                // 关键：completed 只代表支付记录完成，不一定已做会员延期（Alipay App 通道需要 confirm 来落库延期）
-                try {
-                  const { getAuthClient } = await import("@/lib/auth/client");
-                  const sessionResult = await getAuthClient().getSession();
-                  const session = sessionResult.data.session;
-                  const headers: Record<string, string> = {};
-                  if (session?.access_token) {
-                    headers["Authorization"] = `Bearer ${session.access_token}`;
-                  }
-
-                  const confirmRes = await fetch(
-                    `/api/payment/confirm?out_trade_no=${encodeURIComponent(
-                      paymentId
-                    )}`,
-                    { headers }
-                  );
-
-                  if (!confirmRes.ok) {
-                    const err = await confirmRes.json().catch(() => ({}));
-                    throw new Error(err.error || "Payment confirmation failed");
-                  }
-
-                  const confirmData = await confirmRes.json();
-                  if (!confirmData?.success) {
-                    throw new Error(confirmData?.error || "Payment confirmation failed");
-                  }
-                } catch (e) {
-                  console.error("Alipay app confirm failed", e);
-                  throw e;
-                }
-
-                setHasProcessed(true);
+                // 支付已完成，webhook 已处理延期，无需额外确认
+                setPaymentStatus("success");
                 setPaymentDetails({
+                  daysAdded: data.daysAdded || 30, // 从响应中获取或默认值
                   amount: data.amount,
                   currency: data.currency,
                 });
-                try {
-                  sessionStorage.removeItem(`alipay:orderString:${paymentId}`);
-                  sessionStorage.removeItem(`alipay:launched:${paymentId}`);
-                } catch {
-                  // ignore
-                }
-                try {
-                  localStorage.removeItem("pending_payment");
-                } catch {
-                  // ignore
-                }
-
-                try {
-                  await refreshUser();
-                } catch {
-                  // ignore refresh failure
-                }
-
-                setPaymentStatus("success");
-                return;
+                refreshUser();
+                setHasProcessed(true);
+                break;
               }
             }
             await new Promise((r) => setTimeout(r, INTERVAL_MS));

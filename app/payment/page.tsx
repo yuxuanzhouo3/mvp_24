@@ -93,7 +93,9 @@ export default function PaymentPage() {
   const [paymentResult, setPaymentResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("plans");
 
-  // App 内支付宝：从支付宝返回后，轮询支付状态并自动跳转到成功页
+  // 支付宝（含手机网页/H5 + 套壳 WebView）：
+  // - 有些场景不会自动回跳到 return_url（用户未点“返回商户”），导致 confirm 不会触发。
+  // - 因此当页面重新获得焦点（从支付宝 App 切回）时，轮询支付状态并跳转到 success 触发确认/延期。
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -143,7 +145,6 @@ export default function PaymentPage() {
         const pending = JSON.parse(raw);
         if (
           pending?.paymentMethod === "alipay" &&
-          pending?.channel === "app" &&
           typeof pending?.paymentId === "string" &&
           pending.paymentId
         ) {

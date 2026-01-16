@@ -15,6 +15,7 @@ export interface PaymentOrder {
   planType: string;
   billingCycle: "monthly" | "yearly";
   metadata?: Record<string, any>; // 添加可选的 metadata 字段
+  productMode?: "wap" | "page"; // 指定支付宝使用的接口模式
 }
 
 export interface PaymentResult {

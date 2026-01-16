@@ -41,11 +41,13 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.Map;
+import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -69,6 +71,12 @@ public class UrlNavigation {
     public static final String CLEAR_POOLS_MESSAGE = "io.gonative.android.webview.clearPools";
 
     private static final String TAG = UrlNavigation.class.getName();
+
+    // H5 pay flow: keep Alipay cashier inside WebView.
+    // When Alipay tries to deep-link into the native app (alipays:// or intent://...), we convert
+    // it back into an https URL (when possible) and keep loading in the same WebView.
+    // If conversion fails, we block the navigation to avoid switching to native payment.
+    private static final boolean ALIPAY_CONVERT_DEEPLINK_TO_H5 = true;
 
     private static final String ASSET_URL = "file:///android_asset/";
     public static final String OFFLINE_PAGE_URL = "file:///android_asset/offline.html";
@@ -296,6 +304,41 @@ public class UrlNavigation {
             }
         }
 
+        // Alipay mobile pay deep-links (alipays://, or intent:// wrapping it)
+        // In mobile web payment, Alipay cashier will often deep-link into the native Alipay app.
+        // We should allow that instead of blocking it.
+        boolean isAlipayLink = isAlipayDeepLink(uri) || isIntentWrappingAlipay(uri);
+        if (isAlipayLink) {
+            if (noAction) return true;
+
+            try {
+                Intent intent;
+                if ("intent".equals(uri.getScheme())) {
+                    intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME);
+                } else {
+                    intent = new Intent(Intent.ACTION_VIEW, uri);
+                }
+                mainActivity.startActivity(intent);
+            } catch (ActivityNotFoundException ex) {
+                // Alipay not installed or cannot handle the intent: fall back to H5 if we can extract it.
+                if (ALIPAY_CONVERT_DEEPLINK_TO_H5) {
+                    String alipayH5 = extractAlipayH5Url(uri);
+                    if (!TextUtils.isEmpty(alipayH5)) {
+                        final String destination = alipayH5;
+                        mainActivity.runOnUiThread(() -> mainActivity.loadUrl(destination));
+                        return true;
+                    }
+                }
+
+                Toast.makeText(mainActivity, R.string.app_not_installed, Toast.LENGTH_LONG).show();
+                GNLog.getInstance().logError(TAG, mainActivity.getString(R.string.app_not_installed), ex, GNLog.TYPE_TOAST_ERROR);
+            } catch (URISyntaxException e) {
+                GNLog.getInstance().logError(TAG, e.getMessage(), e);
+            }
+
+            return true;
+        }
+
         if (!isInternalUri(uri)) {
             if (noAction) return true;
 
@@ -466,6 +509,79 @@ public class UrlNavigation {
         }
 
         return false;
+    }
+
+    private static boolean isAlipayDeepLink(@NonNull Uri uri) {
+        String scheme = uri.getScheme();
+        if (scheme == null) return false;
+        return scheme.equalsIgnoreCase("alipays") || scheme.equalsIgnoreCase("alipay");
+    }
+
+    private static boolean isIntentWrappingAlipay(@NonNull Uri uri) {
+        String scheme = uri.getScheme();
+        if (scheme == null || !scheme.equalsIgnoreCase("intent")) return false;
+        String raw = uri.toString();
+        return raw.contains("alipays://") || raw.contains("alipay://");
+    }
+
+    private static String decodeMaybeEncodedUrl(String candidate) {
+        if (TextUtils.isEmpty(candidate)) return null;
+
+        String trimmed = candidate.trim();
+
+        // Some providers double-encode; try a couple of passes.
+        for (int i = 0; i < 2; i++) {
+            try {
+                String decoded = URLDecoder.decode(trimmed, StandardCharsets.UTF_8.name());
+                if (decoded.equals(trimmed)) break;
+                trimmed = decoded;
+            } catch (Exception ignored) {
+                break;
+            }
+        }
+
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            return trimmed;
+        }
+        return null;
+    }
+
+    private static String extractAlipayH5Url(@NonNull Uri uri) {
+        try {
+            if (isAlipayDeepLink(uri)) {
+                // Common params used by Alipay deep links.
+                String[] keys = new String[]{"url", "targetUrl", "target_url", "redirect_url", "return_url"};
+                for (String key : keys) {
+                    String v = uri.getQueryParameter(key);
+                    String decoded = decodeMaybeEncodedUrl(v);
+                    if (!TextUtils.isEmpty(decoded)) return decoded;
+                }
+
+                // Some variants embed the https URL in the fragment.
+                String fragment = uri.getFragment();
+                String decodedFragment = decodeMaybeEncodedUrl(fragment);
+                if (!TextUtils.isEmpty(decodedFragment)) return decodedFragment;
+            }
+
+            if (isIntentWrappingAlipay(uri)) {
+                Intent intent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME);
+                String data = intent.getDataString();
+                if (!TextUtils.isEmpty(data)) {
+                    Uri dataUri = Uri.parse(data);
+                    String fromData = extractAlipayH5Url(dataUri);
+                    if (!TextUtils.isEmpty(fromData)) return fromData;
+                }
+
+                // If the intent has an explicit browser fallback, prefer that.
+                String fallbackUrl = intent.getStringExtra("browser_fallback_url");
+                String decodedFallback = decodeMaybeEncodedUrl(fallbackUrl);
+                if (!TextUtils.isEmpty(decodedFallback)) return decodedFallback;
+            }
+        } catch (Exception ignored) {
+            // Fall through to default behavior.
+        }
+
+        return null;
     }
 
     public boolean shouldOverrideUrlLoading(final GoNativeWebviewInterface view, String url,

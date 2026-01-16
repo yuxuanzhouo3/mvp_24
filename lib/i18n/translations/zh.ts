@@ -59,8 +59,8 @@ export const zh = {
   sidebar: {
     selectedAI: "已选择的AI",
     collaborationMode: "协作模式",
-    sequential: "顺序处理",
-    parallel: "并行处理",
+    sequential: "顺序模式",
+    parallel: "并行模式",
     addAI: "添加AI",
     tokenUsage: "Token使用量",
     maxAI: "最多8个AI",
