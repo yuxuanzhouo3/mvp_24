@@ -89,6 +89,10 @@ export function UserMenu() {
     }
 
     if (user?.email) {
+      // 检查是否为微信用户
+      if (user.email.startsWith("wechat_")) {
+        return "微信用户";
+      }
       // 从邮箱中提取用户名部分（@前面的部分）
       const emailParts = user.email.split("@");
       if (emailParts[0]) {
