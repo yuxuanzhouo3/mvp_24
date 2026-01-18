@@ -14,6 +14,7 @@ import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { Zap } from "lucide-react";
+import { detectPlatform } from "@/lib/platform-detection";
 
 export function QuotaDisplay() {
   const { user } = useUser();
@@ -82,11 +83,13 @@ export function QuotaDisplay() {
         </span>
       </div>
       <Progress value={percentage} className="h-1.5 w-full" />
-      <p className="text-[10px] text-muted-foreground leading-tight">
-        {language === 'zh'
-          ? "免费版每月限额 50 条。升级 Pro 解锁无限额度。"
-          : "Free tier limited to 50/mo. Upgrade to Pro for unlimited."}
-      </p>
+      {detectPlatform().type !== 'ios-app' && (
+        <p className="text-[10px] text-muted-foreground leading-tight">
+          {language === 'zh'
+            ? "免费版每月限额 50 条。升级 Pro 解锁无限额度。"
+            : "Free tier limited to 50/mo. Upgrade to Pro for unlimited."}
+        </p>
+      )}
     </div>
   );
 }
