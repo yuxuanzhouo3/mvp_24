@@ -21,7 +21,7 @@ import { RegionType } from "@/lib/architecture-modules/core/types";
 import { useUser } from "@/components/user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
-import { getWechatLoginUrl } from "@/lib/wechat/oauth";
+import { getWechatLoginUrl, getWechatWebLoginUrl } from "@/lib/wechat/oauth";
 import { isChinaDeployment } from "@/lib/config/deployment.config";
 import { useAuthConfig } from "@/lib/hooks/useAuthConfig";
 import { detectPlatform } from "@/lib/platform-detection";
@@ -568,34 +568,31 @@ function AuthPageContent() {
       return;
     }
 
-    // 直接检查 wx 对象是否存在（不依赖 platformInfo，因为它可能在 wx 注入前就检测了）
-    const wxObj = (window as any).wx;
-    const mp = wxObj?.miniProgram;
-
-    console.log("[login] 直接检查 wx:", JSON.stringify({
-      wxExists: !!wxObj,
-      mpExists: !!mp,
-      navigateToExists: !!(mp && typeof mp.navigateTo === 'function'),
-      platformInfo: platformInfo
-    }));
-
-    // 如果 wx.miniProgram.navigateTo 可用，使用小程序登录
-    if (mp && typeof mp.navigateTo === 'function') {
-      const returnUrl = window.location.href;
-      const target = `/pages/webshell/login?returnUrl=${encodeURIComponent(returnUrl)}`;
-
-      console.log("[login] 使用 wx.miniProgram.navigateTo 跳转登录页");
-      console.log("[login] target:", target);
-
-      // 完全按照 demo 的方式调用，不传任何回调
-      mp.navigateTo({ url: target });
-      return;
-    }
-
-    // 如果 platformInfo 认为是小程序但 wx 不可用，显示错误
+    // 检查是否为微信小程序环境
     if (platformInfo.isWechatMiniProgram) {
-      console.error("[login] 检测到小程序环境但 wx.miniProgram.navigateTo 不可用");
-      setError("无法连接到小程序环境，请刷新页面重试");
+      const wxObj = (window as any).wx;
+      const mp = wxObj?.miniProgram;
+
+      console.log("[login] 小程序环境检查 wx:", JSON.stringify({
+        wxExists: !!wxObj,
+        mpExists: !!mp,
+        navigateToExists: !!(mp && typeof mp.navigateTo === 'function'),
+        platformInfo: platformInfo
+      }));
+
+      if (mp && typeof mp.navigateTo === 'function') {
+        const returnUrl = window.location.href;
+        const target = `/pages/webshell/login?returnUrl=${encodeURIComponent(returnUrl)}`;
+
+        console.log("[login] 使用 wx.miniProgram.navigateTo 跳转登录页");
+        console.log("[login] target:", target);
+
+        // 完全按照 demo 的方式调用，不传任何回调
+        mp.navigateTo({ url: target });
+      } else {
+        console.error("[login] 检测到小程序环境但 wx.miniProgram.navigateTo 不可用");
+        setError("无法连接到小程序环境，请刷新页面重试");
+      }
       return;
     }
 
@@ -618,13 +615,19 @@ function AuthPageContent() {
         return;
       }
 
+      // 检测是否在微信浏览器中
+      const isInWechatBrowser = /micromessenger/i.test(navigator.userAgent);
+
       // 获取微信登录 URL
       // 使用 NEXT_PUBLIC_APP_URL 确保与微信开放平台配置的域名一致
       const redirectUri = `${appUrl}/auth/callback`;
-      const wechatLoginUrl = getWechatLoginUrl(wechatAppId, redirectUri);
+      const wechatLoginUrl = isInWechatBrowser ? getWechatWebLoginUrl(wechatAppId, redirectUri) : getWechatLoginUrl(wechatAppId, redirectUri);
+
+      console.log("使用 OAuth 登录，是否微信浏览器:", isInWechatBrowser, { wechatAppId, appUrl, redirectUri });
 
       // ✅ 直接跳转到微信登录页面（标准 OAuth2 流程）
       // 用户看到二维码，扫码授权后自动回调到 /auth/callback
+      console.log("跳转到微信登录 URL:", wechatLoginUrl);
       window.location.href = wechatLoginUrl;
     } catch (err) {
       if (err instanceof Error) {
