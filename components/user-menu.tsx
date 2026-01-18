@@ -82,26 +82,29 @@ export function UserMenu() {
     return path;
   };
 
-  // 获取显示名称：优先使用 name，如果为空则使用 email 的用户名部分
-  const displayName = (() => {
-    if (user?.name && user.name.trim()) {
-      return user.name.trim();
+  // 辅助函数：获取用户显示名称
+  const getDisplayName = (userObj: any) => {
+    if (userObj?.name && userObj.name.trim()) {
+      return userObj.name.trim();
     }
 
-    if (user?.email) {
-      // 检查是否为微信用户
-      if (user.email.startsWith("wechat_")) {
+    if (userObj?.email) {
+      // 检查是否为微信用户（以@local.wechat结尾）
+      if (userObj.email.endsWith("@local.wechat")) {
         return "微信用户";
       }
       // 从邮箱中提取用户名部分（@前面的部分）
-      const emailParts = user.email.split("@");
+      const emailParts = userObj.email.split("@");
       if (emailParts[0]) {
         return emailParts[0];
       }
     }
 
     return "User";
-  })();
+  };
+
+  // 获取显示名称：优先使用 name，如果为空则使用 email 的用户名部分
+  const displayName = getDisplayName(user);
 
   // 获取用户名首字母
   const userInitial = (() => {
@@ -210,7 +213,7 @@ export function UserMenu() {
                     </Avatar>
                     <div className="flex flex-col min-w-0">
                       <span className="text-sm font-medium truncate">
-                        {account.user.name || account.user.email.split("@")[0]}
+                        {getDisplayName(account.user)}
                       </span>
                       <span className="text-[10px] text-gray-500 truncate">
                         {account.user.email}
@@ -349,7 +352,7 @@ export function UserMenu() {
                     </Avatar>
                     <div className="flex flex-col min-w-0">
                       <span className="text-xs font-medium truncate">
-                        {account.user.name || account.user.email.split("@")[0]}
+                        {getDisplayName(account.user)}
                       </span>
                       <span className="text-[10px] text-gray-500 truncate">
                         {account.user.email}

@@ -40,7 +40,7 @@ export default function ProfilePage() {
       if (!value) return "";
       const trimmed = value.trim();
       // 检查是否为微信用户邮箱
-      if (trimmed.startsWith("wechat_")) {
+      if (trimmed.endsWith("@local.wechat")) {
         return "微"; // 微信的首字母
       }
       return trimmed ? trimmed.charAt(0).toUpperCase() : "";
