@@ -34,7 +34,6 @@ import {
   setPendingFavoriteScroll,
   useMessageFavorites,
 } from "@/hooks/use-message-favorites";
-import { detectPlatform } from "@/lib/platform-detection";
 
 interface ChatSession {
   id: string;
@@ -175,13 +174,6 @@ export function Header({
             {t.header.title}
           </h1>
         </div>
-
-        <Badge
-          variant="secondary"
-          className="bg-green-100 text-green-800 text-xs sm:text-sm whitespace-nowrap hidden sm:inline-block"
-        >
-          {t.header.online}
-        </Badge>
       </div>
 
       <nav className="flex items-center gap-1">
@@ -218,18 +210,16 @@ export function Header({
           <span className="hidden lg:inline">{t.header.export}</span>
         </Button>
 
-        {detectPlatform().type !== 'ios-app' && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push(buildUrl("/payment"))}
-            className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
-            title={t.header.payment}
-          >
-            <CreditCard className="w-4 h-4 flex-shrink-0" />
-            <span className="hidden lg:inline">{t.header.payment}</span>
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.push(buildUrl("/payment"))}
+          className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
+          title={t.header.payment}
+        >
+          <CreditCard className="w-4 h-4 flex-shrink-0" />
+          <span className="hidden lg:inline">{t.header.payment}</span>
+        </Button>
       </nav>
 
       <div className="flex items-center gap-1 sm:gap-3">

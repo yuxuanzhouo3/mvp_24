@@ -2073,14 +2073,14 @@ export function GPTWorkspace({
       </div>
 
       {/* 统一输入区域 */}
-      <div className="p-2 sm:p-3 bg-white">
-        <div className="max-w-4xl mx-auto border border-gray-200 rounded-xl sm:rounded-2xl shadow-sm bg-white flex flex-col relative">
+      <div className="p-2 sm:p-3 bg-white border-t border-gray-100">
+        <div className="max-w-4xl mx-auto border border-gray-200 rounded-xl sm:rounded-2xl shadow-sm bg-white flex flex-col relative text-sm sm:text-base">
           {/* 输入框 */}
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="开始对话..."
-            className="flex-1 min-h-[44px] sm:min-h-[80px] border-0 focus:ring-0 focus-visible:ring-0 shadow-none resize-none text-sm sm:text-base p-2 sm:p-3 bg-transparent outline-none"
+            className="flex-1 min-h-[44px] sm:min-h-[80px] border-0 focus:ring-0 focus-visible:ring-0 focus:ring-offset-0 focus-visible:ring-offset-0 ring-0 ring-offset-0 shadow-none resize-none p-2 sm:p-3 bg-white outline-none rounded-t-xl sm:rounded-t-2xl"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -2231,6 +2231,9 @@ export function GPTWorkspace({
               </div>
             </div>
           </div>
+
+          {/* 边框覆盖层 - 解决背景色挡住边框圆角的问题，同时不使用 overflow-hidden 以免挡住弹出菜单 */}
+          <div className="absolute inset-0 border border-gray-200 rounded-xl sm:rounded-2xl pointer-events-none" />
         </div>
       </div>
     </div>

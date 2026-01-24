@@ -269,7 +269,7 @@ function PlatformContent() {
 
             {/* 中间对话区域 */}
             <div className="flex-1 flex flex-col bg-white relative h-full min-h-0 overflow-hidden">
-              <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 flex flex-col min-h-0 relative">
                 <GPTWorkspace
                   selectedGPTs={selectedGPTs}
                   setSelectedGPTs={setSelectedGPTs}

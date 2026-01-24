@@ -22,6 +22,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { getAmountByCurrency } from "@/lib/payment-config";
+import { detectPlatform } from "@/lib/platform-detection";
+import { getAppleIapProductId } from "@/lib/apple-iap";
 
 export default function PaymentPage() {
   const { user, loading } = useUser();
@@ -31,6 +33,16 @@ export default function PaymentPage() {
   const { language } = useLanguage();
   const t = useTranslations(language);
   const currentPlan = user?.subscription_plan || "free";
+  const hasActiveSubscription = (() => {
+    const expires =
+      (user as any)?.membership_expires_at || (user as any)?.subscription_expires_at;
+    if (!expires) return false;
+    try {
+      return new Date(expires) > new Date();
+    } catch {
+      return false;
+    }
+  })();
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -92,6 +104,17 @@ export default function PaymentPage() {
   } | null>(null);
   const [paymentResult, setPaymentResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("plans");
+  const [isIOSNativeApp, setIsIOSNativeApp] = useState(false);
+  const [isIapProcessing, setIsIapProcessing] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const platformInfo = detectPlatform();
+    const w = window as any;
+    const ua = (navigator.userAgent || "").toLowerCase();
+    const hasGoNativeFlag = !!(w?.median || w?.gonative || ua.includes("median") || ua.includes("gonative"));
+    setIsIOSNativeApp(platformInfo.type === "ios-app" && hasGoNativeFlag);
+  }, []);
 
   // 支付宝（含手机网页/H5 + 套壳 WebView）：
   // - 有些场景不会自动回跳到 return_url（用户未点“返回商户”），导致 confirm 不会触发。
@@ -371,6 +394,134 @@ export default function PaymentPage() {
     }
   };
 
+  const triggerAppleIap = async () => {
+    if (!selectedPlan) {
+      toast({
+        title: t.payment.messages.failed,
+        description:
+          language === "zh"
+            ? "请先选择订阅计划"
+            : "Please select a subscription plan first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const productId = getAppleIapProductId(
+      selectedPlan.planId,
+      selectedPlan.billingCycle
+    );
+
+    if (!productId) {
+      toast({
+        title: t.payment.messages.failed,
+        description:
+          language === "zh"
+            ? "未找到对应的苹果内购产品"
+            : "Apple IAP product not found",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (typeof window === "undefined") return;
+
+    const callbackName = `__appleIapCallback_${Date.now()}`;
+    setIsIapProcessing(true);
+
+    (window as any)[callbackName] = (payload: any) => {
+      try {
+        if (!payload || payload.status !== "success") {
+          // Helpful for diagnosing native StoreKit issues (e.g. Product not found)
+          console.error("Apple IAP callback (fail)", payload);
+
+          const msg = payload?.message || (language === "zh" ? "支付失败" : "Payment failed");
+
+          const debugParts: string[] = [];
+          if (payload?.bundleId) debugParts.push(`bundleId=${payload.bundleId}`);
+          if (Array.isArray(payload?.invalidProductIdentifiers) && payload.invalidProductIdentifiers.length > 0) {
+            debugParts.push(`invalidIds=${payload.invalidProductIdentifiers.join(",")}`);
+          }
+          if (typeof payload?.storekit2ProductsCount === "number") {
+            debugParts.push(`sk2Count=${payload.storekit2ProductsCount}`);
+          }
+          if (typeof payload?.storekit1ProductsCount === "number") {
+            debugParts.push(`sk1Count=${payload.storekit1ProductsCount}`);
+          }
+
+          const debugSuffix = debugParts.length > 0 ? `\n(${debugParts.join(" ")})` : "";
+
+          toast({
+            title: t.payment.messages.failed,
+            description: String(msg) + debugSuffix,
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const transactionId = payload?.transactionId || payload?.transaction_id;
+        if (!transactionId) {
+          toast({
+            title: t.payment.messages.failed,
+            description: language === "zh" ? "缺少交易号" : "Missing transaction id",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        const query = new URLSearchParams({
+          iap: "1",
+          iap_transaction_id: String(transactionId),
+          iap_product_id: productId,
+          iap_plan_id: selectedPlan.planId,
+          iap_billing_cycle: selectedPlan.billingCycle,
+        });
+
+        window.location.href = `/payment/success?${query.toString()}`;
+      } finally {
+        setIsIapProcessing(false);
+        try {
+          delete (window as any)[callbackName];
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    const payload = {
+      productId,
+      planId: selectedPlan.planId,
+      billingCycle: selectedPlan.billingCycle,
+      userId: user?.id || "",
+      callback: callbackName,
+    };
+
+    try {
+      const message = {
+        medianCommand: "median://iap/purchase",
+        data: payload,
+      };
+
+      const handler = (window as any)?.webkit?.messageHandlers?.JSBridge;
+      if (handler?.postMessage) {
+        handler.postMessage(message);
+      } else {
+        const encoded = btoa(JSON.stringify(payload));
+        const scheme = `median://iap/purchase?payload=${encodeURIComponent(
+          encoded
+        )}&callback=${encodeURIComponent(callbackName)}`;
+        window.location.href = scheme;
+      }
+    } catch (e: any) {
+      setIsIapProcessing(false);
+      toast({
+        title: t.payment.messages.failed,
+        description: e?.message || "Failed to launch Apple IAP",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handlePaymentError = (error: string) => {
     console.error("Payment error:", error);
     toast({
@@ -455,17 +606,64 @@ export default function PaymentPage() {
           <TabsContent value="payment">
             {selectedPlan ? (
               <div className="max-w-2xl mx-auto">
-                <PaymentForm
-                  planId={selectedPlan.planId}
-                  billingCycle={selectedPlan.billingCycle}
-                  amount={selectedPlan.amount}
-                  currency={selectedPlan.currency}
-                  description={selectedPlan.description}
-                  userId={user?.id || ""}
-                  region={region}
-                  onSuccess={handlePaymentSuccess}
-                  onError={handlePaymentError}
-                />
+                {isIOSNativeApp ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>
+                        {language === "zh" ? "苹果内购" : "Apple In-App Purchase"}
+                      </CardTitle>
+                      <CardDescription>
+                        {language === "zh"
+                          ? "在 iOS 套壳应用内将使用原生订阅支付"
+                          : "Use native Apple IAP in the iOS shell app"}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="rounded-lg border bg-muted/40 p-4 text-sm">
+                        <div className="flex flex-col gap-1">
+                          <span>
+                            {language === "zh" ? "计划" : "Plan"}: {selectedPlan.planId}
+                          </span>
+                          <span>
+                            {language === "zh" ? "周期" : "Billing"}: {selectedPlan.billingCycle === "monthly" ? (language === "zh" ? "月付" : "Monthly") : (language === "zh" ? "年付" : "Yearly")}
+                          </span>
+                        </div>
+                      </div>
+                      <Button
+                        className="w-full"
+                        onClick={triggerAppleIap}
+                        disabled={isIapProcessing || hasActiveSubscription}
+                      >
+                        {isIapProcessing
+                          ? language === "zh"
+                            ? "正在唤起内购..."
+                            : "Launching IAP..."
+                          : language === "zh"
+                            ? "使用 Apple 内购支付"
+                            : "Pay with Apple IAP"}
+                      </Button>
+                      {hasActiveSubscription && (
+                        <p className="text-sm text-muted-foreground mt-2">
+                          {language === "zh"
+                            ? "检测到您已有未到期订阅，Apple 内购不可用；请在网页版进行续费。"
+                            : "An active subscription was detected — Apple IAP is disabled. Please renew on web."}
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <PaymentForm
+                    planId={selectedPlan.planId}
+                    billingCycle={selectedPlan.billingCycle}
+                    amount={selectedPlan.amount}
+                    currency={selectedPlan.currency}
+                    description={selectedPlan.description}
+                    userId={user?.id || ""}
+                    region={region}
+                    onSuccess={handlePaymentSuccess}
+                    onError={handlePaymentError}
+                  />
+                )}
               </div>
             ) : (
               <Card>

@@ -43,6 +43,10 @@ function PaymentSuccessContent() {
         const outTradeNo = searchParams.get("out_trade_no"); // Alipay
         const tradeNo = searchParams.get("trade_no"); // Alipay交易号
         const wechatOutTradeNo = searchParams.get("wechat_out_trade_no"); // WeChat Native QR Code
+        const iapTransactionId = searchParams.get("iap_transaction_id");
+        const iapProductId = searchParams.get("iap_product_id");
+        const iapPlanId = searchParams.get("iap_plan_id");
+        const iapBillingCycle = searchParams.get("iap_billing_cycle");
 
         console.log("Payment success callback:", {
           sessionId,
@@ -50,12 +54,73 @@ function PaymentSuccessContent() {
           outTradeNo,
           tradeNo,
           wechatOutTradeNo,
+          iapTransactionId,
+          iapProductId,
           allParams: Object.fromEntries(searchParams.entries()),
         });
 
         // 一次性支付:至少要有一个参数
-        if (!sessionId && !token && !outTradeNo && !tradeNo && !wechatOutTradeNo) {
+        if (
+          !sessionId &&
+          !token &&
+          !outTradeNo &&
+          !tradeNo &&
+          !wechatOutTradeNo &&
+          !iapTransactionId
+        ) {
           throw new Error("Missing payment confirmation parameters");
+        }
+
+        // ✅ Apple IAP：走独立确认接口
+        if (iapTransactionId && iapProductId && iapPlanId && iapBillingCycle) {
+          const { getAuthClient } = await import("@/lib/auth/client");
+          const sessionResult = await getAuthClient().getSession();
+          const session = sessionResult.data.session;
+
+          const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+          };
+          if (session?.access_token) {
+            headers["Authorization"] = `Bearer ${session.access_token}`;
+          }
+
+          const response = await fetch("/api/payment/ios-iap/confirm", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              transactionId: iapTransactionId,
+              productId: iapProductId,
+              planId: iapPlanId,
+              billingCycle: iapBillingCycle,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || "IAP confirmation failed");
+          }
+
+          const result = await response.json();
+
+          if (result.success) {
+            setHasProcessed(true);
+            setPaymentDetails({
+              daysAdded: result.daysAdded,
+              amount: result.amount,
+              currency: result.currency,
+            });
+
+            try {
+              await refreshUser();
+            } catch (refreshError) {
+              console.warn("⚠️ IAP refresh user failed:", refreshError);
+            }
+
+            setPaymentStatus("success");
+            return;
+          }
+
+          throw new Error(result.error || "IAP confirmation failed");
         }
 
         // ✅ Alipay App 通道：没有 trade_no（同步 return 不存在），改用支付状态轮询等待 webhook 完成
