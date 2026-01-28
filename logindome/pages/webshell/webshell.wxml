@@ -1,0 +1,7 @@
+<view class="page">
+  <web-view
+    id="h5"
+    src="{{src}}"
+    bindmessage="onWebMessage"
+  ></web-view>
+</view>

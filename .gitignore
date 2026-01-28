@@ -1,0 +1,60 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# Lockfiles should be committed for reproducible installs
+# pnpm-lock.yaml
+# package-lock.json
+# yarn.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Zip files
+*.zip
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Misc documentation files (project-specific)
+wKuaeG4DV2.txt
+TOPLEVEL_ENV_SUMMARY.txt
+IMPLEMENTATION_REPORT.txt
+test-alipay-fix.mjs
+test-models.mjs
+
+# Local development
+.turbo/
+.vercel

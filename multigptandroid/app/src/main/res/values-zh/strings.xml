@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<string name="terms_and_policies_title">用户条款和隐私政策</string>
+	<string name="terms_accept">我同意</string>
+	<string name="terms_decline">不同意</string>
+</resources>

@@ -1,0 +1,18 @@
+<view class="wrap">
+  <view class="title">选择头像与昵称</view>
+
+  <view class="row">
+    <button class="avatar-wrapper" open-type="chooseAvatar" bind:chooseavatar="onChooseAvatar">
+      <image class="avatar" src="{{avatarUrl}}"></image>
+    </button>
+  </view>
+
+  <view class="nickname-wrapper">
+    <text class="nickname-label">昵称</text>
+    <input type="nickname" class="nickname-input" placeholder="请输入昵称" bindinput="onInputChange" />
+  </view>
+
+  <view class="actions">
+    <button type="primary" disabled="{{!canSubmit}}" bindtap="onSubmit">完成</button>
+  </view>
+</view>

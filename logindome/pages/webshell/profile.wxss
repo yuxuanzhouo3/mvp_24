@@ -1,0 +1,51 @@
+.wrap {
+  padding: 16px;
+}
+
+.title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+  margin: 16px 0 24px;
+}
+
+.avatar-wrapper {
+  padding: 0;
+  width: 80px !important;
+  height: 80px;
+  border-radius: 12px;
+}
+
+.avatar {
+  display: block;
+  width: 80px;
+  height: 80px;
+}
+
+.nickname-wrapper {
+  display: flex;
+  width: 100%;
+  padding: 16px 0;
+  box-sizing: border-box;
+  border-top: .5px solid rgba(0, 0, 0, 0.1);
+  border-bottom: .5px solid rgba(0, 0, 0, 0.1);
+  color: black;
+}
+
+.nickname-label {
+  width: 80px;
+  color: #666;
+}
+
+.nickname-input {
+  flex: 1;
+}
+
+.actions {
+  margin-top: 20px;
+}

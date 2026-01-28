@@ -1,0 +1,5 @@
+# Local secrets
+web/.env
+
+# OS
+.DS_Store

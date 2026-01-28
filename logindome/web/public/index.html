@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebView 套壳登录 Demo</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <h1 class="title">WebView 套壳登录 Demo</h1>
+
+      <section class="card">
+        <div class="row">
+          <div class="label">环境</div>
+          <div id="env" class="value">检测中…</div>
+        </div>
+        <div class="row">
+          <div class="label">API 基址</div>
+          <div id="apiBase" class="value mono">(same-origin)</div>
+        </div>
+        <div class="row">
+          <div class="label">状态</div>
+          <div id="status" class="value">就绪</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="actions">
+          <button id="btnLogin" class="btn" type="button">用小程序原生登录</button>
+          <button id="btnPing" class="btn secondary" type="button">Ping 小程序</button>
+          <button id="btnClear" class="btn secondary" type="button">清空本地缓存</button>
+        </div>
+        <p class="hint">
+          说明：此按钮会向小程序发送 <span class="mono">REQUEST_WX_LOGIN</span>，小程序收到后调用
+          <span class="mono">wx.login()</span>，将 <span class="mono">token</span> 和 <span class="mono">openid</span>
+          通过 URL 参数注入回本页面。
+        </p>
+      </section>
+
+      <section class="card">
+        <h2 class="subtitle">登录结果</h2>
+        <div class="row">
+          <div class="label">code</div>
+          <div id="code" class="value mono">-</div>
+        </div>
+        <div class="row">
+          <div class="label">openid</div>
+          <div id="openid" class="value mono">-</div>
+        </div>
+        <div class="row">
+          <div class="label">token</div>
+          <div id="token" class="value mono">-</div>
+        </div>
+        <div class="row">
+          <div class="label">expiresIn</div>
+          <div id="expiresIn" class="value mono">-</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="subtitle">头像昵称</h2>
+        <div class="profile">
+          <img id="avatar" class="avatar" alt="avatar" />
+          <div>
+            <div id="nickName" class="value">-</div>
+            <div class="hint">来自小程序原生资料页回传（可选）</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="subtitle">日志</h2>
+        <pre id="log" class="log"></pre>
+      </section>
+    </main>
+
+    <!-- WeChat JS-SDK：H5 里调用 wx.miniProgram 需要它（小程序 WebView 场景同样如此） -->
+    <script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
+    <script src="./app.js?v=2025-12-27-1"></script>
+  </body>
+</html>
