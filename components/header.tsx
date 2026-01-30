@@ -248,14 +248,16 @@ export function Header({
           </span>
         </Button>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(buildUrl("/download"))}
-          title="Download"
-        >
-          <Download className="w-4 h-4" />
-        </Button>
+        {detectPlatform().type !== 'ios-app' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push(buildUrl("/download"))}
+            title="Download"
+          >
+            <Download className="w-4 h-4" />
+          </Button>
+        )}
         <UserMenu />
       </div>
 
