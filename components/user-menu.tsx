@@ -28,6 +28,7 @@ import { useUser } from "./user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { QuotaDisplay } from "./quota-display";
+import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
 import {
   getSavedAccounts,
   saveAuthState,
@@ -38,6 +39,7 @@ export function UserMenu() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, loading, refreshUser, signOut } = useUser();
+  const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus();
   const [isLoading, setIsLoading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { language } = useLanguage();
@@ -56,12 +58,15 @@ export function UserMenu() {
     return () => window.removeEventListener("auth-state-changed", handleAuthChange);
   }, []);
 
-  // 当菜单打开时刷新用户数据
+  // 当菜单打开时刷新用户数据 & Apple IAP 状态
   const handleMenuOpenChange = async (open: boolean) => {
     setIsMenuOpen(open);
     if (open && user) {
       try {
         await refreshUser();
+        // 同时刷新 Apple IAP 状态（如果有的话）
+        await refetchAppleStatus();
+
       } catch (error) {
         console.error("Failed to refresh user data:", error);
       }
@@ -281,7 +286,30 @@ export function UserMenu() {
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium">{displayName}</p>
             <p className="text-xs text-muted-foreground">{user.email}</p>
-            {user.membership_expires_at ? (
+            
+            {/* 🔥 优先显示 Apple IAP 的实时过期时间 */}
+            {appleIAPStatus?.success ? (
+              <div className="space-y-1">
+                <p className="text-xs text-gray-600">
+                  {t.user.expiresAt}:{" "}
+                  {new Date(appleIAPStatus.expiresAt).toLocaleDateString(
+                    language === "zh" ? "zh-CN" : "en-US",
+                    { year: "numeric", month: "long", day: "numeric" }
+                  )}
+                </p>
+                {appleIAPStatus.source === "cached" && (
+                  <p className="text-xs text-orange-500 font-medium">
+                    ⚠️ {language === "zh" ? "使用缓存数据" : "Using cached data"}
+                  </p>
+                )}
+                {appleIAPStatus.daysLeft <= 7 && appleIAPStatus.daysLeft > 0 && (
+                  <p className="text-xs text-orange-600">
+                    {language === "zh" ? `${appleIAPStatus.daysLeft} 天后过期` : `Expires in ${appleIAPStatus.daysLeft} days`}
+                  </p>
+                )}
+              </div>
+            ) : user.membership_expires_at ? (
+              /* 降级：使用数据库中的过期时间（可能不是最新的）*/
               <p className="text-xs text-gray-600">
                 {t.user.expiresAt}:{" "}
                 {new Date(user.membership_expires_at).toLocaleDateString(

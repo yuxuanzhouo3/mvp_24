@@ -181,8 +181,7 @@ export async function createReleaseWithUrl(
     isMandatory: boolean;
     fileUrl: string;
     fileSize: number;
-    uploadTarget?: "supabase" | "both";
-    cloudbaseFileId?: string | null;
+    uploadTarget?: "supabase" | "cloudbase";
   }
 ): Promise<CreateReleaseResult> {
   try {
@@ -202,7 +201,7 @@ export async function createReleaseWithUrl(
     }
 
     // 确定来源
-    const source = uploadTarget === "both" && isCloudBaseConfigured() ? "both" : "supabase";
+    const source = uploadTarget;
 
     await deactivateOtherReleases(platform, normalizedVariant);
 
@@ -228,19 +227,6 @@ export async function createReleaseWithUrl(
     if (error) {
       console.error("Insert release error:", error);
       return { success: false, error: "创建版本失败" };
-    }
-
-    // 同步到 CloudBase（如果选择双端且配置了）
-    if (uploadTarget === "both" && isCloudBaseConfigured()) {
-      try {
-        const { db } = await getCloudBase();
-        await db.collection("app_releases").add({
-          ...release,
-          supabase_url: fileUrl,
-        });
-      } catch (err) {
-        console.error("CloudBase sync error:", err);
-      }
     }
 
     revalidatePath("/admin/releases");

@@ -89,6 +89,26 @@ export default function DownloadPage() {
   const releaseHintText =
     language === "zh" ? "版本信息正在同步" : "Version info syncing";
 
+  const availableDownloads = PLATFORMS.reduce<
+    { platform: PlatformType; release: DownloadRelease; downloadUrl: string }[]
+  >((acc, platform) => {
+    const release = releaseMetadata[platform];
+    if (!release) {
+      return acc;
+    }
+    const hasDownloadUrl = isChina
+      ? Boolean(release.cloudbase_file_id)
+      : Boolean(release.file_url);
+    if (!hasDownloadUrl) {
+      return acc;
+    }
+    const downloadUrl = `/api/downloads?platform=${platform}&region=${isChina ? "CN" : "INTL"}${
+      platform === "macos" ? "&arch=apple-silicon" : ""
+    }`;
+    acc.push({ platform, release, downloadUrl });
+    return acc;
+  }, []);
+
   const getPlatformIcon = (platform: PlatformType, className = "w-6 h-6") => {
     switch (platform) {
       case "android":
@@ -178,77 +198,63 @@ export default function DownloadPage() {
 
         {/* 3. 底部横排图标 (白底适配版) */}
         <div className="w-full flex flex-wrap justify-center gap-8 md:gap-16 pb-10">
-          {PLATFORMS.map((platform) => {
-            const isCurrent = userPlatform === platform;
-            const release = releaseMetadata[platform];
-            const platformLabel =
-              t.download.platform[platform as keyof typeof t.download.platform];
-
-            // CN 用 CloudBase，INTL 用 Supabase URL
-            const hasDownloadUrl = isChina
-              ? release?.cloudbase_file_id
-              : release?.file_url;
-
-            const downloadUrl = hasDownloadUrl
-              ? `/api/downloads?platform=${platform}&region=${isChina ? "CN" : "INTL"}${
-                  platform === "macos" ? "&arch=apple-silicon" : ""
-                }`
-              : "#";
-
-            const versionLabel = release?.version
-              ? language === "zh"
+          {availableDownloads.length === 0 ? (
+            <div className="text-center text-sm text-slate-500">
+              {releaseLoadError ?? releaseHintText}
+            </div>
+          ) : (
+            availableDownloads.map(({ platform, release, downloadUrl }) => {
+              const isCurrent = userPlatform === platform;
+              const platformLabel =
+                t.download.platform[platform as keyof typeof t.download.platform];
+              const versionLabel = language === "zh"
                 ? `版本 ${release.version}`
-                : `Version ${release.version}`
-              : releaseLoadError
-              ? releaseLoadError
-              : releaseHintText;
+                : `Version ${release.version}`;
 
-            const isDisabled = !hasDownloadUrl;
-
-            return (
-              <a
-                key={platform}
-                href={downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-disabled={isDisabled}
-                className={cn(
-                  "group flex flex-col items-center gap-4 transition-all duration-300",
-                  isDisabled ? "pointer-events-none opacity-60" : "hover:-translate-y-2"
-                )}
-              >
-                {/* 圆形图标容器 */}
-                <div
+              return (
+                <a
+                  key={platform}
+                  href={downloadUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className={cn(
-                    "w-16 h-16 md:w-[72px] md:h-[72px] rounded-full flex items-center justify-center transition-all duration-300",
-                    "bg-slate-50 border border-slate-200 text-slate-600",
-                    "group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:border-blue-200 group-hover:shadow-lg group-hover:shadow-blue-500/10",
-                    isCurrent &&
-                      "ring-2 ring-blue-500 ring-offset-2 ring-offset-white border-blue-200 bg-blue-50 text-blue-600"
+                    "group flex flex-col items-center gap-4 transition-all duration-300",
+                    "hover:-translate-y-2"
                   )}
                 >
-                  {getPlatformIcon(
-                    platform,
-                    "w-8 h-8 md:w-9 md:h-9 transition-transform duration-300 group-hover:scale-110"
-                  )}
-                </div>
-
-                {/* 文字标签 */}
-                <div className="text-center">
-                  <span
+                  {/* 圆形图标容器 */}
+                  <div
                     className={cn(
-                      "text-sm font-medium tracking-wide transition-colors",
-                      "text-slate-500 group-hover:text-blue-600",
-                      isCurrent && "text-blue-600 font-semibold"
+                      "w-16 h-16 md:w-[72px] md:h-[72px] rounded-full flex items-center justify-center transition-all duration-300",
+                      "bg-slate-50 border border-slate-200 text-slate-600",
+                      "group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:border-blue-200 group-hover:shadow-lg group-hover:shadow-blue-500/10",
+                      isCurrent &&
+                        "ring-2 ring-blue-500 ring-offset-2 ring-offset-white border-blue-200 bg-blue-50 text-blue-600"
                     )}
                   >
-                    {platformLabel}
-                  </span>
-                  <p className="text-xs text-slate-400 mt-1">{versionLabel}</p>
-                </div>
-              </a>
-            );
-          })}
+                    {getPlatformIcon(
+                      platform,
+                      "w-8 h-8 md:w-9 md:h-9 transition-transform duration-300 group-hover:scale-110"
+                    )}
+                  </div>
+
+                  {/* 文字标签 */}
+                  <div className="text-center">
+                    <span
+                      className={cn(
+                        "text-sm font-medium tracking-wide transition-colors",
+                        "text-slate-500 group-hover:text-blue-600",
+                        isCurrent && "text-blue-600 font-semibold"
+                      )}
+                    >
+                      {platformLabel}
+                    </span>
+                    <p className="text-xs text-slate-400 mt-1">{versionLabel}</p>
+                  </div>
+                </a>
+              );
+            })
+          )}
         </div>
       </div>
 

@@ -39,50 +39,30 @@ const STORAGE_KEY = "preferred-language";
  * 3. 浏览器语言（备用方案）
  */
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguageState] = useState<Language>("zh");
+  const [language, setLanguageState] = useState<Language>(isChinaDeployment() ? "zh" : "en");
   const [mounted, setMounted] = useState(false);
 
   // 初始化语言
   useEffect(() => {
     setMounted(true);
 
-    // 优先级1: 从 localStorage 读取用户选择
-    const saved = localStorage.getItem(STORAGE_KEY) as Language | null;
-    console.log("=== LanguageProvider Init ===");
-    console.log("Saved language from localStorage:", saved);
-
-    if (saved && (saved === "zh" || saved === "en")) {
-      console.log("Using saved language from localStorage:", saved);
-      setLanguageState(saved);
-      return;
-    }
-
-    // 优先级2: 根据部署区域推断默认语言
+    // 优先级1: 根据部署区域推断默认语言
     // 使用 deployment.config.ts 中的 DEPLOYMENT_REGION 配置
     const isChinaRegion = isChinaDeployment();
     console.log("Deployment region - is China:", isChinaRegion);
 
     if (isChinaRegion) {
+      // 中国区域：强制使用中文（忽略之前的英文设置）
       console.log("Setting language to zh (deployment region: CN)");
       setLanguageState("zh");
       localStorage.setItem(STORAGE_KEY, "zh");
       return;
     }
 
-    // 国际区域：首先检查浏览器语言
-    const browserLang = navigator.language.toLowerCase();
-    console.log("Browser language:", browserLang);
-
-    if (browserLang.startsWith("zh")) {
-      // 浏览器是中文，但部署在国际区域，使用英文
-      console.log("Browser is zh, but deployment is INTL, using en");
-      setLanguageState("en");
-      localStorage.setItem(STORAGE_KEY, "en");
-    } else {
-      console.log("Setting language to en (browser/deployment region: INTL)");
-      setLanguageState("en");
-      localStorage.setItem(STORAGE_KEY, "en");
-    }
+    // 国际区域：强制使用英文（忽略之前的中文设置）
+    console.log("Setting language to en (deployment region: INTL)");
+    setLanguageState("en");
+    localStorage.setItem(STORAGE_KEY, "en");
   }, []);
 
   // 设置语言（带持久化）
@@ -104,7 +84,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     return (
       <LanguageContext.Provider
         value={{
-          language: "zh",
+          language: isChinaDeployment() ? "zh" : "en",
           setLanguage: () => {},
           toggleLanguage: () => {},
         }}

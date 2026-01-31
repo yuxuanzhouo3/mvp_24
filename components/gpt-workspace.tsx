@@ -313,6 +313,16 @@ export function GPTWorkspace({
       return;
     }
 
+    // 获取认证 Token（支持 CloudBase 和 Supabase）
+    const { token: authToken, error: authError } = await getClientAuthToken();
+
+    if (authError || !authToken) {
+      toast.error("请先登录", {
+        description: "您需要登录后才能使用 AI 对话功能",
+      });
+      return;
+    }
+
     const userMessage: Message = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -326,16 +336,6 @@ export function GPTWorkspace({
     setError(null);
 
     try {
-      // 获取认证 Token（支持 CloudBase 和 Supabase）
-      const { token: authToken, error: authError } = await getClientAuthToken();
-
-      if (authError || !authToken) {
-        toast.error("请先登录", {
-          description: "您需要登录后才能使用 AI 对话功能",
-        });
-        setIsProcessing(false);
-        return;
-      }
 
       // 检查额度
       try {

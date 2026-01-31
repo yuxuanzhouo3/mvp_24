@@ -6,7 +6,8 @@ import { logInfo, logError, logWarn, logBusinessEvent } from "@/lib/logger";
 export async function extendMembership(
   userId: string,
   days: number,
-  transactionId: string
+  transactionId: string,
+  appleExpiresDate: number // 必须是 Apple 返回的真实过期时间（毫秒）
 ): Promise<boolean> {
   console.log(
     "🔥🔥🔥 [PAYMENT extendMembership] CALLED - Starting membership extension",
@@ -14,6 +15,7 @@ export async function extendMembership(
       userId,
       days,
       transactionId,
+      appleExpiresDate,
       isChinaRegion: isChinaRegion(),
     }
   );
@@ -100,24 +102,15 @@ export async function extendMembership(
       const now = new Date();
       let newExpiresAt: Date;
 
-      if (currentExpiresAt && currentExpiresAt > now) {
-        newExpiresAt = new Date(currentExpiresAt);
-        newExpiresAt.setDate(newExpiresAt.getDate() + days);
-        logInfo("Extending existing membership in CloudBase", {
-          userId,
-          currentExpiresAt: currentExpiresAt.toISOString(),
-          daysToAdd: days,
-          newExpiresAt: newExpiresAt.toISOString(),
-        });
-      } else {
-        newExpiresAt = new Date();
-        newExpiresAt.setDate(newExpiresAt.getDate() + days);
-        logInfo("Creating new membership in CloudBase", {
-          userId,
-          daysToAdd: days,
-          newExpiresAt: newExpiresAt.toISOString(),
-        });
-      }
+      // 🔥 Apple IAP 必须使用 Apple 返回的真实过期时间
+      // 不能用本地计算的 days，否则会与 Apple 不同步
+      newExpiresAt = new Date(appleExpiresDate);
+      
+      logInfo("🔥 Using APPLE-PROVIDED expiration date (source of truth)", {
+        userId,
+        appleExpiresDate,
+        newExpiresAt: newExpiresAt.toISOString(),
+      });
 
       try {
         const currentDate = new Date();
@@ -132,11 +125,15 @@ export async function extendMembership(
 
         if (existingSubscription.data && existingSubscription.data.length > 0) {
           const subscriptionId = existingSubscription.data[0]._id;
-          await db.collection("subscriptions").doc(subscriptionId).update({
+          const updatePayload: any = {
             current_period_end: newExpiresAt.toISOString(),
             transaction_id: transactionId,
+            provider_subscription_id: transactionId,
+            provider: "apple",
             updated_at: currentDate.toISOString(),
-          });
+          };
+
+          await db.collection("subscriptions").doc(subscriptionId).update(updatePayload);
 
           logInfo(
             "Updated subscription record in CloudBase (source of truth)",
@@ -148,7 +145,7 @@ export async function extendMembership(
             }
           );
         } else {
-          await db.collection("subscriptions").add({
+          const newPayload: any = {
             user_id: userId,
             plan_id: "pro",
             status: "active",
@@ -156,9 +153,13 @@ export async function extendMembership(
             current_period_end: newExpiresAt.toISOString(),
             cancel_at_period_end: false,
             transaction_id: transactionId,
+            provider_subscription_id: transactionId,
+            provider: "apple",
             created_at: currentDate.toISOString(),
             updated_at: currentDate.toISOString(),
-          });
+          };
+
+          await db.collection("subscriptions").add(newPayload);
 
           logInfo(
             "Created subscription record in CloudBase (source of truth)",

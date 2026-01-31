@@ -1,13 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { ReactNode, useState, useEffect, useRef } from "react";
 import {
   listReleases,
   createReleaseWithUrl,
   createRelease,
-  updateRelease,
   deleteRelease,
-  toggleReleaseStatus,
   AppRelease,
   Platform,
 } from "@/actions/admin-releases";
@@ -45,34 +43,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Plus,
-  Pencil,
-  Trash2,
   Loader2,
-  Search,
-  RefreshCw,
-  Download,
   Apple,
   Smartphone,
   Monitor,
   Upload,
 } from "lucide-react";
 
-const PLATFORMS: { value: Platform; label: string; icon: React.ReactNode }[] = [
+const PLATFORMS: { value: Platform; label: string; icon: ReactNode }[] = [
   { value: "ios", label: "iOS", icon: <Apple className="w-4 h-4" /> },
   { value: "android", label: "Android", icon: <Smartphone className="w-4 h-4" /> },
   { value: "windows", label: "Windows", icon: <Monitor className="w-4 h-4" /> },
@@ -80,10 +63,21 @@ const PLATFORMS: { value: Platform; label: string; icon: React.ReactNode }[] = [
   { value: "linux", label: "Linux", icon: <Monitor className="w-4 h-4" /> },
 ];
 
+const RELEASE_SOURCE_LABELS: Record<AppRelease["source"], string> = {
+  supabase: "国际版",
+  cloudbase: "国内版",
+  both: "国际/国内",
+};
+
+const RELEASE_SOURCE_VARIANTS: Record<AppRelease["source"], "default" | "secondary" | "outline"> = {
+  supabase: "secondary",
+  cloudbase: "outline",
+  both: "default",
+};
+
 const UPLOAD_TARGETS = [
   { value: "supabase", label: "国际版 (Supabase)" },
   { value: "cloudbase", label: "国内版 (CloudBase)" },
-  { value: "both", label: "双端同步" },
 ];
 
 export default function ReleasesPage() {
@@ -92,18 +86,12 @@ export default function ReleasesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [selectedRelease, setSelectedRelease] = useState<AppRelease | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string>("");
-
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterPlatform, setFilterPlatform] = useState<string>("all");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
 
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>("windows");
   const [uploadTarget, setUploadTarget] = useState<string>("supabase");
@@ -215,7 +203,7 @@ export default function ReleasesPage() {
         isMandatory,
         fileUrl: uploadResult.url!,
         fileSize: uploadResult.fileSize!,
-        uploadTarget: uploadTarget as "supabase" | "both",
+        uploadTarget: uploadTarget as "supabase" | "cloudbase",
       });
 
       if (result.success) {
@@ -239,72 +227,65 @@ export default function ReleasesPage() {
     setUploadTarget("supabase");
     setIsActive(true);
     setIsMandatory(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   }
 
-  async function handleUpdate(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!selectedRelease) return;
+  function openCreateDialog(platform?: Platform, source?: AppRelease["source"]) {
+    resetFormState();
+    if (platform) {
+      setSelectedPlatform(platform);
+    }
+    if (source) {
+      setUploadTarget(source === "cloudbase" ? "cloudbase" : "supabase");
+    }
+    setCreateDialogOpen(true);
+  }
 
-    setFormLoading(true);
-    setFormError(null);
-
-    const formData = new FormData(e.currentTarget);
-    const result = await updateRelease(selectedRelease.id, formData);
-
+  async function handleDelete(release: AppRelease) {
+    if (!confirm(`确认删除 ${release.platform} v${release.version}？`)) {
+      return;
+    }
+    setActionLoadingId(release.id);
+    const result = await deleteRelease(release.id);
     if (result.success) {
-      setEditDialogOpen(false);
-      setSelectedRelease(null);
       loadReleases();
     } else {
-      setFormError(result.error || "更新失败");
+      setError(result.error || "删除失败");
     }
-    setFormLoading(false);
+    setActionLoadingId(null);
   }
 
-  async function handleDelete() {
-    if (!selectedRelease) return;
-
-    setFormLoading(true);
-    const result = await deleteRelease(selectedRelease.id);
-
-    if (result.success) {
-      setDeleteDialogOpen(false);
-      setSelectedRelease(null);
-      loadReleases();
-    } else {
-      setFormError(result.error || "删除失败");
+  const latestReleases = (() => {
+    const sorted = [...releases]
+      .filter((release) => release.file_url || release.cloudbase_file_id)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const seen = new Map<string, AppRelease>();
+    for (const release of sorted) {
+      const sourceKey = release.source === "both" ? "both" : release.source;
+      const key = `${release.platform}-${sourceKey}`;
+      if (!seen.has(key)) {
+        seen.set(key, release);
+      }
     }
-    setFormLoading(false);
-  }
-
-  async function handleToggleStatus(release: AppRelease) {
-    const result = await toggleReleaseStatus(release.id, !release.is_active);
-    if (result.success) {
-      loadReleases();
-    }
-  }
-
-  const filteredReleases = releases.filter((release) => {
-    if (searchTerm && !release.version.toLowerCase().includes(searchTerm.toLowerCase())) {
-      return false;
-    }
-    if (filterPlatform !== "all" && release.platform !== filterPlatform) {
-      return false;
-    }
-    if (filterStatus === "active" && !release.is_active) {
-      return false;
-    }
-    if (filterStatus === "inactive" && release.is_active) {
-      return false;
-    }
-    return true;
-  });
+    return Array.from(seen.values());
+  })();
 
   function formatFileSize(bytes?: number | null): string {
     if (!bytes) return "-";
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function formatReleaseDate(value?: string | null): string {
+    if (!value) return "-";
+    return new Date(value).toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
   }
 
   function getPlatformIcon(platform: Platform) {
@@ -314,59 +295,27 @@ export default function ReleasesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-bold">发布版本</h1>
-          <p className="text-gray-500">管理应用各平台的发布版本</p>
+          <p className="text-gray-500">
+            每个平台仅展示最新的已上传版本，国际版和国内版均支持替换上传。
+          </p>
         </div>
-        <Button onClick={() => setCreateDialogOpen(true)}>
+        <Button onClick={() => openCreateDialog()}>
           <Plus className="w-4 h-4 mr-2" />
-          新建版本
+          上传新版本
         </Button>
       </div>
-
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-wrap gap-4">
-            <div className="flex-1 min-w-[200px]">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <Input
-                  placeholder="搜索版本号..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <Select value={filterPlatform} onValueChange={setFilterPlatform}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="平台筛选" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部平台</SelectItem>
-                {PLATFORMS.map((p) => (
-                  <SelectItem key={p.value} value={p.value}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-[120px]">
-                <SelectValue placeholder="状态筛选" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="active">已启用</SelectItem>
-                <SelectItem value="inactive">已禁用</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="outline" onClick={loadReleases}>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              刷新
-            </Button>
-          </div>
+        <CardContent className="flex flex-wrap items-center justify-between gap-4 border-b">
+          <p className="text-sm text-gray-500">
+            如果前端需要读取版本信息，请确保对应平台存在上传记录；点击“替换上传”即可更新当前版本。
+          </p>
+          <Button variant="outline" size="sm" onClick={loadReleases}>
+            <Loader2 className="w-4 h-4 mr-2" />
+            刷新列表
+          </Button>
         </CardContent>
       </Card>
 
@@ -382,100 +331,68 @@ export default function ReleasesPage() {
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
             </div>
-          ) : filteredReleases.length === 0 ? (
+          ) : latestReleases.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
-              暂无版本，点击上方按钮创建
+              暂无已上传版本，点击“上传新版本”即刻开始
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>平台</TableHead>
-                  <TableHead>版本号</TableHead>
-                  <TableHead>文件大小</TableHead>
-                  <TableHead>来源</TableHead>
-                  <TableHead>强制更新</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>创建时间</TableHead>
+                  <TableHead>当前版本</TableHead>
+                  <TableHead>发布时间</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredReleases.map((release) => (
-                  <TableRow key={release.id}>
+                {latestReleases.map((release) => (
+                  <TableRow key={release.platform}>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        {getPlatformIcon(release.platform)}
-                        <span>
-                          {PLATFORMS.find((p) => p.value === release.platform)?.label}
-                        </span>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          {getPlatformIcon(release.platform)}
+                          <span className="font-medium">
+                            {PLATFORMS.find((p) => p.value === release.platform)?.label}
+                          </span>
+                        </div>
+                        <Badge variant={RELEASE_SOURCE_VARIANTS[release.source]}>
+                          {RELEASE_SOURCE_LABELS[release.source]}
+                        </Badge>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono font-medium">
+                    <TableCell className="font-mono text-lg font-semibold">
                       v{release.version}
+                      {release.variant && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          {release.variant}
+                        </span>
+                      )}
                     </TableCell>
-                    <TableCell>{formatFileSize(release.file_size)}</TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          release.source === "both"
-                            ? "default"
-                            : release.source === "supabase"
-                            ? "secondary"
-                            : "outline"
-                        }
-                      >
-                        {release.source === "both"
-                          ? "双端"
-                          : release.source === "supabase"
-                          ? "国际版"
-                          : "国内版"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={release.is_mandatory ? "destructive" : "secondary"}>
-                        {release.is_mandatory ? "是" : "否"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={release.is_active}
-                        onCheckedChange={() => handleToggleStatus(release)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-gray-500 text-sm">
-                      {new Date(release.created_at).toLocaleDateString()}
+                    <TableCell className="text-gray-500">
+                      {formatReleaseDate(release.created_at)}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
                         <Button
-                          variant="ghost"
-                          size="icon"
-                          asChild
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openCreateDialog(release.platform, release.source)}
                         >
-                          <a href={release.file_url} target="_blank" rel="noopener">
-                            <Download className="w-4 h-4" />
-                          </a>
+                          替换上传
                         </Button>
                         <Button
                           variant="ghost"
-                          size="icon"
-                          onClick={() => {
-                            setSelectedRelease(release);
-                            setEditDialogOpen(true);
-                          }}
+                          size="sm"
+                          className="text-red-500"
+                          onClick={() => handleDelete(release)}
+                          disabled={actionLoadingId === release.id}
                         >
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => {
-                            setSelectedRelease(release);
-                            setDeleteDialogOpen(true);
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4 text-red-500" />
+                          {actionLoadingId === release.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            "删除"
+                          )}
                         </Button>
                       </div>
                     </TableCell>
@@ -494,6 +411,7 @@ export default function ReleasesPage() {
           setFormError(null);
           setUploadProgress(null);
           setUploadStatus("");
+          resetFormState();
         }
       }}>
         <DialogContent className="max-w-2xl">
@@ -658,121 +576,6 @@ export default function ReleasesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* 编辑对话框 */}
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑版本</DialogTitle>
-            <DialogDescription>修改版本信息</DialogDescription>
-          </DialogHeader>
-          {selectedRelease && (
-            <form onSubmit={handleUpdate}>
-              <div className="grid gap-4 py-4">
-                {formError && (
-                  <Alert variant="destructive">
-                    <AlertDescription>{formError}</AlertDescription>
-                  </Alert>
-                )}
-
-                <div className="space-y-2">
-                  <Label htmlFor="edit-releaseNotes">更新说明</Label>
-                  <Textarea
-                    id="edit-releaseNotes"
-                    name="releaseNotes"
-                    defaultValue={selectedRelease.release_notes || ""}
-                    rows={3}
-                  />
-                </div>
-
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="hidden"
-                      name="isActive"
-                      id="edit-isActive-hidden"
-                      defaultValue={selectedRelease.is_active ? "true" : "false"}
-                    />
-                    <Switch
-                      id="edit-isActive"
-                      defaultChecked={selectedRelease.is_active}
-                      onCheckedChange={(checked) => {
-                        const input = document.getElementById("edit-isActive-hidden") as HTMLInputElement;
-                        if (input) input.value = checked ? "true" : "false";
-                      }}
-                    />
-                    <Label htmlFor="edit-isActive">启用状态</Label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="hidden"
-                      name="isMandatory"
-                      id="edit-isMandatory-hidden"
-                      defaultValue={selectedRelease.is_mandatory ? "true" : "false"}
-                    />
-                    <Switch
-                      id="edit-isMandatory"
-                      defaultChecked={selectedRelease.is_mandatory}
-                      onCheckedChange={(checked) => {
-                        const input = document.getElementById("edit-isMandatory-hidden") as HTMLInputElement;
-                        if (input) input.value = checked ? "true" : "false";
-                      }}
-                    />
-                    <Label htmlFor="edit-isMandatory">强制更新</Label>
-                  </div>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setEditDialogOpen(false);
-                    setSelectedRelease(null);
-                    setFormError(null);
-                  }}
-                >
-                  取消
-                </Button>
-                <Button type="submit" disabled={formLoading}>
-                  {formLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                  保存
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 删除确认对话框 */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认删除</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定要删除版本 v{selectedRelease?.version} ({selectedRelease?.platform}) 吗？
-              此操作不可撤销。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setSelectedRelease(null);
-                setFormError(null);
-              }}
-            >
-              取消
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              className="bg-red-500 hover:bg-red-600"
-              disabled={formLoading}
-            >
-              {formLoading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

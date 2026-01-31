@@ -461,6 +461,7 @@ export const en = {
       "Verification code has been sent to your email, please check and enter the code.",
     otpResent: "Verification code has been resent to your email.",
     registrationSuccess: "Registration successful! Logging in...",
+    registrationEmailSent: "Registration successful! We have sent a confirmation email to your inbox. Please check your email and click the confirmation link to complete registration.",
     passwordResetSuccess:
       "Password reset successful, please log in with your new password.",
     enterNewPassword: "Please enter new password (at least 6 characters)",
@@ -658,5 +659,77 @@ export const en = {
     },
     systemRequirements: "System Requirements",
     releaseNotes: "Release Notes",
+  },
+
+  // ==================== Support ====================
+  support: {
+    title: "MultiGPT Support",
+    subtitle: "If you encounter any issues while using our app, please contact us through the following methods.",
+    contact: "Contact Us",
+    email: "Email",
+    faq: "Frequently Asked Questions",
+    questions: {
+      resetPassword: {
+        q: "How do I reset my password?",
+        a: "Go to the settings page in the app and select \"Reset Password\". Follow the instructions sent to your email.",
+      },
+      noInternet: {
+        q: "The app won't connect to the internet. What should I do?",
+        a: "Check your internet connection and try restarting the app. If the problem persists, contact our support team.",
+      },
+      update: {
+        q: "How do I update the app?",
+        a: "Updates are available through your device's app store. Check for updates regularly.",
+      },
+      bugReport: {
+        q: "I found a bug. How can I report it?",
+        a: "Please use the feedback form below or email us with details about the issue.",
+      },
+    },
+    feedback: "Send Feedback",
+    form: {
+      name: "Name",
+      email: "Email",
+      subject: "Subject",
+      message: "Message",
+      send: "Send Message",
+    },
+    thankYou: "Thank you for your feedback! We will respond as soon as possible.",
+  },
+
+  // ==================== Support ====================
+  support: {
+    title: "MultiGPT Support",
+    subtitle: "If you encounter any issues while using our app, please contact us through the following methods:",
+    contact: "Contact Information",
+    email: "Email",
+    faq: "Frequently Asked Questions",
+    questions: {
+      resetPassword: {
+        q: "How to reset password?",
+        a: "Click the 'Forgot Password' link on the login page and follow the instructions to reset your password.",
+      },
+      noInternet: {
+        q: "What if the app can't connect to the internet?",
+        a: "Please check your network connection and ensure the app has permission to access the internet.",
+      },
+      update: {
+        q: "How to update the app?",
+        a: "Check for updates within the app or in the app store, and download the latest version.",
+      },
+      bugReport: {
+        q: "How to submit feedback?",
+        a: "Please contact us via the email above, providing a detailed description of the issue.",
+      },
+    },
+    feedback: "Feedback Form",
+    form: {
+      name: "Name",
+      email: "Email",
+      subject: "Subject",
+      message: "Message",
+      send: "Send Message",
+    },
+    thankYou: "Thank you for your feedback! We will respond as soon as possible.",
   },
 } as const;

@@ -451,6 +451,7 @@ export const zh = {
     otpSent: "验证码已发送到您的邮箱，请检查并输入验证码。",
     otpResent: "验证码已重新发送到您的邮箱。",
     registrationSuccess: "注册成功！正在登录...",
+    registrationEmailSent: "注册成功！我们已向您的邮箱发送一封确认邮件。请检查您的邮箱并点击确认链接以完成注册。",
     passwordResetSuccess: "密码重置成功，请使用新密码登录。",
     enterNewPassword: "请输入新密码（至少6位）",
     confirmNewPassword: "请再次输入新密码",
@@ -641,5 +642,77 @@ export const zh = {
     },
     systemRequirements: "系统要求",
     releaseNotes: "更新日志",
+  },
+
+  // ==================== Support ====================
+  support: {
+    title: "MultiGPT 技术支持",
+    subtitle: "如果您在使用过程中遇到任何问题，请通过以下方式联系我们：",
+    contact: "联系我们",
+    email: "邮箱",
+    faq: "常见问题",
+    questions: {
+      resetPassword: {
+        q: "如何重置密码？",
+        a: "进入应用设置页面，选择\"重置密码\"。按照发送到您邮箱的说明操作。",
+      },
+      noInternet: {
+        q: "应用无法联网怎么办？",
+        a: "检查您的网络连接并尝试重启应用。如果问题持续，请联系我们的支持团队。",
+      },
+      update: {
+        q: "如何更新应用？",
+        a: "更新通过您设备的应用商店提供。请定期检查更新。",
+      },
+      bugReport: {
+        q: "发现bug如何报告？",
+        a: "请使用下面的反馈表单或发送邮件给我们，提供问题的详细信息。",
+      },
+    },
+    feedback: "发送反馈",
+    form: {
+      name: "姓名",
+      email: "邮箱",
+      subject: "主题",
+      message: "消息",
+      send: "发送消息",
+    },
+    thankYou: "感谢您的反馈！我们会尽快回复。",
+  },
+
+  // ==================== Support ====================
+  support: {
+    title: "MultiGPT 技术支持",
+    subtitle: "如果您在使用过程中遇到任何问题，请通过以下方式联系我们：",
+    contact: "联系方式",
+    email: "邮箱",
+    faq: "常见问题",
+    questions: {
+      resetPassword: {
+        q: "如何重置密码？",
+        a: "在登录页面点击“忘记密码”链接，按照提示重置密码。",
+      },
+      noInternet: {
+        q: "App 无法联网怎么办？",
+        a: "请检查您的网络连接，确保 App 有访问互联网的权限。",
+      },
+      update: {
+        q: "如何更新 App？",
+        a: "在 App 内部或应用商店检查更新，下载最新版本。",
+      },
+      bugReport: {
+        q: "如何提交反馈？",
+        a: "请通过上方邮箱联系我们，提供详细的问题描述。",
+      },
+    },
+    feedback: "反馈表单",
+    form: {
+      name: "姓名",
+      email: "邮箱",
+      subject: "主题",
+      message: "消息",
+      send: "发送消息",
+    },
+    thankYou: "感谢您的反馈！我们会尽快回复。",
   },
 } as const;
