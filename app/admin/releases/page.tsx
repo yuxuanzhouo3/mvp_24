@@ -17,7 +17,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -80,6 +79,9 @@ const UPLOAD_TARGETS = [
   { value: "cloudbase", label: "国内版 (CloudBase)" },
 ];
 
+const DEFAULT_RELEASE_IS_ACTIVE = true;
+const DEFAULT_RELEASE_IS_MANDATORY = false;
+
 export default function ReleasesPage() {
   const [releases, setReleases] = useState<AppRelease[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,8 +97,6 @@ export default function ReleasesPage() {
 
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>("windows");
   const [uploadTarget, setUploadTarget] = useState<string>("supabase");
-  const [isActive, setIsActive] = useState(true);
-  const [isMandatory, setIsMandatory] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function loadReleases() {
@@ -148,8 +148,14 @@ export default function ReleasesPage() {
         serverFormData.append("platform", selectedPlatform);
         serverFormData.append("variant", "");
         serverFormData.append("releaseNotes", releaseNotes || "");
-        serverFormData.append("isActive", isActive ? "true" : "false");
-        serverFormData.append("isMandatory", isMandatory ? "true" : "false");
+        serverFormData.append(
+          "isActive",
+          DEFAULT_RELEASE_IS_ACTIVE ? "true" : "false"
+        );
+        serverFormData.append(
+          "isMandatory",
+          DEFAULT_RELEASE_IS_MANDATORY ? "true" : "false"
+        );
         serverFormData.append("file", file);
         serverFormData.append("uploadTarget", "cloudbase");
 
@@ -199,8 +205,8 @@ export default function ReleasesPage() {
         platform: selectedPlatform,
         variant: null,
         releaseNotes: releaseNotes || null,
-        isActive,
-        isMandatory,
+        isActive: DEFAULT_RELEASE_IS_ACTIVE,
+        isMandatory: DEFAULT_RELEASE_IS_MANDATORY,
         fileUrl: uploadResult.url!,
         fileSize: uploadResult.fileSize!,
         uploadTarget: uploadTarget as "supabase" | "cloudbase",
@@ -225,8 +231,6 @@ export default function ReleasesPage() {
 
   function resetFormState() {
     setUploadTarget("supabase");
-    setIsActive(true);
-    setIsMandatory(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -523,26 +527,6 @@ export default function ReleasesPage() {
                 />
               </div>
 
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="isActive"
-                    checked={isActive}
-                    onCheckedChange={setIsActive}
-                    disabled={formLoading}
-                  />
-                  <Label htmlFor="isActive">立即启用</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="isMandatory"
-                    checked={isMandatory}
-                    onCheckedChange={setIsMandatory}
-                    disabled={formLoading}
-                  />
-                  <Label htmlFor="isMandatory">强制更新</Label>
-                </div>
-              </div>
             </div>
             <DialogFooter>
               <Button

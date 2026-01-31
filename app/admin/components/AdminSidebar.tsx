@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import {
   Image,
   Package,
-  FolderOpen,
   Settings,
   LogOut,
   LayoutDashboard,
@@ -34,11 +33,6 @@ const menuItems = [
     title: "发布版本",
     href: "/admin/releases",
     icon: Package,
-  },
-  {
-    title: "文件管理",
-    href: "/admin/files",
-    icon: FolderOpen,
   },
   {
     title: "系统设置",
