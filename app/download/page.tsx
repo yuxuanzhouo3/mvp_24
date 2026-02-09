@@ -97,7 +97,7 @@ export default function DownloadPage() {
       return acc;
     }
     const hasDownloadUrl = isChina
-      ? Boolean(release.cloudbase_file_id)
+      ? Boolean(release.cloudbase_file_id || release.file_url)
       : Boolean(release.file_url);
     if (!hasDownloadUrl) {
       return acc;

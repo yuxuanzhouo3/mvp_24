@@ -74,11 +74,6 @@ const RELEASE_SOURCE_VARIANTS: Record<AppRelease["source"], "default" | "seconda
   both: "default",
 };
 
-const UPLOAD_TARGETS = [
-  { value: "supabase", label: "国际版 (Supabase)" },
-  { value: "cloudbase", label: "国内版 (CloudBase)" },
-];
-
 const DEFAULT_RELEASE_IS_ACTIVE = true;
 const DEFAULT_RELEASE_IS_MANDATORY = false;
 
@@ -96,7 +91,6 @@ export default function ReleasesPage() {
   const [uploadStatus, setUploadStatus] = useState<string>("");
 
   const [selectedPlatform, setSelectedPlatform] = useState<Platform>("windows");
-  const [uploadTarget, setUploadTarget] = useState<string>("supabase");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function loadReleases() {
@@ -140,41 +134,8 @@ export default function ReleasesPage() {
     }
 
     try {
-      // CloudBase 上传使用 Server Action（受 body size 限制）
-      if (uploadTarget === "cloudbase") {
-        setUploadStatus("正在上传到 CloudBase...");
-        const serverFormData = new FormData();
-        serverFormData.append("version", version);
-        serverFormData.append("platform", selectedPlatform);
-        serverFormData.append("variant", "");
-        serverFormData.append("releaseNotes", releaseNotes || "");
-        serverFormData.append(
-          "isActive",
-          DEFAULT_RELEASE_IS_ACTIVE ? "true" : "false"
-        );
-        serverFormData.append(
-          "isMandatory",
-          DEFAULT_RELEASE_IS_MANDATORY ? "true" : "false"
-        );
-        serverFormData.append("file", file);
-        serverFormData.append("uploadTarget", "cloudbase");
-
-        const result = await createRelease(serverFormData);
-        if (result.success) {
-          setCreateDialogOpen(false);
-          setUploadProgress(null);
-          setUploadStatus("");
-          resetFormState();
-          loadReleases();
-        } else {
-          setFormError(result.error || "创建失败");
-        }
-        setFormLoading(false);
-        return;
-      }
-
-      // Supabase 或双端上传：先客户端直传到 Supabase
-      setUploadStatus("正在上传文件到 Supabase...");
+      // 客户端直传到主要存储（显示进度）
+      setUploadStatus("正在上传文件...");
       const filePath = generateReleasePath(
         selectedPlatform,
         null,
@@ -209,7 +170,6 @@ export default function ReleasesPage() {
         isMandatory: DEFAULT_RELEASE_IS_MANDATORY,
         fileUrl: uploadResult.url!,
         fileSize: uploadResult.fileSize!,
-        uploadTarget: uploadTarget as "supabase" | "cloudbase",
       });
 
       if (result.success) {
@@ -230,7 +190,6 @@ export default function ReleasesPage() {
   }
 
   function resetFormState() {
-    setUploadTarget("supabase");
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -240,9 +199,6 @@ export default function ReleasesPage() {
     resetFormState();
     if (platform) {
       setSelectedPlatform(platform);
-    }
-    if (source) {
-      setUploadTarget(source === "cloudbase" ? "cloudbase" : "supabase");
     }
     setCreateDialogOpen(true);
   }
@@ -466,26 +422,6 @@ export default function ReleasesPage() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="uploadTarget">上传目标 *</Label>
-                <Select
-                  value={uploadTarget}
-                  onValueChange={setUploadTarget}
-                  disabled={formLoading}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {UPLOAD_TARGETS.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
-                        {t.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
                 <Label htmlFor="file">安装包文件 *</Label>
                 <Input
                   id="file"
@@ -496,9 +432,7 @@ export default function ReleasesPage() {
                   className="cursor-pointer"
                 />
                 <p className="text-xs text-gray-500">
-                  {uploadTarget === "cloudbase"
-                    ? "CloudBase 上传受服务器限制（建议小于 50MB）"
-                    : "支持任意大小文件，直接上传到云存储"}
+                  支持任意大小文件，直接上传到云存储
                 </p>
               </div>
 

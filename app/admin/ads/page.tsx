@@ -3,18 +3,23 @@
 import { useState, useEffect, useRef } from "react";
 import {
   listAdvertisements,
-  createAdvertisement,
+  createAdvertisementWithUrl,
   updateAdvertisement,
   deleteAdvertisement,
   toggleAdvertisementStatus,
   Advertisement,
   AdPosition,
 } from "@/actions/admin-ads";
+import {
+  uploadToStorage,
+  UploadProgress,
+} from "@/lib/admin/client-upload";
+import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -72,16 +77,11 @@ const POSITIONS: { value: AdPosition; label: string }[] = [
   { value: "sidebar", label: "侧边栏" },
 ];
 
-const UPLOAD_TARGETS = [
-  { value: "both", label: "双端同步 (推荐)" },
-  { value: "supabase", label: "仅国际版 (Supabase)" },
-  { value: "cloudbase", label: "仅国内版 (CloudBase)" },
-];
-
 export default function AdsPage() {
   const [ads, setAds] = useState<Advertisement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   // 对话框状态
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -92,6 +92,8 @@ export default function AdsPage() {
   // 表单状态
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<string>("");
 
   // 搜索和筛选
   const [searchTerm, setSearchTerm] = useState("");
@@ -108,7 +110,12 @@ export default function AdsPage() {
     setError(null);
     const result = await listAdvertisements();
     if (result.success) {
-      setAds(result.data || []);
+      const normalized = (result.data || []).map((ad) => ({
+        ...ad,
+        id: ad.id || (ad as any)._id || (ad as any)._ID || (ad as any).docId,
+      }));
+      console.log("[loadAds] Loaded ads:", normalized.map(a => ({ id: a.id, title: a.title, is_active: a.is_active })));
+      setAds(normalized);
     } else {
       setError(result.error || "加载失败");
     }
@@ -124,17 +131,80 @@ export default function AdsPage() {
     e.preventDefault();
     setFormLoading(true);
     setFormError(null);
+    setUploadProgress(null);
+    setUploadStatus("");
 
     const formData = new FormData(e.currentTarget);
-    const result = await createAdvertisement(formData);
+    const title = formData.get("title") as string;
+    const position = formData.get("position") as AdPosition;
+    const mediaType = formData.get("mediaType") as "image" | "video";
+    const targetUrl = formData.get("targetUrl") as string;
+    const priority = parseInt(formData.get("priority") as string) || 0;
+    const isActive = formData.get("isActive") === "true";
+    const file = formData.get("file") as File;
 
-    if (result.success) {
-      setCreateDialogOpen(false);
-      setPreviewUrl(null);
-      loadAds();
-    } else {
-      setFormError(result.error || "创建失败");
+    if (!title || !position || !mediaType) {
+      setFormError("请填写必要字段");
+      setFormLoading(false);
+      return;
     }
+
+    if (!file || file.size === 0) {
+      setFormError("请上传媒体文件");
+      setFormLoading(false);
+      return;
+    }
+
+    try {
+      // 生成唯一文件名
+      const ext = file.name.split(".").pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+
+      // 客户端直传文件
+      setUploadStatus("正在上传文件...");
+      const uploadResult = await uploadToStorage(
+        file,
+        "ads",
+        fileName,
+        (progress) => {
+          setUploadProgress(progress);
+          setUploadStatus(`上传中... ${progress.percentage}%`);
+        }
+      );
+
+      if (!uploadResult.success) {
+        setFormError(uploadResult.error || "文件上传失败");
+        setFormLoading(false);
+        return;
+      }
+
+      // 创建广告记录
+      setUploadStatus("正在创建广告...");
+      const result = await createAdvertisementWithUrl({
+        title,
+        position,
+        mediaType,
+        mediaUrl: uploadResult.url!,
+        targetUrl: targetUrl || undefined,
+        priority,
+        isActive,
+        fileSize: uploadResult.fileSize!,
+      });
+
+      if (result.success) {
+        setCreateDialogOpen(false);
+        setPreviewUrl(null);
+        setUploadProgress(null);
+        setUploadStatus("");
+        loadAds();
+      } else {
+        setFormError(result.error || "创建失败");
+      }
+    } catch (err) {
+      console.error("Create advertisement error:", err);
+      setFormError("创建失败，请重试");
+    }
+
     setFormLoading(false);
   }
 
@@ -178,9 +248,25 @@ export default function AdsPage() {
 
   // 切换状态
   async function handleToggleStatus(ad: Advertisement) {
-    const result = await toggleAdvertisementStatus(ad.id, !ad.is_active);
-    if (result.success) {
-      loadAds();
+    const adId = ad.id || (ad as any)._id || (ad as any)._ID || (ad as any).docId;
+    if (!adId) {
+      setError("广告ID缺失，无法切换状态");
+      return;
+    }
+    setTogglingId(adId);
+    setError(null);
+    try {
+      const result = await toggleAdvertisementStatus(adId, !ad.is_active);
+      if (result.success) {
+        await loadAds();
+      } else {
+        setError(result.error || "切换状态失败");
+      }
+    } catch (err) {
+      console.error("Toggle status error:", err);
+      setError("切换状态失败，请重试");
+    } finally {
+      setTogglingId(null);
     }
   }
 
@@ -362,6 +448,7 @@ export default function AdsPage() {
                     <TableCell>
                       <Switch
                         checked={ad.is_active}
+                        disabled={togglingId === ad.id}
                         onCheckedChange={() => handleToggleStatus(ad)}
                       />
                     </TableCell>
@@ -448,21 +535,6 @@ export default function AdsPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="uploadTarget">上传目标 *</Label>
-                  <Select name="uploadTarget" defaultValue="both">
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {UPLOAD_TARGETS.map((target) => (
-                        <SelectItem key={target.value} value={target.value}>
-                          {target.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
               </div>
 
               <div className="space-y-2">
@@ -486,6 +558,20 @@ export default function AdsPage() {
                   </div>
                 )}
               </div>
+
+              {/* 上传进度 */}
+              {uploadProgress && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{uploadStatus}</span>
+                    <span className="font-medium">{uploadProgress.percentage}%</span>
+                  </div>
+                  <Progress value={uploadProgress.percentage} className="h-2" />
+                  <p className="text-xs text-gray-500">
+                    {formatFileSize(uploadProgress.loaded)} / {formatFileSize(uploadProgress.total)}
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="targetUrl">跳转链接</Label>

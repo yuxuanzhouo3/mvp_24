@@ -28,6 +28,9 @@ async function handleRegionDownload(
   // CN：使用 CloudBase，INTL：使用 Supabase
   if (region === "CN") {
     if (!release.cloudbase_file_id) {
+      if (release.file_url) {
+        return handleSupabaseDownload(release);
+      }
       return NextResponse.json(
         { error: `国内版未配置 CloudBase fileID: ${platform}` },
         { status: 400 }

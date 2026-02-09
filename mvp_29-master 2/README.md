@@ -1,0 +1,172 @@
+# MornSpeaker - 智能实时语音翻译与协作平台
+
+MornSpeaker 是一款基于 Next.js 15 和 React 19 构建的现代化实时语音翻译聊天应用。它融合了先进的 AI 技术，支持多语言实时转录、翻译，并提供无缝的跨语言沟通体验。项目集成了完善的用户认证、房间管理以及强大的管理员后台系统。
+
+## 🌟 核心功能
+
+### 🗣️ 实时通讯与翻译
+- **实时语音转文字 (ASR)**: 集成阿里云 DashScope (Qwen) 等高精度模型，支持毫秒级语音转录。
+- **智能即时翻译**: 自动将转录内容翻译为目标语言，支持多种语言互译。
+- **文本转语音 (TTS)**: 支持高质量的语音合成播放，实现"听得懂"的跨语言对话。
+- **多模式交互**: 支持语音输入与键盘输入混合使用。
+
+### 🏠 房间与协作
+- **动态房间管理**: 用户可自由创建、加入聊天房间。
+- **实时同步**: 基于 Supabase/WebSockets 实现消息与状态的毫秒级同步。
+- **成员管理**: 房主可管理房间成员，支持踢出、禁言等操作。
+
+### 🛡️ 系统与管理
+- **安全认证**: 集成 Supabase Auth 和自定义 JWT 认证体系，保障用户数据安全。
+- **管理员后台**: 独立的 Admin Dashboard，提供数据可视化、用户管理、房间监控及广告位管理功能。
+- **广告投放系统**: 内置广告位管理模块，支持横幅广告的动态配置与展示。
+
+### 🌍 国际化与适配
+- **多语言界面 (i18n)**: 完整的国际化支持，通过 Context API 实现语言动态切换。
+- **响应式设计**: 精心打磨的 UI/UX，完美适配移动端 (Mobile)、平板 (Tablet) 和桌面端 (Desktop)。
+
+---
+
+## 🛠 技术栈
+
+### 前端架构
+- **框架**: [Next.js 15 (App Router)](https://nextjs.org/)
+- **语言**: [TypeScript](https://www.typescriptlang.org/)
+- **UI 组件**: [Radix UI](https://www.radix-ui.com/) (无头组件库) + [Shadcn UI](https://ui.shadcn.com/)
+- **样式系统**: [Tailwind CSS 4](https://tailwindcss.com/) + `tailwindcss-animate`
+- **图标库**: [Lucide React](https://lucide.dev/)
+- **状态管理**: React Context + Hooks
+
+### 后端与数据
+- **数据库 ORM**: [Prisma ORM](https://www.prisma.io/) (v7.2+)
+- **数据库**: MySQL / MariaDB (支持通过 Prisma Adapter 连接)
+- **BaaS 服务**: [Supabase](https://supabase.com/) (用于实时订阅、认证辅助)
+- **API 路由**: Next.js Route Handlers
+
+### AI 服务集成
+- **语音识别 (ASR)**: Alibaba DashScope (Qwen-Audio)
+- **大语言模型 (LLM)**: OpenAI / Mistral AI / ModelScope
+- **SDK**: Vercel AI SDK
+
+---
+
+## 📂 目录结构概览
+
+```text
+MornSpeaker/
+├── app/                    # Next.js App Router 路由目录
+│   ├── admin/              # 管理员后台子应用
+│   ├── api/                # 后端 API 接口 (Auth, Translation, etc.)
+│   ├── auth/               # 认证相关页面
+│   └── (routes)/           # 主应用路由
+├── components/             # React 组件库
+│   ├── ui/                 # 通用 UI 基础组件 (Button, Input, etc.)
+│   ├── admin/              # 后台专用组件
+│   └── ...                 # 业务组件 (ChatArea, VoiceControls, etc.)
+├── lib/                    # 核心工具库
+│   ├── prisma.ts           # Prisma 客户端实例 (单例模式)
+│   ├── i18n.ts             # 国际化配置与工具
+│   ├── utils.ts            # 通用辅助函数
+│   └── store/              # 数据存储抽象层
+├── hooks/                  # 自定义 React Hooks
+├── prisma/                 # Prisma 数据库配置
+│   └── schema.prisma       # 数据库模型定义
+├── public/                 # 静态资源
+└── styles/                 # 全局样式
+```
+
+---
+
+## 🚀 快速开始
+
+### 1. 环境要求
+- Node.js >= 18.17.0
+- npm / pnpm / yarn
+- MySQL 数据库实例 (本地或远程)
+
+### 2. 克隆项目与安装依赖
+
+```bash
+git clone https://github.com/your-repo/MornSpeaker.git
+cd MornSpeaker
+npm install
+# 或者
+pnpm install
+```
+
+### 3. 配置环境变量
+
+复制 `.env.example` 为 `.env.local` 并配置以下关键变量：
+
+```bash
+cp .env.example .env.local
+```
+
+编辑 `.env.local` 文件：
+
+```ini
+# === 数据库配置 (Prisma) ===
+# 格式: mysql://用户名:密码@主机:端口/数据库名
+DATABASE_URL="mysql://root:password@localhost:3306/mornspeaker"
+
+# === 认证配置 ===
+JWT_SECRET="your-secure-random-string"
+
+# === AI 服务配置 (根据需要配置) ===
+DASHSCOPE_API_KEY="sk-..."
+MISTRAL_API_KEY="..."
+
+# === Supabase 配置 (可选，用于实时功能) ===
+NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="ey..."
+```
+
+### 4. 数据库初始化
+
+使用 Prisma 同步数据库结构：
+
+```bash
+# 生成 Prisma Client
+npx prisma generate
+
+# 推送数据库结构 (开发环境)
+npx prisma db push
+```
+
+### 5. 启动开发服务器
+
+```bash
+npm run dev
+```
+
+访问 [http://localhost:3000](http://localhost:3000) 开始体验。
+
+---
+
+## 🔧 开发指南
+
+### 数据库迁移
+当你修改了 `prisma/schema.prisma` 文件后，请执行以下命令更新数据库和客户端：
+
+```bash
+npx prisma db push
+npx prisma generate
+```
+
+### 国际化 (i18n)
+项目使用自定义的 i18n 方案。如需添加新语言：
+1. 在 `lib/i18n.ts` 中更新 `SUPPORTED_LOCALES`。
+2. 在 `dictionaries/` 目录下添加相应的语言包文件。
+
+---
+
+## 🤝 贡献
+
+我们非常欢迎社区贡献！如果您发现 Bug 或有新功能建议，请：
+1. 提交 Issue 描述问题。
+2. Fork 本仓库并提交 Pull Request。
+
+---
+
+## 📄 许可证
+
+本项目采用 MIT 许可证。详情请参阅 [LICENSE](LICENSE) 文件。

@@ -8,6 +8,7 @@ import { ExportPanel } from "@/components/export-panel";
 import { ChatHistory } from "@/components/chat-history";
 import { ChatHistorySidebar } from "@/components/chat-history-sidebar";
 import { Header } from "@/components/header";
+import { AdDisplay } from "@/components/ad-display";
 import { useApp } from "@/components/app-context";
 import { useUser } from "@/components/user-context";
 import {
@@ -253,6 +254,16 @@ function PlatformContent() {
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
       />
+
+      {/* 悬浮广告 */}
+      {activeView === "workspace" && (
+        <>
+          <AdDisplay position="top" />
+          <AdDisplay position="bottom" />
+          <AdDisplay position="left" />
+          <AdDisplay position="right" />
+        </>
+      )}
 
       {/* 主体布局 - 根据 activeView 显示不同视图 */}
       <main className="flex-1 min-h-0 relative">

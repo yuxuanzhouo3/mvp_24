@@ -63,6 +63,9 @@ const REQUIRED_COLLECTIONS = [
   "wechat_logins",
   "security_logs",
   "refresh_tokens",
+  "admin_users", // 添加管理员用户集合
+  "advertisements", // 广告集合
+  "app_releases", // 应用发布集合
 ];
 
 async function checkCollectionExists(collectionName: string): Promise<boolean> {
@@ -162,12 +165,95 @@ async function initCloudBaseCollections() {
   console.log("     - 复合索引: (isRevoked, expiresAt)");
   console.log("     - 普通索引: expiresAt\n");
 
+  console.log("   admin_users:");
+  console.log("     - 唯一索引: username\n");
+
+  console.log("   advertisements:");
+  console.log("     - 普通索引: created_at (倒序)\n");
+
+  console.log("   app_releases:");
+  console.log("     - 普通索引: created_at (倒序)");
+  console.log("     - 复合索引: (platform, variant)\n");
+
   console.log("4️⃣  创建完成后，重新运行此脚本验证：");
   console.log("   npm run init:cloudbase\n");
+
+  // 创建默认管理员
+  await createDefaultAdmin();
+}
+
+// 创建默认管理员用户
+async function createDefaultAdmin() {
+  console.log("\n👤 检查并创建默认管理员用户...");
+
+  try {
+    // 检查是否已存在管理员
+    const existingAdmin = await db.collection("admin_users").limit(1).get();
+
+    if (existingAdmin.data && existingAdmin.data.length > 0) {
+      console.log("✅ 默认管理员已存在，跳过创建");
+      return;
+    }
+
+    // 创建默认管理员
+    const defaultAdmin = {
+      username: "admin",
+      password_hash: "$2b$10$FzplvF7W18GPKf1IB7LcqO/LgGFDq6vh036PuOMHKB4nlTGgXSef.", // bcrypt hash for "admin123"
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    await db.collection("admin_users").add(defaultAdmin);
+
+    console.log("✅ 默认管理员创建成功");
+    console.log("   用户名: admin");
+    console.log("   密码: admin123");
+    console.log("   ⚠️  请在生产环境中立即修改默认密码！");
+
+  } catch (error) {
+    console.error("❌ 创建默认管理员失败:", error);
+    console.log("   请手动在 CloudBase 控制台创建管理员用户");
+  }
+}
+
+// 重置管理员密码
+async function resetAdminPassword() {
+  console.log("\n🔑 重置管理员密码...");
+
+  try {
+    const newPassword = "admin123";
+    const newHash = "$2b$10$FzplvF7W18GPKf1IB7LcqO/LgGFDq6vh036PuOMHKB4nlTGgXSef."; // bcrypt hash for "admin123"
+
+    const result = await db.collection("admin_users").where({
+      username: "admin"
+    }).update({
+      password_hash: newHash,
+      updated_at: new Date().toISOString(),
+    });
+
+    if (result.updated > 0) {
+      console.log("✅ 管理员密码重置成功");
+      console.log("   用户名: admin");
+      console.log("   密码: admin123");
+    } else {
+      console.log("❌ 未找到管理员用户");
+    }
+
+  } catch (error) {
+    console.error("❌ 重置密码失败:", error);
+  }
 }
 
 // 运行初始化
-initCloudBaseCollections().catch((error) => {
-  console.error("❌ 初始化失败:", error);
-  process.exit(1);
-});
+const command = process.argv[2];
+if (command === "reset-admin") {
+  resetAdminPassword().catch((error) => {
+    console.error("❌ 重置失败:", error);
+    process.exit(1);
+  });
+} else {
+  initCloudBaseCollections().catch((error) => {
+    console.error("❌ 初始化失败:", error);
+    process.exit(1);
+  });
+}

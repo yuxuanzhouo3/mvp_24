@@ -25,7 +25,7 @@ alter table public.admin_users enable row level security;
 insert into public.admin_users (username, password_hash)
 values (
   'admin',
-  crypt('Admin@123456', gen_salt('bf'))
+  '$2b$12$NRwSA8ETG00/flLujeV1y.Qp7Wg6hrc5ETDHVbxdaFC.jGpbZOs4K'
 )
 on conflict (username) do nothing;
 

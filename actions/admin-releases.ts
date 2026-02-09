@@ -7,6 +7,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { CloudBaseConnector, isCloudBaseConfigured } from "@/lib/admin/cloudbase-connector";
+import { IS_DOMESTIC_VERSION } from "@/config";
 import { getAdminSession } from "@/lib/admin/session";
 import { revalidatePath } from "next/cache";
 
@@ -80,13 +81,41 @@ async function requireAdmin() {
 }
 
 async function deactivateOtherReleases(platform: Platform, variant: Variant | null) {
-  const query = supabaseAdmin.from("app_releases").update({ is_active: false }).eq("platform", platform);
-  if (variant) {
-    query.eq("variant", variant);
+  if (IS_DOMESTIC_VERSION && isCloudBaseConfigured()) {
+    // CloudBase
+    const { db } = await getCloudBase();
+    const query = db.collection("app_releases").where({
+      platform: platform,
+      is_active: true
+    });
+    if (variant) {
+      query.where({
+        variant: variant
+      });
+    } else {
+      query.where({
+        variant: null
+      });
+    }
+    const result = await query.get();
+    if (result.data && result.data.length > 0) {
+      await Promise.all(result.data.map(item =>
+        db.collection("app_releases").doc(item._id).update({
+          is_active: false,
+          updated_at: new Date().toISOString()
+        })
+      ));
+    }
   } else {
-    query.is("variant", null);
+    // Supabase
+    const query = supabaseAdmin.from("app_releases").update({ is_active: false }).eq("platform", platform);
+    if (variant) {
+      query.eq("variant", variant);
+    } else {
+      query.is("variant", null);
+    }
+    await query;
   }
-  await query;
 }
 
 /**
@@ -181,13 +210,12 @@ export async function createReleaseWithUrl(
     isMandatory: boolean;
     fileUrl: string;
     fileSize: number;
-    uploadTarget?: "supabase" | "cloudbase";
   }
 ): Promise<CreateReleaseResult> {
   try {
     await requireAdmin();
 
-    const { version, platform, variant, releaseNotes, isActive, isMandatory, fileUrl, fileSize, uploadTarget = "supabase" } = data;
+    const { version, platform, variant, releaseNotes, isActive, isMandatory, fileUrl, fileSize } = data;
     const normalizedVariant = platform === "macos" ? ("apple-silicon" as Variant) : variant;
     const cloudbaseFileId = data.cloudbaseFileId || (fileUrl.startsWith("cloud://") ? fileUrl : null);
     const downloadFilename = deriveDownloadFilename(fileUrl);
@@ -200,15 +228,63 @@ export async function createReleaseWithUrl(
       return { success: false, error: "文件上传失败" };
     }
 
-    // 确定来源
-    const source = uploadTarget;
+    // 根据部署版本决定主要目标
+    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
+
+    // 确定数据来源
+    let source: "supabase" | "cloudbase" | "both" = primaryTarget as "supabase" | "cloudbase";
+    if (primaryTarget === "supabase" && isCloudBaseConfigured()) {
+      source = "both";
+    } else if (primaryTarget === "cloudbase" && !IS_DOMESTIC_VERSION) {
+      source = "both";
+    }
 
     await deactivateOtherReleases(platform, normalizedVariant);
 
     // 插入数据库记录
-    const { data: release, error } = await supabaseAdmin
-      .from("app_releases")
-      .insert({
+    let release: any;
+
+    if (primaryTarget === "supabase") {
+      const { data: supaData, error } = await supabaseAdmin
+        .from("app_releases")
+        .insert({
+          version,
+          platform,
+          variant: normalizedVariant || null,
+          file_url: fileUrl,
+          file_size: fileSize,
+          release_notes: releaseNotes || null,
+          is_active: isActive,
+          is_mandatory: isMandatory,
+          source,
+          cloudbase_file_id: cloudbaseFileId,
+          download_filename: downloadFilename,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Insert release error:", error);
+        return { success: false, error: "创建版本失败" };
+      }
+      release = supaData;
+
+      // 如果配置了 CloudBase，同步到 CloudBase 数据库
+      if (isCloudBaseConfigured()) {
+        try {
+          const { db } = await getCloudBase();
+          await db.collection("app_releases").add({
+            ...release,
+            cloudbase_file_id: cloudbaseFileId,
+          });
+        } catch (err) {
+          console.error("CloudBase sync error:", err);
+        }
+      }
+    } else {
+      // CloudBase 为主
+      const { db } = await getCloudBase();
+      const result = await db.collection("app_releases").add({
         version,
         platform,
         variant: normalizedVariant || null,
@@ -220,13 +296,42 @@ export async function createReleaseWithUrl(
         source,
         cloudbase_file_id: cloudbaseFileId,
         download_filename: downloadFilename,
-      })
-      .select()
-      .single();
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      release = {
+        id: result.id,
+        ...result.data,
+      };
 
-    if (error) {
-      console.error("Insert release error:", error);
-      return { success: false, error: "创建版本失败" };
+      // 如果不是国内版，也同步到 Supabase
+      if (!IS_DOMESTIC_VERSION) {
+        try {
+          const { data: supaData, error } = await supabaseAdmin
+            .from("app_releases")
+            .insert({
+              version,
+              platform,
+              variant: normalizedVariant || null,
+              file_url: fileUrl,
+              file_size: fileSize,
+              release_notes: releaseNotes || null,
+              is_active: isActive,
+              is_mandatory: isMandatory,
+              source,
+              cloudbase_file_id: cloudbaseFileId,
+              download_filename: downloadFilename,
+            })
+            .select()
+            .single();
+
+          if (error) {
+            console.error("Supabase sync error:", error);
+          }
+        } catch (err) {
+          console.error("Supabase sync error:", err);
+        }
+      }
     }
 
     revalidatePath("/admin/releases");
@@ -254,7 +359,6 @@ export async function createRelease(
     const isActive = formData.get("isActive") === "true";
     const isMandatory = formData.get("isMandatory") === "true";
     const file = formData.get("file") as File;
-    const uploadTarget = (formData.get("uploadTarget") as string) || "both";
     const variant = platform === "macos" ? ("apple-silicon" as Variant) : rawVariant;
 
     if (!version || !platform) {
@@ -272,12 +376,23 @@ export async function createRelease(
     let supabaseUrl: string | null = null;
     let cloudbaseFileId: string | null = null;
 
-    if (uploadTarget === "supabase" || uploadTarget === "both") {
+    // 根据部署版本决定上传目标
+    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
+
+    // 上传到主要目标
+    if (primaryTarget === "supabase") {
       supabaseUrl = await uploadToSupabase(file, fileName);
+    } else if (primaryTarget === "cloudbase" && isCloudBaseConfigured()) {
+      cloudbaseFileId = await uploadToCloudBase(file, fileName);
     }
 
-    if (uploadTarget === "cloudbase" || uploadTarget === "both") {
-      cloudbaseFileId = await uploadToCloudBase(file, fileName);
+    // 如果主要目标失败，尝试另一个
+    if (!supabaseUrl && !cloudbaseFileId) {
+      if (primaryTarget === "supabase" && isCloudBaseConfigured()) {
+        cloudbaseFileId = await uploadToCloudBase(file, fileName);
+      } else if (primaryTarget === "cloudbase") {
+        supabaseUrl = await uploadToSupabase(file, fileName);
+      }
     }
 
     const fileUrl = supabaseUrl || cloudbaseFileId;
@@ -285,20 +400,59 @@ export async function createRelease(
       return { success: false, error: "文件上传失败" };
     }
 
-    let source: "supabase" | "cloudbase" | "both" = "supabase";
+    let source: "supabase" | "cloudbase" | "both" = primaryTarget as "supabase" | "cloudbase";
     if (supabaseUrl && cloudbaseFileId) {
       source = "both";
-    } else if (cloudbaseFileId) {
-      source = "cloudbase";
     }
 
     await deactivateOtherReleases(platform, variant);
 
     const downloadFilename = deriveDownloadFilename(file.name);
 
-    const { data, error } = await supabaseAdmin
-      .from("app_releases")
-      .insert({
+    // 插入数据库
+    let data: any;
+
+    if (primaryTarget === "supabase") {
+      const { data: supaData, error } = await supabaseAdmin
+        .from("app_releases")
+        .insert({
+          version,
+          platform,
+          variant: variant || null,
+          file_url: fileUrl,
+          file_size: file.size,
+          release_notes: releaseNotes || null,
+          is_active: isActive,
+          is_mandatory: isMandatory,
+          source,
+          cloudbase_file_id: cloudbaseFileId,
+          download_filename: downloadFilename,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Insert release error:", error);
+        return { success: false, error: "创建版本失败" };
+      }
+      data = supaData;
+
+      // 同步到 CloudBase
+      if (isCloudBaseConfigured()) {
+        try {
+          const { db } = await getCloudBase();
+          await db.collection("app_releases").add({
+            ...data,
+            cloudbase_file_id: cloudbaseFileId,
+          });
+        } catch (err) {
+          console.error("CloudBase sync error:", err);
+        }
+      }
+    } else {
+      // CloudBase 为主
+      const { db } = await getCloudBase();
+      const result = await db.collection("app_releases").add({
         version,
         platform,
         variant: variant || null,
@@ -310,25 +464,33 @@ export async function createRelease(
         source,
         cloudbase_file_id: cloudbaseFileId,
         download_filename: downloadFilename,
-      })
-      .select()
-      .single();
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      data = {
+        id: result.id,
+        ...result.data,
+      };
 
-    if (error) {
-      console.error("Insert release error:", error);
-      return { success: false, error: "创建版本失败" };
-    }
-
-    // 同步到 CloudBase
-    if (isCloudBaseConfigured() && (uploadTarget === "cloudbase" || uploadTarget === "both")) {
+      // 同步到 Supabase
       try {
-        const { db } = await getCloudBase();
-        await db.collection("app_releases").add({
-          ...data,
-          cloudbase_file_id: cloudbaseFileId,
-        });
+        await supabaseAdmin
+          .from("app_releases")
+          .insert({
+            version,
+            platform,
+            variant: variant || null,
+            file_url: fileUrl,
+            file_size: file.size,
+            release_notes: releaseNotes || null,
+            is_active: isActive,
+            is_mandatory: isMandatory,
+            source,
+            cloudbase_file_id: cloudbaseFileId,
+            download_filename: downloadFilename,
+          });
       } catch (err) {
-        console.error("CloudBase sync error:", err);
+        console.error("Supabase sync error:", err);
       }
     }
 
@@ -347,17 +509,30 @@ export async function listReleases(): Promise<ListReleasesResult> {
   try {
     await requireAdmin();
 
-    const { data, error } = await supabaseAdmin
-      .from("app_releases")
-      .select("*")
-      .order("created_at", { ascending: false });
+    let data: any[] = [];
 
-    if (error) {
-      console.error("List releases error:", error);
-      return { success: false, error: "获取版本列表失败" };
+    if (IS_DOMESTIC_VERSION && isCloudBaseConfigured()) {
+      // 国内版从 CloudBase 读取
+      const { db } = await getCloudBase();
+      const result = await db.collection("app_releases")
+        .orderBy("created_at", "desc")
+        .get();
+      data = result.data || [];
+    } else {
+      // 国际版从 Supabase 读取
+      const { data: supaData, error } = await supabaseAdmin
+        .from("app_releases")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("List releases error:", error);
+        return { success: false, error: "获取版本列表失败" };
+      }
+      data = supaData || [];
     }
 
-    return { success: true, data: data || [] };
+    return { success: true, data };
   } catch (err) {
     console.error("List releases error:", err);
     return { success: false, error: "获取版本列表失败" };
