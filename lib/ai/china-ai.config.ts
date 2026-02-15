@@ -31,6 +31,41 @@ export const CHINA_AI_AGENTS: AIAgent[] = [
     icon: "⭐",
   },
 
+  // ==================== 智能模型协作成员 ====================
+  {
+    id: "qwen3-max-2026-01-23",
+    name: "Qwen3-Max-2026-01-23",
+    provider: "qwen",
+    model: "qwen3-max-2026-01-23",
+    description: "极强思考能力，支持 Responses API（智能模型协作成员）",
+    capabilities: ["analysis", "research", "coding", "conversation"],
+    maxTokens: 6144,
+    temperature: 0.6,
+    icon: "⭐",
+  },
+  {
+    id: "qwen-plus-2025-12-01",
+    name: "Qwen-Plus-2025-12-01",
+    provider: "qwen",
+    model: "qwen-plus-2025-12-01",
+    description: "擅长智能体和多轮工具调用（智能模型协作成员）",
+    capabilities: ["analysis", "conversation", "coding", "creative", "research"],
+    maxTokens: 6144,
+    temperature: 0.7,
+    icon: "⭐",
+  },
+  {
+    id: "deepseek-v3.2",
+    name: "DeepSeek-V3.2",
+    provider: "qwen",
+    model: "deepseek-v3.2",
+    description: "全新混合推理架构模型（智能模型协作成员）",
+    capabilities: ["analysis", "coding", "research", "conversation"],
+    maxTokens: 6144,
+    temperature: 0.6,
+    icon: "⭐",
+  },
+
   // ==================== 旗舰模型 ====================
   {
     id: "deepseek-v3.1",

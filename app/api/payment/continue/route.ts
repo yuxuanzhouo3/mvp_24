@@ -9,6 +9,10 @@ import { logBusinessEvent, logError, logSecurityEvent } from "@/lib/logger";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { isChinaRegion } from "@/lib/config/region";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
+import {
+  getActiveSubscriptionSnapshot,
+  normalizePlanId,
+} from "@/app/api/payment/lib/subscription-plan-guard";
 
 export async function POST(request: NextRequest) {
   // Apply payment rate limiting
@@ -121,6 +125,49 @@ async function handlePaymentContinue(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    const normalizedProductType = String(
+      payment?.type || payment?.metadata?.productType || "SUBSCRIPTION"
+    ).toUpperCase();
+    const isAddonPayment = normalizedProductType === "ADDON";
+    if (!isAddonPayment) {
+      const requestedPlanId = resolveRequestedPlanFromPayment(payment);
+      let activePlanId: string | null = null;
+      try {
+        const activeSubscription = await getActiveSubscriptionSnapshot(user.id);
+        activePlanId = activeSubscription?.planId || null;
+      } catch (activePlanError) {
+        logError(
+          "payment_continue_active_plan_check_failed",
+          activePlanError instanceof Error
+            ? activePlanError
+            : new Error(String(activePlanError)),
+          {
+            operationId,
+            userId: user.id,
+            paymentId,
+          }
+        );
+      }
+
+      if (activePlanId === "pro" && requestedPlanId !== "pro") {
+        logBusinessEvent("payment_continue_blocked_by_pro_policy", user.id, {
+          operationId,
+          paymentId,
+          activePlanId,
+          requestedPlanId,
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "当前已是专业版订阅，仅支持续费专业版。加油包可正常叠加购买。",
+            code: "PRO_PLAN_RENEWAL_ONLY",
+          },
+          { status: 409 }
+        );
+      }
     }
 
     // 检查订单是否过期（创建后30分钟）
@@ -410,6 +457,17 @@ function extractPlanTypeFromPayment(payment: any): string {
   if (amount === 0) return "free";
   if (amount < 20) return "pro";
   return "team";
+}
+
+function resolveRequestedPlanFromPayment(payment: any): string {
+  const directPlan = normalizePlanId(
+    payment?.plan_id || payment?.plan || payment?.metadata?.planId
+  );
+  if (directPlan) {
+    return directPlan;
+  }
+  const inferredPlan = normalizePlanId(extractPlanTypeFromPayment(payment));
+  return inferredPlan || "pro";
 }
 
 // 从支付记录中提取计费周期

@@ -198,15 +198,19 @@ export function LiveCollaborationPanel({
                   </Badge>
                 </div>
 
-                {aiResp.content && (
+                {(aiResp.content || resolvedStatus === "processing") && (
                   <>
                     <Card className="p-3 bg-white border-gray-200 max-w-full">
-                      <div>
+                      {resolvedStatus === "processing" ? (
+                        <p className="text-[15px] leading-7 whitespace-pre-wrap break-words text-gray-800 min-h-6">
+                          {aiResp.content}
+                          <span className="inline-block w-2 h-4 ml-1 align-[-2px] rounded-sm bg-blue-500 animate-pulse" />
+                        </p>
+                      ) : aiResp.content ? (
                         <MarkdownRenderer content={aiResp.content} />
-                        {resolvedStatus === "processing" && (
-                          <span className="inline-block w-2 h-4 ml-1 bg-blue-500 animate-pulse" />
-                        )}
-                      </div>
+                      ) : (
+                        <p className="text-sm text-gray-500">{t.workspace.pending}</p>
+                      )}
                     </Card>
 
                     {resolvedStatus === "completed" && (

@@ -54,11 +54,21 @@ export function SubscriptionPlans({
   // 检查计划是否可以选择
   const canSelectPlan = (planId: string): boolean => {
     if (planId === "free") return true;
+    if (hasActiveSubscription && userCurrentPlan === "pro") {
+      return planId.toLowerCase() === "pro";
+    }
     const planLevel = PLAN_HIERARCHY[planId.toLowerCase()] ?? 0;
     if (hasActiveSubscription && userCurrentPlan !== "free") {
       return planLevel >= userCurrentLevel;
     }
     return true;
+  };
+
+  const getDisabledPlanReason = (planId: string) => {
+    if (hasActiveSubscription && userCurrentPlan === "pro" && planId.toLowerCase() !== "pro") {
+      return isZh ? "专业版仅支持续费专业版" : "Pro can only renew Pro";
+    }
+    return isZh ? "请先取消当前计划" : "Cancel current first";
   };
 
   // 获取计划图标
@@ -243,7 +253,7 @@ export function SubscriptionPlans({
                   disabled={!canSelectPlan(plan.id)}
                 >
                   {!canSelectPlan(plan.id)
-                    ? (isZh ? "请先取消当前计划" : "Cancel current first")
+                    ? getDisabledPlanReason(plan.id)
                     : isCurrentPlan
                     ? (isZh ? "续费" : "Renew")
                     : (isZh ? "选择此计划" : "Choose Plan")}

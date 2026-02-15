@@ -85,7 +85,7 @@ const buildSmartRuntimeAgents = (
     model: SMART_DEEPSEEK_MODEL,
   };
 
-  if (mode === "deep" || mode === "graph") {
+  if (mode === "normal" || mode === "deep" || mode === "graph") {
     return [deepseekRuntimeAgent];
   }
 
@@ -120,6 +120,9 @@ export function GPTWorkspace({
 }: GPTWorkspaceProps) {
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingSessionId, setProcessingSessionId] = useState<string | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
   const [aiResponses, setAIResponses] = useState<AIResponse[]>([]);
   const [activeTaskGraphSpec, setActiveTaskGraphSpec] = useState<TaskGraphSpec | null>(null);
@@ -140,6 +143,11 @@ export function GPTWorkspace({
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
   const activeRunIdRef = useRef(0);
+  const isProcessingRef = useRef(false);
+  const processingSessionIdRef = useRef<string | null>(null);
+  const currentSessionIdRef = useRef<string | undefined>(undefined);
+  const messagesRef = useRef<Message[]>([]);
+  const sessionMessageCacheRef = useRef<Record<string, Message[]>>({});
   const attachmentsRef = useRef<MultimodalAttachmentPayload[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
@@ -358,7 +366,9 @@ export function GPTWorkspace({
     `live-ai-${response.nodeId || response.agentId}-${index}`;
 
   const effectiveCollaborationMode: CollaborationMode =
-    collaborationMode === "sequential"
+    collaborationMode === "normal"
+      ? "normal"
+      : collaborationMode === "sequential"
       ? "sequential"
       : collaborationMode === "parallel"
         ? "parallel"
@@ -366,13 +376,17 @@ export function GPTWorkspace({
           ? "deep"
           : collaborationMode === "graph"
             ? "graph"
-            : sessionConfig?.collaborationMode === "sequential"
+            : sessionConfig?.collaborationMode === "normal"
+              ? "normal"
+              : sessionConfig?.collaborationMode === "sequential"
               ? "sequential"
               : sessionConfig?.collaborationMode === "parallel"
                 ? "parallel"
                 : sessionConfig?.collaborationMode === "deep"
                   ? "deep"
-                  : "parallel";
+                  : sessionConfig?.collaborationMode === "graph"
+                    ? "graph"
+                    : "parallel";
 
   // 使用全局 Context 管理消息和会话 ID
   const {
@@ -382,6 +396,63 @@ export function GPTWorkspace({
     currentSessionId,
     setCurrentSessionId,
   } = useWorkspaceMessages();
+
+  const isCurrentSessionProcessing =
+    isProcessing &&
+    Boolean(currentSessionId) &&
+    Boolean(processingSessionId) &&
+    currentSessionId === processingSessionId;
+
+  const visibleAIResponses = isCurrentSessionProcessing ? aiResponses : [];
+  const visibleActiveTaskGraphSpec = isCurrentSessionProcessing
+    ? activeTaskGraphSpec
+    : null;
+
+  const mergeSessionMessages = (
+    remoteMessages: Message[],
+    localMessages: Message[]
+  ) => {
+    if (localMessages.length === 0) return remoteMessages;
+    if (remoteMessages.length === 0) return localMessages;
+
+    const byId = new Map<string, Message>();
+    for (const message of remoteMessages) {
+      byId.set(message.id, message);
+    }
+    for (const message of localMessages) {
+      if (!byId.has(message.id)) {
+        byId.set(message.id, message);
+      }
+    }
+
+    return Array.from(byId.values()).sort((a, b) => {
+      const left = a.timestamp instanceof Date ? a.timestamp.getTime() : 0;
+      const right = b.timestamp instanceof Date ? b.timestamp.getTime() : 0;
+      return left - right;
+    });
+  };
+
+  const appendMessageForSession = (
+    sessionId: string,
+    message: Message
+  ) => {
+    const activeSessionId = currentSessionIdRef.current;
+    const visibleMessages = messagesRef.current;
+    const fallbackBase =
+      activeSessionId === sessionId ? visibleMessages : [];
+    const cached = sessionMessageCacheRef.current[sessionId] || fallbackBase;
+    const nextCache = cached.some((item) => item.id === message.id)
+      ? cached
+      : [...cached, message];
+    sessionMessageCacheRef.current[sessionId] = nextCache;
+
+    if (
+      activeSessionId === sessionId &&
+      !visibleMessages.some((item) => item.id === message.id)
+    ) {
+      addMessage(message);
+    }
+  };
 
   const normalizePreviewText = (value: string) =>
     value.replace(/\s+/g, " ").trim();
@@ -835,6 +906,7 @@ export function GPTWorkspace({
 
   const normalizeCollaborationMode = (value: unknown): CollaborationMode | undefined => {
     if (
+      value === "normal" ||
       value === "parallel" ||
       value === "sequential" ||
       value === "deep" ||
@@ -920,12 +992,40 @@ export function GPTWorkspace({
     setShouldAutoScroll(isNearBottom);
   };
 
+  useEffect(() => {
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
+
+  useEffect(() => {
+    processingSessionIdRef.current = processingSessionId;
+  }, [processingSessionId]);
+
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    sessionMessageCacheRef.current[currentSessionId] = messages;
+  }, [currentSessionId, messages]);
+
   // 在消息或 AI 回复更新时滚动到底部（如果用户未手动向上滚动）
   useEffect(() => {
-    if (shouldAutoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, aiResponses, shouldAutoScroll]);
+    if (!shouldAutoScroll) return;
+    const container = chatContainerRef.current;
+    if (!container) return;
+    const hasStreamingOutput =
+      isCurrentSessionProcessing &&
+      aiResponses.some((resp) => resp.status === "processing");
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior: hasStreamingOutput ? "auto" : "smooth",
+    });
+  }, [messages, aiResponses, shouldAutoScroll, isCurrentSessionProcessing]);
 
   // 从“收藏对话”点击进入会话后，自动滚动到收藏的那条消息
   useEffect(() => {
@@ -1025,17 +1125,40 @@ export function GPTWorkspace({
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(
+      new CustomEvent("workspace-processing-state", {
+        detail: { isProcessing },
+      })
+    );
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent("workspace-processing-state", {
+          detail: { isProcessing: false },
+        })
+      );
+    };
+  }, [isProcessing]);
+
   // 当会话ID改变时，从数据库加载历史消息
   useEffect(() => {
+    let cancelled = false;
     const loadMessagesFromDatabase = async () => {
       if (!currentSessionId) return;
+      const targetSessionId = currentSessionId;
+
+      const cachedMessages = sessionMessageCacheRef.current[targetSessionId];
+      if (cachedMessages && cachedMessages.length > 0) {
+        setMessages(cachedMessages);
+      }
 
       try {
         const { token } = await getClientAuthToken();
         if (!token) return;
 
         const response = await fetch(
-          `/api/chat/sessions/${currentSessionId}/messages`,
+          `/api/chat/sessions/${targetSessionId}/messages`,
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -1053,9 +1176,13 @@ export function GPTWorkspace({
         const loadedMessages = data.messages || [];
         const loadedSessionConfig = data.sessionConfig || null;
 
+        if (cancelled || currentSessionIdRef.current !== targetSessionId) {
+          return;
+        }
+
         // 转换数据库消息格式为前端格式
         const formattedMessages = loadedMessages.map((msg: any, idx: number) => {
-          const fallbackId = `legacy-${currentSessionId || "no-session"}-${idx}-${msg?.role || "unknown"}-${msg?.timestamp || "no-ts"}`;
+          const fallbackId = `legacy-${targetSessionId || "no-session"}-${idx}-${msg?.role || "unknown"}-${msg?.timestamp || "no-ts"}`;
           const role: Message["role"] = msg?.role === "user" ? "user" : "assistant";
           const rawTaskGraph = msg?.taskGraph ?? msg?.task_graph;
           const rawCollaborationMode =
@@ -1114,26 +1241,38 @@ export function GPTWorkspace({
             timestamp: parseSafeDate(msg?.timestamp),
           };
         });
+        const latestCached =
+          sessionMessageCacheRef.current[targetSessionId] || [];
+        const mergedMessages = mergeSessionMessages(
+          formattedMessages,
+          latestCached
+        );
 
-        // 如果数据库消息为空且当前正在处理，说明是新会话刚开始
-        // 不要用空数组覆盖本地的消息，防止"AI已就绪"界面闪现
-        if (formattedMessages.length === 0 && isProcessing) {
-          console.log("[GPTWorkspace] Skipping empty message load during active processing");
-          // 只加载会话配置，不更新消息列表
-          if (loadedSessionConfig) {
-            setSessionConfig(loadedSessionConfig);
-          }
-          return;
+        // 当前会话仍在生成中时，优先保留本地缓存（包含尚未落库的流式上下文）
+        const isActiveRunForCurrentSession =
+          isProcessingRef.current &&
+          processingSessionIdRef.current === targetSessionId;
+        const nextMessages = mergedMessages;
+
+        if (
+          isActiveRunForCurrentSession &&
+          latestCached.length > 0 &&
+          formattedMessages.length === 0
+        ) {
+          console.log(
+            "[GPTWorkspace] Using local in-progress cache for active session"
+          );
         }
 
-        // 直接设置数据库消息（切换会话时替换本地消息）
-        setMessages(formattedMessages);
+        setMessages(nextMessages);
+        sessionMessageCacheRef.current[targetSessionId] = nextMessages;
 
         // 加载会话配置（用于显示AI锁定状态）
         if (loadedSessionConfig) {
           setSessionConfig(loadedSessionConfig);
           console.log("[GPTWorkspace] Loaded session config:", loadedSessionConfig);
           if (
+            loadedSessionConfig.collaborationMode === "normal" ||
             loadedSessionConfig.collaborationMode === "parallel" ||
             loadedSessionConfig.collaborationMode === "sequential" ||
             loadedSessionConfig.collaborationMode === "deep" ||
@@ -1161,7 +1300,7 @@ export function GPTWorkspace({
 
         console.log(
           "[GPTWorkspace] Loaded",
-          formattedMessages.length,
+          mergedMessages.length,
           "messages from database"
         );
       } catch (error) {
@@ -1169,7 +1308,10 @@ export function GPTWorkspace({
       }
     };
 
-    loadMessagesFromDatabase();
+    void loadMessagesFromDatabase();
+    return () => {
+      cancelled = true;
+    };
   }, [currentSessionId, availableAIs]);
 
   const updateSessionCollaborationMode = async (
@@ -1219,6 +1361,43 @@ export function GPTWorkspace({
     } catch (err) {
       console.error("[GPTWorkspace] Failed to switch collaboration mode:", err);
     }
+  };
+
+  const createStreamFrameUpdater = (matcher: (resp: AIResponse) => boolean) => {
+    let rafId: number | null = null;
+    let pendingPatch: Partial<AIResponse> = {};
+
+    const applyPending = () => {
+      const patch = pendingPatch;
+      pendingPatch = {};
+      if (Object.keys(patch).length === 0) return;
+      setAIResponses((prev) => prev.map((r) => (matcher(r) ? { ...r, ...patch } : r)));
+    };
+
+    return {
+      enqueue: (patch: Partial<AIResponse>) => {
+        pendingPatch = { ...pendingPatch, ...patch };
+        if (rafId !== null) return;
+        rafId = window.requestAnimationFrame(() => {
+          rafId = null;
+          applyPending();
+        });
+      },
+      flush: () => {
+        if (rafId !== null) {
+          window.cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        applyPending();
+      },
+      cancel: () => {
+        if (rafId !== null) {
+          window.cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        pendingPatch = {};
+      },
+    };
   };
 
   const handleSend = async () => {
@@ -1302,7 +1481,6 @@ export function GPTWorkspace({
         timestamp: new Date(),
       };
 
-      addMessage(userMessage);
       setInput("");
       setAttachments([]);
 
@@ -1317,6 +1495,9 @@ export function GPTWorkspace({
         sessId = await createSession(authToken, userMessage.content as string);
         setCurrentSessionId(sessId);
       }
+      setProcessingSessionId(sessId);
+      processingSessionIdRef.current = sessId;
+      appendMessageForSession(sessId, userMessage);
 
       // ✅ 改进：使用 sessionConfig 中锁定的 AI，而不是当前的 selectedGPTs
       // 这样确保一旦创建会话，就不能再改 AI
@@ -1429,7 +1610,7 @@ export function GPTWorkspace({
         setIsProcessing(false);
         setAIResponses([]);
         setActiveTaskGraphSpec(null);
-        addMessage(finalMessage);
+        appendMessageForSession(sessId, finalMessage);
 
         if (sessId) {
           try {
@@ -1470,8 +1651,13 @@ export function GPTWorkspace({
       } else {
         setActiveTaskGraphSpec(null);
 
+        const executionRuntimeAIs =
+          effectiveCollaborationMode === "normal"
+            ? runtimeAIs.slice(0, 1)
+            : runtimeAIs;
+
         // 初始化AI响应状态（使用运行时执行AI）
-        const initialResponses: AIResponse[] = runtimeAIs.map((gpt: AIAgent) => ({
+        const initialResponses: AIResponse[] = executionRuntimeAIs.map((gpt: AIAgent) => ({
           agentId: gpt.id,
           agentName: gpt.name,
           content: "",
@@ -1480,251 +1666,317 @@ export function GPTWorkspace({
         }));
         setAIResponses(initialResponses);
 
-        if (effectiveCollaborationMode === "parallel") {
-        // 并行模式：多个AI同时处理（使用运行时执行AI）
-        const finalResponses = await handleParallelMode(
-          sessId,
-          authToken,
-          effectiveMessageForModels,
-          promptByAgentId,
-          runtimeAIs,
-          initialResponses,
-          abortController.signal,
-          runId
-        );
+        if (effectiveCollaborationMode === "normal") {
+          const finalResponses = await handleParallelMode(
+            sessId,
+            authToken,
+            effectiveMessageForModels,
+            promptByAgentId,
+            executionRuntimeAIs,
+            initialResponses,
+            abortController.signal,
+            runId
+          );
 
-        if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
-          throw createAbortError();
-        }
-
-        // 保存多AI响应为一条消息
-        const finalMessage: Message = {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: finalResponses,
-          isMultiAI: true,
-          collaborationMode: "parallel",
-          timestamp: new Date(),
-        };
-        console.log("[GPTWorkspace] Adding final message:", finalMessage);
-        console.log("[GPTWorkspace] Final responses:", finalResponses);
-
-        // 先清除协作状态，避免闪烁
-        setIsProcessing(false);
-        setAIResponses([]);
-
-        // 然后添加最终消息
-        addMessage(finalMessage);
-
-        // 保存消息到数据库（统一使用多AI保存API）
-        if (sessId) {
-          try {
-            const saveResponse = await fetch("/api/chat/save-multi-ai", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify({
-                sessionId: sessId,
-                userMessageId: userMessage.id,
-                assistantMessageId: finalMessage.id,
-                userMessage: userMessage.content,
-                collaborationMode: "parallel",
-                aiResponses: finalResponses.map((r) => ({
-                  agentId: r.agentId,
-                  agentName: r.agentName,
-                  content: r.content,
-                  model:
-                    r.model ||
-                    runtimeAgentMap.get(r.agentId)?.model ||
-                    "",
-                  status: r.status,
-                  timestamp: r.timestamp,
-                })),
-              }),
-            });
-
-            if (!saveResponse.ok) {
-              console.error("[GPTWorkspace] Failed to save multi-AI message");
-            }
-          } catch (error) {
-            console.error("[GPTWorkspace] Error saving multi-AI message:", error);
+          if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
+            throw createAbortError();
           }
-        }
+
+          const finalMessage: Message = {
+            id: `ai-${Date.now()}`,
+            role: "assistant",
+            content: finalResponses,
+            isMultiAI: true,
+            collaborationMode: "normal",
+            timestamp: new Date(),
+          };
+
+          setIsProcessing(false);
+          setAIResponses([]);
+          appendMessageForSession(sessId, finalMessage);
+
+          if (sessId) {
+            try {
+              const saveResponse = await fetch("/api/chat/save-multi-ai", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                  sessionId: sessId,
+                  userMessageId: userMessage.id,
+                  assistantMessageId: finalMessage.id,
+                  userMessage: userMessage.content,
+                  collaborationMode: "normal",
+                  aiResponses: finalResponses.map((r) => ({
+                    agentId: r.agentId,
+                    agentName: r.agentName,
+                    content: r.content,
+                    model:
+                      r.model ||
+                      runtimeAgentMap.get(r.agentId)?.model ||
+                      "",
+                    status: r.status,
+                    timestamp: r.timestamp,
+                    tokens: r.tokens,
+                    cost: r.cost,
+                  })),
+                }),
+              });
+
+              if (!saveResponse.ok) {
+                console.error("[GPTWorkspace] Failed to save normal mode message");
+              }
+            } catch (error) {
+              console.error("[GPTWorkspace] Error saving normal mode message:", error);
+            }
+          }
+        } else if (effectiveCollaborationMode === "parallel") {
+          // 并行模式：多个AI同时处理（使用运行时执行AI）
+          const finalResponses = await handleParallelMode(
+            sessId,
+            authToken,
+            effectiveMessageForModels,
+            promptByAgentId,
+            executionRuntimeAIs,
+            initialResponses,
+            abortController.signal,
+            runId
+          );
+
+          if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
+            throw createAbortError();
+          }
+
+          // 保存多AI响应为一条消息
+          const finalMessage: Message = {
+            id: `ai-${Date.now()}`,
+            role: "assistant",
+            content: finalResponses,
+            isMultiAI: true,
+            collaborationMode: "parallel",
+            timestamp: new Date(),
+          };
+          console.log("[GPTWorkspace] Adding final message:", finalMessage);
+          console.log("[GPTWorkspace] Final responses:", finalResponses);
+
+          // 先清除协作状态，避免闪烁
+          setIsProcessing(false);
+          setAIResponses([]);
+
+          // 然后添加最终消息
+          appendMessageForSession(sessId, finalMessage);
+
+          // 保存消息到数据库（统一使用多AI保存API）
+          if (sessId) {
+            try {
+              const saveResponse = await fetch("/api/chat/save-multi-ai", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                  sessionId: sessId,
+                  userMessageId: userMessage.id,
+                  assistantMessageId: finalMessage.id,
+                  userMessage: userMessage.content,
+                  collaborationMode: "parallel",
+                  aiResponses: finalResponses.map((r) => ({
+                    agentId: r.agentId,
+                    agentName: r.agentName,
+                    content: r.content,
+                    model:
+                      r.model ||
+                      runtimeAgentMap.get(r.agentId)?.model ||
+                      "",
+                    status: r.status,
+                    timestamp: r.timestamp,
+                  })),
+                }),
+              });
+
+              if (!saveResponse.ok) {
+                console.error("[GPTWorkspace] Failed to save multi-AI message");
+              }
+            } catch (error) {
+              console.error("[GPTWorkspace] Error saving multi-AI message:", error);
+            }
+          }
         } else if (effectiveCollaborationMode === "deep") {
-        // 深度思考模式：要求显式输出思考过程与最终答案
-        const deepThinkingPrompt =
-          language === "zh"
-            ? [
-                "你现在处于深度思考模式。请先输出可见的推理过程，再给出最终答案。",
-                "请严格使用以下结构：",
-                "## 深度思考",
-                "- 逐步拆解问题",
-                "- 列出关键假设与不确定性",
-                "- 给出可执行的判断依据",
-                "## 最终答案",
-                "- 给出结论与建议",
-                "",
-                `用户问题：${effectiveMessageForModels}`,
-              ].join("\n")
-            : [
-                "You are in deep-thinking mode. You must show reasoning first, then provide the final answer.",
-                "Use this exact structure:",
-                "## Deep Thinking",
-                "- break down the problem step by step",
-                "- list key assumptions and uncertainties",
-                "- provide actionable reasoning basis",
-                "## Final Answer",
-                "- provide conclusion and recommendations",
-                "",
-                `User question: ${effectiveMessageForModels}`,
-              ].join("\n");
-        
-        const finalResponses = await handleParallelMode(
-          sessId,
-          authToken,
-          deepThinkingPrompt,
-          Object.fromEntries(
-            Object.entries(promptByAgentId).map(([agentId]) => [
-              agentId,
-              (missingModalitiesByAgentId[agentId] || []).length === 0
-                ? deepThinkingPrompt
-                : buildModalityFallbackPrompt(
-                    deepThinkingPrompt,
-                    missingModalitiesByAgentId[agentId] || []
-                  ),
-            ])
-          ),
-          runtimeAIs,
-          initialResponses,
-          abortController.signal,
-          runId
-        );
+          // 深度思考模式：要求显式输出思考过程与最终答案
+          const deepThinkingPrompt =
+            language === "zh"
+              ? [
+                  "你现在处于深度思考模式。请先输出可见的推理过程，再给出最终答案。",
+                  "请严格使用以下结构：",
+                  "## 深度思考",
+                  "- 逐步拆解问题",
+                  "- 列出关键假设与不确定性",
+                  "- 给出可执行的判断依据",
+                  "## 最终答案",
+                  "- 给出结论与建议",
+                  "",
+                  `用户问题：${effectiveMessageForModels}`,
+                ].join("\n")
+              : [
+                  "You are in deep-thinking mode. You must show reasoning first, then provide the final answer.",
+                  "Use this exact structure:",
+                  "## Deep Thinking",
+                  "- break down the problem step by step",
+                  "- list key assumptions and uncertainties",
+                  "- provide actionable reasoning basis",
+                  "## Final Answer",
+                  "- provide conclusion and recommendations",
+                  "",
+                  `User question: ${effectiveMessageForModels}`,
+                ].join("\n");
 
-        if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
-          throw createAbortError();
-        }
+          const finalResponses = await handleParallelMode(
+            sessId,
+            authToken,
+            deepThinkingPrompt,
+            Object.fromEntries(
+              Object.entries(promptByAgentId).map(([agentId]) => [
+                agentId,
+                (missingModalitiesByAgentId[agentId] || []).length === 0
+                  ? deepThinkingPrompt
+                  : buildModalityFallbackPrompt(
+                      deepThinkingPrompt,
+                      missingModalitiesByAgentId[agentId] || []
+                    ),
+              ])
+            ),
+            executionRuntimeAIs,
+            initialResponses,
+            abortController.signal,
+            runId
+          );
 
-        // 保存多AI响应为一条消息
-        const finalMessage: Message = {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: finalResponses,
-          isMultiAI: true,
-          collaborationMode: "deep",
-          timestamp: new Date(),
-        };
-
-        setIsProcessing(false);
-        setAIResponses([]);
-        addMessage(finalMessage);
-
-        if (sessId) {
-          try {
-            await fetch("/api/chat/save-multi-ai", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify({
-                sessionId: sessId,
-                userMessageId: userMessage.id,
-                assistantMessageId: finalMessage.id,
-                userMessage: userMessage.content,
-                collaborationMode: "deep",
-                aiResponses: finalResponses.map((r) => ({
-                  agentId: r.agentId,
-                  agentName: r.agentName,
-                  content: r.content,
-                  model:
-                    r.model ||
-                    runtimeAgentMap.get(r.agentId)?.model ||
-                    "",
-                  status: r.status,
-                  timestamp: r.timestamp,
-                })),
-              }),
-            });
-          } catch (error) {
-            console.error("[GPTWorkspace] Error saving deep thinking message:", error);
+          if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
+            throw createAbortError();
           }
-        }
-        } else {
-        // 顺序模式：逐个AI处理（失败跳过），最终保存全部 AI 回答（默认折叠展示）
-        const result = await handleSequentialMode(
-          sessId,
-          authToken,
-          effectiveMessageForModels,
-          promptByAgentId,
-          runtimeAIs,
-          initialResponses,
-          abortController.signal,
-          runId
-        );
 
-        if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
-          throw createAbortError();
-        }
+          // 保存多AI响应为一条消息
+          const finalMessage: Message = {
+            id: `ai-${Date.now()}`,
+            role: "assistant",
+            content: finalResponses,
+            isMultiAI: true,
+            collaborationMode: "deep",
+            timestamp: new Date(),
+          };
 
-        if (!result.finalAnswer) {
-          throw new Error("所有模型调用失败，请重试或更换模型");
-        }
+          setIsProcessing(false);
+          setAIResponses([]);
+          appendMessageForSession(sessId, finalMessage);
 
-        // 先清除协作状态，避免闪烁
-        setIsProcessing(false);
-        setAIResponses([]);
-
-        // 添加多AI结果到对话（顺序模式）
-        const finalMessage: Message = {
-          id: `ai-${Date.now()}`,
-          role: "assistant",
-          content: result.allResponses,
-          isMultiAI: true,
-          collaborationMode: "sequential",
-          timestamp: new Date(),
-        };
-        addMessage(finalMessage);
-
-        // 保存“用户问题 + 全部AI结果”到数据库
-        if (sessId) {
-          try {
-            const saveResponse = await fetch("/api/chat/save-multi-ai", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
-              },
-              body: JSON.stringify({
-                sessionId: sessId,
-                userMessageId: userMessage.id,
-                assistantMessageId: finalMessage.id,
-                userMessage: userMessage.content,
-                collaborationMode: "sequential",
-                aiResponses: result.allResponses.map((r) => ({
-                  agentId: r.agentId,
-                  agentName: r.agentName,
-                  content: r.content,
-                  model:
-                    r.model ||
-                    runtimeAgentMap.get(r.agentId)?.model ||
-                    "",
-                  status: r.status,
-                  timestamp: r.timestamp,
-                  tokens: r.tokens,
-                  cost: r.cost,
-                })),
-              }),
-            });
-
-            if (!saveResponse.ok) {
-              console.error("[GPTWorkspace] Failed to save sequential multi-AI message");
+          if (sessId) {
+            try {
+              await fetch("/api/chat/save-multi-ai", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                  sessionId: sessId,
+                  userMessageId: userMessage.id,
+                  assistantMessageId: finalMessage.id,
+                  userMessage: userMessage.content,
+                  collaborationMode: "deep",
+                  aiResponses: finalResponses.map((r) => ({
+                    agentId: r.agentId,
+                    agentName: r.agentName,
+                    content: r.content,
+                    model:
+                      r.model ||
+                      runtimeAgentMap.get(r.agentId)?.model ||
+                      "",
+                    status: r.status,
+                    timestamp: r.timestamp,
+                  })),
+                }),
+              });
+            } catch (error) {
+              console.error("[GPTWorkspace] Error saving deep thinking message:", error);
             }
-          } catch (error) {
-            console.error("[GPTWorkspace] Error saving sequential multi-AI message:", error);
           }
-        }
+        } else {
+          // 顺序模式：逐个AI处理（失败跳过），最终保存全部 AI 回答（默认折叠展示）
+          const result = await handleSequentialMode(
+            sessId,
+            authToken,
+            effectiveMessageForModels,
+            promptByAgentId,
+            executionRuntimeAIs,
+            initialResponses,
+            abortController.signal,
+            runId
+          );
+
+          if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
+            throw createAbortError();
+          }
+
+          if (!result.finalAnswer) {
+            throw new Error("所有模型调用失败，请重试或更换模型");
+          }
+
+          // 先清除协作状态，避免闪烁
+          setIsProcessing(false);
+          setAIResponses([]);
+
+          // 添加多AI结果到对话（顺序模式）
+          const finalMessage: Message = {
+            id: `ai-${Date.now()}`,
+            role: "assistant",
+            content: result.allResponses,
+            isMultiAI: true,
+            collaborationMode: "sequential",
+            timestamp: new Date(),
+          };
+          appendMessageForSession(sessId, finalMessage);
+
+          // 保存“用户问题 + 全部AI结果”到数据库
+          if (sessId) {
+            try {
+              const saveResponse = await fetch("/api/chat/save-multi-ai", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                  sessionId: sessId,
+                  userMessageId: userMessage.id,
+                  assistantMessageId: finalMessage.id,
+                  userMessage: userMessage.content,
+                  collaborationMode: "sequential",
+                  aiResponses: result.allResponses.map((r) => ({
+                    agentId: r.agentId,
+                    agentName: r.agentName,
+                    content: r.content,
+                    model:
+                      r.model ||
+                      runtimeAgentMap.get(r.agentId)?.model ||
+                      "",
+                    status: r.status,
+                    timestamp: r.timestamp,
+                    tokens: r.tokens,
+                    cost: r.cost,
+                  })),
+                }),
+              });
+
+              if (!saveResponse.ok) {
+                console.error("[GPTWorkspace] Failed to save sequential multi-AI message");
+              }
+            } catch (error) {
+              console.error("[GPTWorkspace] Error saving sequential multi-AI message:", error);
+            }
+          }
         }
       }
     } catch (error) {
@@ -1741,6 +1993,8 @@ export function GPTWorkspace({
       activeAbortControllerRef.current = null;
       // 确保状态一定会被清除
       setIsProcessing(false);
+      setProcessingSessionId(null);
+      processingSessionIdRef.current = null;
       setAIResponses([]);
       // 触发额度刷新事件
       if (typeof window !== "undefined") {
@@ -1822,12 +2076,14 @@ export function GPTWorkspace({
         continue;
       }
 
+      let streamUpdater: ReturnType<typeof createStreamFrameUpdater> | null = null;
       try {
         setAIResponses((prev) =>
           prev.map((r) =>
             r.agentId === gpt.id ? { ...r, status: "processing" as const } : r
           )
         );
+        streamUpdater = createStreamFrameUpdater((resp) => resp.agentId === gpt.id);
 
         const baseMessage = promptByAgentId[gpt.id] || goal;
         const currentMessage =
@@ -1897,17 +2153,10 @@ export function GPTWorkspace({
             for (const data of events) {
               if (data.type === "content") {
                 accumulatedContent += String(data.content || "");
-                setAIResponses((prev) =>
-                  prev.map((r) =>
-                    r.agentId === gpt.id
-                      ? {
-                          ...r,
-                          content: accumulatedContent,
-                          status: "processing" as const,
-                        }
-                      : r
-                  )
-                );
+                streamUpdater.enqueue({
+                  content: accumulatedContent,
+                  status: "processing",
+                });
               } else if (data.type === "done") {
                 totalTokens = (data.tokens as any)?.total || data.tokens || 0;
                 cost = Number(data.cost || 0);
@@ -1923,17 +2172,10 @@ export function GPTWorkspace({
           for (const data of parser.push(decoder.decode())) {
             if (data.type === "content") {
               accumulatedContent += String(data.content || "");
-              setAIResponses((prev) =>
-                prev.map((r) =>
-                  r.agentId === gpt.id
-                    ? {
-                        ...r,
-                        content: accumulatedContent,
-                        status: "processing" as const,
-                      }
-                    : r
-                )
-              );
+              streamUpdater.enqueue({
+                content: accumulatedContent,
+                status: "processing",
+              });
             } else if (data.type === "done") {
               totalTokens = (data.tokens as any)?.total || data.tokens || 0;
               cost = Number(data.cost || 0);
@@ -1948,17 +2190,10 @@ export function GPTWorkspace({
           for (const data of parser.flush()) {
             if (data.type === "content") {
               accumulatedContent += String(data.content || "");
-              setAIResponses((prev) =>
-                prev.map((r) =>
-                  r.agentId === gpt.id
-                    ? {
-                        ...r,
-                        content: accumulatedContent,
-                        status: "processing" as const,
-                      }
-                    : r
-                )
-              );
+              streamUpdater.enqueue({
+                content: accumulatedContent,
+                status: "processing",
+              });
             } else if (data.type === "done") {
               totalTokens = (data.tokens as any)?.total || data.tokens || 0;
               cost = Number(data.cost || 0);
@@ -1970,6 +2205,8 @@ export function GPTWorkspace({
             }
           }
         }
+
+        streamUpdater.flush();
 
         if (!totalTokens && accumulatedContent) {
           totalTokens = Math.floor(accumulatedContent.length / 4);
@@ -2009,8 +2246,10 @@ export function GPTWorkspace({
         finalModel = resolvedModel;
       } catch (error) {
         if (isAbortError(error) || runId !== activeRunIdRef.current) {
+          streamUpdater?.cancel();
           throw createAbortError();
         }
+        streamUpdater?.cancel();
         console.error(`AI ${gpt.name} error (sequential):`, error);
         const errorContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
         setAIResponses((prev) =>
@@ -2076,6 +2315,7 @@ export function GPTWorkspace({
           timestamp: new Date(),
         } as AIResponse;
       }
+      let streamUpdater: ReturnType<typeof createStreamFrameUpdater> | null = null;
       try {
         // 更新状态为处理中
         setAIResponses((prev) =>
@@ -2083,6 +2323,7 @@ export function GPTWorkspace({
             r.agentId === gpt.id ? { ...r, status: "processing" as const } : r
           )
         );
+        streamUpdater = createStreamFrameUpdater((resp) => resp.agentId === gpt.id);
 
         // 调用真实 API
         console.log(`[Frontend] Sending request for model: ${gpt.model}`);
@@ -2140,19 +2381,10 @@ export function GPTWorkspace({
             for (const data of events) {
               if (data.type === "content") {
                 accumulatedContent += String(data.content || "");
-
-                // 实时更新界面显示
-                setAIResponses((prev) =>
-                  prev.map((r) =>
-                    r.agentId === gpt.id
-                      ? {
-                          ...r,
-                          content: accumulatedContent,
-                          status: "processing" as const,
-                        }
-                      : r
-                  )
-                );
+                streamUpdater.enqueue({
+                  content: accumulatedContent,
+                  status: "processing",
+                });
               } else if (data.type === "done") {
                 totalTokens = (data.tokens as any)?.total || 0;
                 cost = Number(data.cost || 0);
@@ -2166,18 +2398,10 @@ export function GPTWorkspace({
           for (const data of parser.push(decoder.decode())) {
             if (data.type === "content") {
               accumulatedContent += String(data.content || "");
-
-              setAIResponses((prev) =>
-                prev.map((r) =>
-                  r.agentId === gpt.id
-                    ? {
-                        ...r,
-                        content: accumulatedContent,
-                        status: "processing" as const,
-                      }
-                    : r
-                )
-              );
+              streamUpdater.enqueue({
+                content: accumulatedContent,
+                status: "processing",
+              });
             } else if (data.type === "done") {
               totalTokens = (data.tokens as any)?.total || 0;
               cost = Number(data.cost || 0);
@@ -2190,18 +2414,10 @@ export function GPTWorkspace({
           for (const data of parser.flush()) {
             if (data.type === "content") {
               accumulatedContent += String(data.content || "");
-
-              setAIResponses((prev) =>
-                prev.map((r) =>
-                  r.agentId === gpt.id
-                    ? {
-                        ...r,
-                        content: accumulatedContent,
-                        status: "processing" as const,
-                      }
-                    : r
-                )
-              );
+              streamUpdater.enqueue({
+                content: accumulatedContent,
+                status: "processing",
+              });
             } else if (data.type === "done") {
               totalTokens = (data.tokens as any)?.total || 0;
               cost = Number(data.cost || 0);
@@ -2211,6 +2427,8 @@ export function GPTWorkspace({
             }
           }
         }
+
+        streamUpdater.flush();
 
         // 如果没有收到 tokens 信息，使用估算值
         if (!totalTokens && accumulatedContent) {
@@ -2246,8 +2464,10 @@ export function GPTWorkspace({
         } as AIResponse;
       } catch (error) {
         if (isAbortError(error) || runId !== activeRunIdRef.current) {
+          streamUpdater?.cancel();
           throw createAbortError();
         }
+        streamUpdater?.cancel();
         console.error(`AI ${gpt.name} error:`, error);
         setAIResponses((prev) =>
           prev.map((r) =>
@@ -2368,10 +2588,12 @@ export function GPTWorkspace({
     let totalTokens = 0;
     let cost = 0;
     let resolvedModel = gpt.model;
+    const streamUpdater = createStreamFrameUpdater((resp) => resp.nodeId === nodeId);
 
     if (reader) {
       while (true) {
         if (signal.aborted || runId !== activeRunIdRef.current) {
+          streamUpdater.cancel();
           throw createAbortError();
         }
         const { done, value } = await reader.read();
@@ -2381,17 +2603,10 @@ export function GPTWorkspace({
         for (const data of events) {
           if (data.type === "content") {
             accumulatedContent += String(data.content || "");
-            setAIResponses((prev) =>
-              prev.map((r) =>
-                r.nodeId === nodeId
-                  ? {
-                      ...r,
-                      content: accumulatedContent,
-                      status: "processing" as const,
-                    }
-                  : r
-              )
-            );
+            streamUpdater.enqueue({
+              content: accumulatedContent,
+              status: "processing",
+            });
           } else if (data.type === "done") {
             totalTokens = (data.tokens as any)?.total || 0;
             cost = Number(data.cost || 0);
@@ -2405,17 +2620,10 @@ export function GPTWorkspace({
       for (const data of parser.push(decoder.decode())) {
         if (data.type === "content") {
           accumulatedContent += String(data.content || "");
-          setAIResponses((prev) =>
-            prev.map((r) =>
-              r.nodeId === nodeId
-                ? {
-                    ...r,
-                    content: accumulatedContent,
-                    status: "processing" as const,
-                  }
-                : r
-            )
-          );
+          streamUpdater.enqueue({
+            content: accumulatedContent,
+            status: "processing",
+          });
         } else if (data.type === "done") {
           totalTokens = (data.tokens as any)?.total || 0;
           cost = Number(data.cost || 0);
@@ -2428,17 +2636,10 @@ export function GPTWorkspace({
       for (const data of parser.flush()) {
         if (data.type === "content") {
           accumulatedContent += String(data.content || "");
-          setAIResponses((prev) =>
-            prev.map((r) =>
-              r.nodeId === nodeId
-                ? {
-                    ...r,
-                    content: accumulatedContent,
-                    status: "processing" as const,
-                  }
-                : r
-            )
-          );
+          streamUpdater.enqueue({
+            content: accumulatedContent,
+            status: "processing",
+          });
         } else if (data.type === "done") {
           totalTokens = (data.tokens as any)?.total || 0;
           cost = Number(data.cost || 0);
@@ -2448,6 +2649,8 @@ export function GPTWorkspace({
         }
       }
     }
+
+    streamUpdater.flush();
 
     if (!totalTokens && accumulatedContent) {
       totalTokens = Math.floor(accumulatedContent.length / 4);
@@ -2728,6 +2931,7 @@ export function GPTWorkspace({
     const meta = message as any;
     return Boolean(
       message.isMultiAI ||
+        message.collaborationMode === "normal" ||
         message.collaborationMode === "parallel" ||
         message.collaborationMode === "sequential" ||
         message.collaborationMode === "deep" ||
@@ -2827,7 +3031,9 @@ export function GPTWorkspace({
   const activeResultItems = toResultItems(activeResultMessage);
 
   const showLiveResultNav =
-    isProcessing && aiResponses.length > 0 && effectiveCollaborationMode !== "graph";
+    isCurrentSessionProcessing &&
+    visibleAIResponses.length > 0 &&
+    effectiveCollaborationMode !== "graph";
 
   const createAbortError = () => {
     const error = new Error("Request aborted");
@@ -2853,6 +3059,8 @@ export function GPTWorkspace({
     }
 
     setIsProcessing(false);
+    setProcessingSessionId(null);
+    processingSessionIdRef.current = null;
     setAIResponses([]);
     setActiveTaskGraphSpec(null);
 
@@ -2983,7 +3191,7 @@ export function GPTWorkspace({
         activeTaskGraphOrderedNodeIds={activeTaskGraphOrderedNodeIds}
         activeResultMessage={activeResultMessage}
         activeResultItems={activeResultItems}
-        aiResponses={aiResponses}
+        aiResponses={visibleAIResponses}
         language={language}
         getStatusColor={getStatusColor}
         getConversationPreview={getConversationPreview}
@@ -3006,65 +3214,66 @@ export function GPTWorkspace({
           onScroll={handleChatScroll}
           className="h-full overflow-y-auto p-2 sm:p-4 lg:p-6 pb-6 sm:pb-8 space-y-4 min-h-0"
         >
-          <WorkspaceMessageList
-            messages={messages}
-            selectedGPTs={selectedGPTs}
-            isProcessing={isProcessing}
-            t={t}
-            availableAIs={availableAIs}
-            currentSessionId={currentSessionId}
-            language={language}
-            getMessageAnchorId={getMessageAnchorId}
-            getMultiAIResponseAnchorId={getMultiAIResponseAnchorId}
-            buildFavoriteId={buildFavoriteId}
-            isFavorite={favorites.isFavorite}
-            toggleFavoriteWithToast={toggleFavoriteWithToast}
-            shareMessageByLink={shareMessageByLink}
-            getStatusColor={getStatusColor}
-            getStatusIcon={getStatusIcon}
-            onCopyContent={copyContent}
-            onDownloadContent={downloadContent}
-          />
+          <div className="max-w-4xl mx-auto w-full space-y-4">
+            <WorkspaceMessageList
+              messages={messages}
+              selectedGPTs={selectedGPTs}
+              isProcessing={isCurrentSessionProcessing}
+              t={t}
+              availableAIs={availableAIs}
+              currentSessionId={currentSessionId}
+              language={language}
+              getMessageAnchorId={getMessageAnchorId}
+              getMultiAIResponseAnchorId={getMultiAIResponseAnchorId}
+              buildFavoriteId={buildFavoriteId}
+              isFavorite={favorites.isFavorite}
+              toggleFavoriteWithToast={toggleFavoriteWithToast}
+              shareMessageByLink={shareMessageByLink}
+              getStatusColor={getStatusColor}
+              getStatusIcon={getStatusIcon}
+              onCopyContent={copyContent}
+              onDownloadContent={downloadContent}
+            />
 
-          <LiveCollaborationPanel
-            isProcessing={isProcessing}
-            aiResponses={aiResponses}
-            effectiveCollaborationMode={effectiveCollaborationMode}
-            activeTaskGraphSpec={activeTaskGraphSpec}
-            taskGraphPresetId={taskGraphPresetId}
-            language={language}
-            t={t}
-            getStatusColor={getStatusColor}
-            getStatusIcon={getStatusIcon}
-            getLiveResponseAnchorId={getLiveResponseAnchorId}
-            onCopyContent={copyContent}
-            onDownloadContent={downloadContent}
-            shareMessageByLink={shareMessageByLink}
-          />
+            <LiveCollaborationPanel
+              isProcessing={isCurrentSessionProcessing}
+              aiResponses={visibleAIResponses}
+              effectiveCollaborationMode={effectiveCollaborationMode}
+              activeTaskGraphSpec={visibleActiveTaskGraphSpec}
+              taskGraphPresetId={taskGraphPresetId}
+              language={language}
+              t={t}
+              getStatusColor={getStatusColor}
+              getStatusIcon={getStatusIcon}
+              getLiveResponseAnchorId={getLiveResponseAnchorId}
+              onCopyContent={copyContent}
+              onDownloadContent={downloadContent}
+              shareMessageByLink={shareMessageByLink}
+            />
 
-          {/* 错误提示 */}
-          {error && (
-            <Card className="p-4 bg-red-50 border-red-200">
-              <div className="flex items-start space-x-2">
-                <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-sm text-red-800">{error}</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setError(null)}
-                    className="mt-2"
-                  >
-                    {t.workspace.retry}
-                  </Button>
+            {/* 错误提示 */}
+            {error && (
+              <Card className="p-4 bg-red-50 border-red-200">
+                <div className="flex items-start space-x-2">
+                  <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm text-red-800">{error}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setError(null)}
+                      className="mt-2"
+                    >
+                      {t.workspace.retry}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </Card>
-          )}
+              </Card>
+            )}
 
-          <div ref={messagesEndRef} />
+            <div ref={messagesEndRef} />
+          </div>
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 sm:h-8 bg-gradient-to-b from-white/35 via-white/78 to-white" />
       </div>
 
       <ChatInputPanel

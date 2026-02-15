@@ -36,7 +36,12 @@ export interface AIAgent {
   icon?: string;
 }
 
-export type CollaborationMode = "parallel" | "sequential" | "deep" | "graph";
+export type CollaborationMode =
+  | "normal"
+  | "parallel"
+  | "sequential"
+  | "deep"
+  | "graph";
 
 export interface GPTWorkspaceProps {
   selectedGPTs: AIAgent[];

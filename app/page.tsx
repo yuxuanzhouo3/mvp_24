@@ -15,7 +15,6 @@ import {
   WorkspaceMessagesProvider,
   useWorkspaceMessages,
 } from "@/components/workspace-messages-context";
-import { getClientAuthToken } from "@/lib/client-auth";
 import { isChinaRegion } from "@/lib/config/region";
 import { toast } from "sonner";
 import { saveAuthState } from "@/lib/auth-state-manager";
@@ -36,15 +35,15 @@ function PlatformContent() {
   const [selectedGPTs, setSelectedGPTs] = useState<AIAgent[]>([]);
   const [availableAIs, setAvailableAIs] = useState<AIAgent[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [workspaceProcessing, setWorkspaceProcessing] = useState(false);
   const [collaborationMode, setCollaborationMode] = useState<
-    "parallel" | "sequential" | "deep" | "graph"
+    "normal" | "parallel" | "sequential" | "deep" | "graph"
   >("parallel");
 
   const { activeView, setActiveView } = useApp();
   const { loading, refreshUser } = useUser();
   const {
     clearMessages,
-    setMessages,
     currentSessionId: contextSessionId,
     setCurrentSessionId: setContextSessionId,
   } = useWorkspaceMessages();
@@ -132,6 +131,24 @@ function PlatformContent() {
     }
   }, [contextSessionId]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<{ isProcessing?: boolean }>;
+      setWorkspaceProcessing(Boolean(custom.detail?.isProcessing));
+    };
+    window.addEventListener(
+      "workspace-processing-state",
+      handler as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        "workspace-processing-state",
+        handler as EventListener
+      );
+    };
+  }, []);
+
   const loadAvailableAIs = async () => {
     try {
       const res = await fetch("/api/config/ai");
@@ -153,94 +170,20 @@ function PlatformContent() {
 
   // 新建对话
   const handleNewChat = () => {
+    if (workspaceProcessing) {
+      toast.info("当前对话生成中，请先停止再切换会话");
+      return;
+    }
     setCurrentSessionId(null);
     setContextSessionId(undefined);
     clearMessages();
     setSelectedGPTs(availableAIs[0] ? [availableAIs[0]] : []);
   };
 
-  // 选择历史对话 - 加载对话消息
-  const handleSessionSelect = async (sessionId: string) => {
-    try {
-      setCurrentSessionId(sessionId);
-      setContextSessionId(sessionId);
-
-      // 获取认证 token
-      const { token, error: authError } = await getClientAuthToken();
-      if (authError || !token) {
-        console.error("未登录:", authError);
-        toast.error("请先登录");
-        return;
-      }
-
-      // 加载该会话的消息
-      const response = await fetch(`/api/chat/sessions/${sessionId}/messages`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      const messages = (data.messages || []).map((msg: any, idx: number) => {
-        const fallbackId = `legacy-${sessionId}-${idx}-${msg?.role || "unknown"}-${
-          msg?.timestamp || msg?.created_at || "no-ts"
-        }`;
-        const messageId =
-          typeof msg?.id === "string" && msg.id.trim().length > 0
-            ? msg.id
-            : fallbackId;
-
-        // 检查是否是多AI消息
-        if (msg.isMultiAI && Array.isArray(msg.content)) {
-          // 多AI消息：content 是 AIResponse[] 数组
-          return {
-            id: messageId,
-            role: msg.role,
-            content: msg.content.map((aiResponse: any) => ({
-              agentId: aiResponse.agentId,
-              agentName: aiResponse.agentName,
-              content: aiResponse.content,
-              model: aiResponse.model,
-              nodeId: aiResponse.nodeId,
-              nodeTitle: aiResponse.nodeTitle,
-              dependsOn: aiResponse.dependsOn,
-              tokens: aiResponse.tokens,
-              cost: aiResponse.cost,
-              status: aiResponse.status || "completed",
-              timestamp: new Date(aiResponse.timestamp || Date.now()),
-            })),
-            isMultiAI: true,
-            collaborationMode: msg.collaborationMode,
-            taskGraph: msg.taskGraph,
-            timestamp: new Date(msg.timestamp || msg.created_at || Date.now()),
-          };
-        }
-
-        // 单AI消息：保持原有逻辑
-        const aiAgent = availableAIs.find((ai) => ai.model === msg.model);
-
-        return {
-          id: messageId,
-          role: msg.role,
-          content: msg.content,
-          timestamp: new Date(msg.timestamp || msg.created_at || Date.now()),
-          model: msg.model,
-          agentName: aiAgent?.name || msg.model,
-          tokens: msg.tokens_used,
-          cost: msg.cost_usd,
-        };
-      });
-
-      setMessages(messages);
-    } catch (error) {
-      console.error("加载历史对话失败:", error);
-      toast.error("加载历史对话失败");
-    }
+  // 选择历史对话
+  const handleSessionSelect = (sessionId: string) => {
+    setCurrentSessionId(sessionId);
+    setContextSessionId(sessionId);
   };
   if (loading) {
     return (
@@ -262,6 +205,7 @@ function PlatformContent() {
         currentSessionId={currentSessionId}
         onSessionSelect={handleSessionSelect}
         onNewChat={handleNewChat}
+        isWorkspaceProcessing={workspaceProcessing}
       />
 
       {/* 悬浮广告 */}
@@ -284,6 +228,7 @@ function PlatformContent() {
                 currentSessionId={currentSessionId}
                 onSessionSelect={handleSessionSelect}
                 onNewChat={handleNewChat}
+                isWorkspaceProcessing={workspaceProcessing}
               />
             </div>
 
@@ -300,7 +245,7 @@ function PlatformContent() {
               </div>
               {/* 备案信息 - 聊天框下方 */}
               {isChinaRegion() && (
-                <div className="text-center py-1 px-1 text-[10px] text-gray-400 flex-shrink-0 bg-white border-t border-gray-50">
+                <div className="text-center py-1 px-1 text-[10px] text-gray-400 flex-shrink-0 bg-white">
                   <div className="mb-0.5">本页面含AI生成的内容，请仔细辨别</div>
                   <div>粤ICP备2024281756号-3</div>
                 </div>

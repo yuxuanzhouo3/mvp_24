@@ -188,7 +188,7 @@ export async function PATCH(
     const body = await req.json();
     const { title, collaborationMode } = body as {
       title?: string;
-      collaborationMode?: "parallel" | "sequential" | "deep" | "graph";
+      collaborationMode?: "normal" | "parallel" | "sequential" | "deep" | "graph";
     };
 
     // 验证参数
@@ -210,6 +210,7 @@ export async function PATCH(
 
     if (collaborationMode !== undefined) {
       if (
+        collaborationMode !== "normal" &&
         collaborationMode !== "parallel" &&
         collaborationMode !== "sequential" &&
         collaborationMode !== "deep" &&

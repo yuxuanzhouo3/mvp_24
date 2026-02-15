@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { ChatToolbar } from "@/components/chat-toolbar";
 import { TASK_GRAPH_PRESETS } from "@/data/task-graph-presets";
 import {
+  Bot,
   Brain,
   ChevronDown,
   GitBranch,
@@ -95,8 +96,8 @@ export function ChatInputPanel({
   };
 
   return (
-    <div className="p-2 pt-0 sm:p-3 sm:pt-0 bg-gradient-to-b from-white/0 via-white/82 to-white">
-      <div className="max-w-4xl mx-auto rounded-xl sm:rounded-2xl overflow-visible bg-white flex flex-col relative text-sm sm:text-base">
+    <div className="p-2 pt-0 sm:p-3 sm:pt-0 bg-white">
+      <div className="max-w-4xl mx-auto rounded-2xl sm:rounded-[1.75rem] overflow-visible bg-white flex flex-col relative text-sm sm:text-base">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -157,7 +158,7 @@ export function ChatInputPanel({
           </div>
         )}
 
-        <div className="relative z-20 px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-50/30 rounded-b-xl sm:rounded-b-2xl">
+        <div className="relative z-20 px-2 sm:px-3 py-1.5 sm:py-2 bg-gray-50/30 rounded-b-2xl sm:rounded-b-[1.75rem]">
           <input
             ref={fileInputRef}
             type="file"
@@ -175,13 +176,15 @@ export function ChatInputPanel({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 sm:h-8 px-2 sm:px-3 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 flex-shrink-0"
+                className="h-7 sm:h-8 px-2.5 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium flex items-center gap-1.5 flex-shrink-0"
                 onClick={() => setModeMenuOpen(!modeMenuOpen)}
                 title="选择协作模式"
               >
                 <Layers className="w-3.5 h-3.5" />
                 <span>
-                  {effectiveCollaborationMode === "sequential"
+                  {effectiveCollaborationMode === "normal"
+                    ? "普通模式"
+                    : effectiveCollaborationMode === "sequential"
                     ? "顺序模式"
                     : effectiveCollaborationMode === "deep"
                       ? "深度模式"
@@ -198,6 +201,16 @@ export function ChatInputPanel({
 
               {modeMenuOpen && (
                 <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-[80] w-max flex flex-col gap-1">
+                  <Button
+                    variant={effectiveCollaborationMode === "normal" ? "default" : "outline"}
+                    size="sm"
+                    className="h-7 px-2 text-xs flex items-center gap-2 justify-start min-w-max"
+                    onClick={() => onCollaborationModeChange("normal")}
+                  >
+                    <Bot className="w-3.5 h-3.5" />
+                    <span>普通模式</span>
+                  </Button>
+
                   <Button
                     variant={effectiveCollaborationMode === "parallel" ? "default" : "outline"}
                     size="sm"
@@ -367,7 +380,7 @@ export function ChatInputPanel({
           </div>
         </div>
 
-        <div className="absolute inset-0 border border-gray-200 rounded-xl sm:rounded-2xl pointer-events-none" />
+        <div className="absolute inset-0 border border-gray-200 rounded-2xl sm:rounded-[1.75rem] pointer-events-none" />
       </div>
     </div>
   );

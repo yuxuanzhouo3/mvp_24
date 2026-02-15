@@ -142,9 +142,12 @@ export function RightNavDock({
   const [dockOpen, setDockOpen] = useState(true);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [bubblePos, setBubblePos] = useState<Point>({ x: 0, y: 0 });
+  const [positionReady, setPositionReady] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const suppressClickRef = useRef(false);
+  const dragRafRef = useRef<number | null>(null);
+  const pendingDragPosRef = useRef<Point | null>(null);
   const dragStateRef = useRef({
     pointerId: -1,
     startClientX: 0,
@@ -196,17 +199,18 @@ export function RightNavDock({
     }
 
     setBubblePos(nextPosition);
+    setPositionReady(true);
   }, []);
 
   useEffect(() => {
-    if (!viewport.width || !viewport.height) return;
+    if (!viewport.width || !viewport.height || isDragging) return;
 
     try {
       localStorage.setItem(POSITION_KEY, JSON.stringify(bubblePos));
     } catch {
       // ignore
     }
-  }, [bubblePos, viewport.width, viewport.height]);
+  }, [bubblePos, viewport.width, viewport.height, isDragging]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -252,11 +256,29 @@ export function RightNavDock({
         dragStateRef.current.moved = true;
       }
 
-      setBubblePos(nextPos);
+      pendingDragPosRef.current = nextPos;
+      if (dragRafRef.current !== null) {
+        return;
+      }
+      dragRafRef.current = window.requestAnimationFrame(() => {
+        dragRafRef.current = null;
+        const pending = pendingDragPosRef.current;
+        if (!pending) return;
+        setBubblePos(pending);
+      });
     };
 
     const onPointerUp = (event: PointerEvent) => {
       if (dragStateRef.current.pointerId !== event.pointerId) return;
+
+      if (dragRafRef.current !== null) {
+        window.cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      if (pendingDragPosRef.current) {
+        setBubblePos(pendingDragPosRef.current);
+        pendingDragPosRef.current = null;
+      }
 
       if (dragStateRef.current.moved) {
         suppressClickRef.current = true;
@@ -276,6 +298,10 @@ export function RightNavDock({
     window.addEventListener("pointercancel", onPointerUp);
 
     return () => {
+      if (dragRafRef.current !== null) {
+        window.cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
@@ -342,6 +368,12 @@ export function RightNavDock({
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
 
+    pendingDragPosRef.current = null;
+    if (dragRafRef.current !== null) {
+      window.cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+
     dragStateRef.current.pointerId = event.pointerId;
     dragStateRef.current.startClientX = event.clientX;
     dragStateRef.current.startClientY = event.clientY;
@@ -389,27 +421,29 @@ export function RightNavDock({
 
   return (
     <>
-      <button
-        type="button"
-        aria-label={language === "zh" ? "打开定位导航" : "Open navigator"}
-        onPointerDown={handleBubblePointerDown}
-        onClick={handleBubbleClick}
-        className={`fixed z-[65] h-12 w-12 rounded-full bg-blue-600 text-white shadow-lg transition-all hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 ${
-          isDragging ? "cursor-grabbing scale-105" : "cursor-grab"
-        }`}
-        style={{
-          left: bubblePos.x,
-          top: bubblePos.y,
-          touchAction: "none",
-        }}
-      >
-        <div className="flex h-full w-full flex-col items-center justify-center">
-          <GripHorizontal className="h-3 w-3 opacity-80" />
-          <Sparkles className="h-3.5 w-3.5" />
-        </div>
-      </button>
+      {positionReady && (
+        <button
+          type="button"
+          aria-label={language === "zh" ? "打开定位导航" : "Open navigator"}
+          onPointerDown={handleBubblePointerDown}
+          onClick={handleBubbleClick}
+          className={`fixed z-[65] h-12 w-12 rounded-full bg-blue-600 text-white shadow-lg transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 ${
+            isDragging ? "cursor-grabbing scale-105" : "cursor-grab"
+          }`}
+          style={{
+            left: bubblePos.x,
+            top: bubblePos.y,
+            touchAction: "none",
+          }}
+        >
+          <div className="flex h-full w-full flex-col items-center justify-center">
+            <GripHorizontal className="h-3 w-3 opacity-80" />
+            <Sparkles className="h-3.5 w-3.5" />
+          </div>
+        </button>
+      )}
 
-      {dockOpen && panelStyle && (
+      {positionReady && dockOpen && panelStyle && !isDragging && (
         <Card
           className="fixed z-[64] flex flex-col border-gray-200 bg-white/95 shadow-xl backdrop-blur-sm"
           style={{

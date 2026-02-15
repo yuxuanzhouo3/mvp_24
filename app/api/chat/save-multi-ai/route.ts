@@ -30,7 +30,12 @@ interface AIResponse {
   cost?: number;
 }
 
-type MultiAICollaborationMode = "parallel" | "sequential" | "deep" | "graph";
+type MultiAICollaborationMode =
+  | "normal"
+  | "parallel"
+  | "sequential"
+  | "deep"
+  | "graph";
 
 /**
  * POST /api/chat/save-multi-ai
@@ -78,6 +83,7 @@ export async function POST(req: NextRequest) {
 
     if (
       collaborationMode !== undefined &&
+      collaborationMode !== "normal" &&
       collaborationMode !== "parallel" &&
       collaborationMode !== "sequential" &&
       collaborationMode !== "deep" &&

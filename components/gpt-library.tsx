@@ -40,8 +40,10 @@ interface AIAgent {
 interface GPTLibraryProps {
   selectedGPTs: any[];
   setSelectedGPTs: (gpts: any[]) => void;
-  collaborationMode?: "parallel" | "sequential";
-  setCollaborationMode?: (mode: "parallel" | "sequential") => void;
+  collaborationMode?: "normal" | "parallel" | "sequential" | "deep" | "graph";
+  setCollaborationMode?: (
+    mode: "normal" | "parallel" | "sequential" | "deep" | "graph"
+  ) => void;
 }
 
 export function GPTLibrary({

@@ -6,6 +6,10 @@ import { getAppleIapProductId } from "@/lib/apple-iap";
 import { verifyAppleSubscription } from "@/lib/apple-iap-verification";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { logInfo, logError, logWarn } from "@/lib/logger";
+import {
+  getActiveSubscriptionSnapshot,
+  normalizePlanId,
+} from "@/app/api/payment/lib/subscription-plan-guard";
 
 async function syncUserMembershipCache(
   user: any,
@@ -87,14 +91,54 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const expectedProductId = getAppleIapProductId(planId, billingCycle);
+    const normalizedPlanId = normalizePlanId(planId);
+    if (!normalizedPlanId || normalizedPlanId === "free") {
+      return NextResponse.json(
+        { success: false, error: "Invalid planId" },
+        { status: 400 }
+      );
+    }
+
+    let activePlanId: string | null = null;
+    try {
+      const activeSubscription = await getActiveSubscriptionSnapshot(user.id);
+      activePlanId = activeSubscription?.planId || null;
+    } catch (activePlanError) {
+      logWarn("Failed to resolve active subscription plan before IAP confirmation", {
+        operationId,
+        userId: user.id,
+        transactionId,
+        error: activePlanError,
+      });
+    }
+
+    if (activePlanId === "pro" && normalizedPlanId !== "pro") {
+      logInfo("IAP blocked by pro-only renewal policy", {
+        operationId,
+        userId: user.id,
+        transactionId,
+        activePlanId,
+        requestedPlanId: normalizedPlanId,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "当前已是专业版订阅，仅支持续费专业版。加油包可正常叠加购买。",
+          code: "PRO_PLAN_RENEWAL_ONLY",
+        },
+        { status: 409 }
+      );
+    }
+
+    const expectedProductId = getAppleIapProductId(normalizedPlanId, billingCycle);
     if (!expectedProductId || expectedProductId !== productId) {
       logWarn("IAP product mismatch", {
         operationId,
         userId: user.id,
         productId,
         expectedProductId,
-        planId,
+        planId: normalizedPlanId,
         billingCycle,
       });
       return NextResponse.json(
@@ -106,7 +150,7 @@ export async function POST(request: NextRequest) {
     const isZh = isChinaRegion();
     const period = billingCycle === "yearly" ? "annual" : "monthly";
     const billedDays = billingCycle === "yearly" ? 365 : 30;
-    const amount = getPlanPrice(planId, period, isZh);
+    const amount = getPlanPrice(normalizedPlanId, period, isZh);
     const currency = isZh ? "CNY" : "USD";
 
     logInfo("IAP confirmation request", {
@@ -114,7 +158,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       transactionId,
       productId,
-      planId,
+      planId: normalizedPlanId,
       billingCycle,
     });
 

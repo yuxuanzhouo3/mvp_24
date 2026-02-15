@@ -17,6 +17,10 @@ import {
 } from "@/lib/payment-config";
 import { getAddonPackageById, getAddonDescription } from "@/constants/addon-packages";
 import type { PaymentMethod, BillingCycle } from "@/lib/payment-config";
+import {
+  getActiveSubscriptionSnapshot,
+  normalizePlanId,
+} from "@/app/api/payment/lib/subscription-plan-guard";
 
 const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
 
@@ -31,6 +35,20 @@ interface CreatePaymentBody {
   addonPackageId?: string;
   imageCredits?: number;
   videoAudioCredits?: number;
+}
+
+function getMetadataActivePlan(user: any): string | null {
+  const plan = normalizePlanId(user?.user_metadata?.subscription_plan);
+  if (!plan || plan === "free") return null;
+  const expiresAtRaw = user?.user_metadata?.membership_expires_at;
+  if (typeof expiresAtRaw !== "string" || !expiresAtRaw.trim()) {
+    return null;
+  }
+  const expiresMs = new Date(expiresAtRaw).getTime();
+  if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) {
+    return null;
+  }
+  return plan;
 }
 
 function detectAlipayProductMode(request: NextRequest): "wap" | "page" {
@@ -74,18 +92,21 @@ async function handlePaymentCreate(request: NextRequest) {
       billingCycle,
       channel,
       productType = "SUBSCRIPTION",
+      planId,
       addonPackageId,
     } = body;
 
     const normalizedProductType: "SUBSCRIPTION" | "ADDON" =
       String(productType).toUpperCase() === "ADDON" ? "ADDON" : "SUBSCRIPTION";
     const isAddon = normalizedProductType === "ADDON";
+    const requestedPlanId = normalizePlanId(planId) || "pro";
 
     logInfo("Creating payment", {
       operationId,
       userId: user.id,
       method,
       billingCycle,
+      planId: requestedPlanId,
       productType: normalizedProductType,
       addonPackageId,
     });
@@ -99,6 +120,53 @@ async function handlePaymentCreate(request: NextRequest) {
         { success: false, error: "Missing payment method" },
         { status: 400 }
       );
+    }
+
+    if (!isAddon && planId && !normalizePlanId(planId)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Invalid planId: ${planId}`,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!isAddon) {
+      let activePlan = getMetadataActivePlan(user);
+      try {
+        const activeSubscription = await getActiveSubscriptionSnapshot(user.id);
+        if (activeSubscription?.planId) {
+          activePlan = activeSubscription.planId;
+        }
+      } catch (activePlanError) {
+        logWarn("Failed to resolve active subscription plan before create payment", {
+          operationId,
+          userId: user.id,
+          error: activePlanError,
+        });
+      }
+
+      if (activePlan === "pro" && requestedPlanId !== "pro") {
+        logWarn("Blocked non-pro renewal while active pro subscription", {
+          operationId,
+          userId: user.id,
+          currentPlan: activePlan,
+          requestedPlanId,
+          productType: normalizedProductType,
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "当前已是专业版订阅，仅支持续费专业版。加油包可正常叠加购买。",
+            code: "PRO_PLAN_RENEWAL_ONLY",
+            currentPlan: "pro",
+            allowedPlan: "pro",
+          },
+          { status: 409 }
+        );
+      }
     }
 
     const pricing = getPricingByMethod(method);
@@ -257,6 +325,7 @@ async function handlePaymentCreate(request: NextRequest) {
           days,
           paymentType: "onetime",
           productType: "SUBSCRIPTION",
+          planId: requestedPlanId,
           billingCycle: effectiveBillingCycle,
         };
 

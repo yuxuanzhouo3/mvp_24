@@ -221,6 +221,15 @@ export function PaymentForm({
           );
         }
 
+        if (errorData.code === "PRO_PLAN_RENEWAL_ONLY") {
+          throw new Error(
+            errorData.error ||
+              (language === "zh"
+                ? "当前已是专业版订阅，仅支持续费专业版。加油包可正常叠加购买。"
+                : "You already have Pro. Only Pro renewal is allowed. Add-ons can still stack.")
+          );
+        }
+
         throw new Error(errorData.error || `HTTP ${response.status}`);
       }
 

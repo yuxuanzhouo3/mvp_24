@@ -41,6 +41,7 @@ interface ChatHistorySidebarProps {
   currentSessionId: string | null;
   onSessionSelect: (sessionId: string) => void;
   onNewChat: () => void;
+  isWorkspaceProcessing?: boolean;
 }
 
 type SessionGroupName = "今天" | "昨天" | "最近7天" | "最近30天" | "更早";
@@ -106,6 +107,7 @@ export function ChatHistorySidebar({
   currentSessionId,
   onSessionSelect,
   onNewChat,
+  isWorkspaceProcessing = false,
 }: ChatHistorySidebarProps) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -113,11 +115,18 @@ export function ChatHistorySidebar({
   const [showAllFavorites, setShowAllFavorites] = useState(false);
   const [favoritesExpanded, setFavoritesExpanded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(DEFAULT_EXPANDED_GROUPS);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.matchMedia("(max-width: 767px)").matches;
+  });
   const [deleteTargetSessionId, setDeleteTargetSessionId] = useState<string | null>(
     null
   );
   const [isDeleting, setIsDeleting] = useState(false);
   const favorites = useMessageFavorites();
+  const blockedMessage = "当前对话生成中，请先停止再切换会话";
 
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
   const visibleFavorites = useMemo(
@@ -183,6 +192,35 @@ export function ChatHistorySidebar({
     }
   }, [favorites.items.length, showAllFavorites]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia("(max-width: 767px)");
+    const handleViewportChange = () => {
+      setIsMobileViewport(mediaQuery.matches);
+    };
+
+    setIsMobileViewport(mediaQuery.matches);
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleViewportChange);
+      return () => {
+        mediaQuery.removeEventListener("change", handleViewportChange);
+      };
+    }
+
+    if (typeof mediaQuery.addListener === "function") {
+      mediaQuery.addListener(handleViewportChange);
+    }
+
+    return () => {
+      if (typeof mediaQuery.addListener === "function") {
+        mediaQuery.removeListener(handleViewportChange);
+      }
+    };
+  }, []);
+
   const toggleGroup = useCallback((group: SessionGroupName) => {
     setExpandedGroups((prev) => ({
       ...prev,
@@ -236,6 +274,21 @@ export function ChatHistorySidebar({
     }
   }, [deleteTargetSessionId, loadSessions]);
 
+  const safeSessionSelect = useCallback(
+    (sessionId: string) => {
+      onSessionSelect(sessionId);
+    },
+    [onSessionSelect]
+  );
+
+  const safeNewChat = useCallback(() => {
+    if (isWorkspaceProcessing) {
+      toast.info(blockedMessage);
+      return;
+    }
+    onNewChat();
+  }, [blockedMessage, isWorkspaceProcessing, onNewChat]);
+
   return (
     <div
       className={`flex flex-col h-full border-r bg-white transition-all duration-300 ${
@@ -261,7 +314,7 @@ export function ChatHistorySidebar({
       <div className={isCollapsed ? "px-2 pb-3" : "px-3 pb-3"}>
         {isCollapsed ? (
           <Button
-            onClick={onNewChat}
+            onClick={safeNewChat}
             variant="default"
             size="sm"
             className="w-8 h-8 p-0"
@@ -271,7 +324,7 @@ export function ChatHistorySidebar({
           </Button>
         ) : (
           <Button
-            onClick={onNewChat}
+            onClick={safeNewChat}
             className="w-full justify-start gap-2"
             variant="default"
             size="sm"
@@ -331,7 +384,7 @@ export function ChatHistorySidebar({
                                 fav.anchorId,
                                 fav.preview
                               );
-                              onSessionSelect(fav.sessionId);
+                              safeSessionSelect(fav.sessionId);
                             }}
                             title={fav.preview}
                           >
@@ -375,77 +428,121 @@ export function ChatHistorySidebar({
                   ))}
               </div>
 
-              {SESSION_GROUP_ORDER.map((group) => {
-                const groupSessions = groupedSessions[group];
-                if (groupSessions.length === 0) return null;
-
-                const isExpanded = expandedGroups[group];
-
-                return (
-                  <div key={group}>
-                    <button
-                      onClick={() => toggleGroup(group)}
-                      className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
+              {isMobileViewport ? (
+                <div className="space-y-1 mt-1">
+                  {sessions.map((session) => (
+                    <div
+                      key={session.id}
+                      className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-all duration-150 ${
+                        currentSessionId === session.id
+                          ? "bg-gray-100 border-l-3 border-gray-400"
+                          : "hover:bg-gray-50 border-l-3 border-transparent"
+                      }`}
+                      onClick={() => safeSessionSelect(session.id)}
                     >
-                      <span>{group}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-gray-400">
-                          {groupSessions.length}
-                        </span>
-                        {isExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
-                        )}
-                      </div>
-                    </button>
+                      <MessageSquare
+                        className={`h-4 w-4 flex-shrink-0 ${
+                          currentSessionId === session.id
+                            ? "text-gray-600"
+                            : "text-gray-400"
+                        }`}
+                      />
+                      <span
+                        className={`flex-1 text-sm truncate min-w-0 ${
+                          currentSessionId === session.id
+                            ? "font-medium text-gray-900"
+                            : "text-gray-700"
+                        }`}
+                      >
+                        {session.title || "新对话"}
+                      </span>
+                      <button
+                        className={`p-1 hover:bg-gray-200 rounded flex-shrink-0 transition-opacity ${
+                          currentSessionId === session.id
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100"
+                        }`}
+                        onClick={(e) => requestDelete(session.id, e)}
+                        title="删除对话"
+                      >
+                        <Trash2 className="h-3 w-3 text-gray-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                SESSION_GROUP_ORDER.map((group) => {
+                  const groupSessions = groupedSessions[group];
+                  if (groupSessions.length === 0) return null;
 
-                    {isExpanded && (
-                      <div className="space-y-1 mt-1">
-                        {groupSessions.map((session) => (
-                          <div
-                            key={session.id}
-                            className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-all duration-150 ${
-                              currentSessionId === session.id
-                                ? "bg-gray-100 border-l-3 border-gray-400"
-                                : "hover:bg-gray-50 border-l-3 border-transparent"
-                            }`}
-                            onClick={() => onSessionSelect(session.id)}
-                          >
-                            <MessageSquare
-                              className={`h-4 w-4 flex-shrink-0 ${
+                  const isExpanded = expandedGroups[group];
+
+                  return (
+                    <div key={group}>
+                      <button
+                        onClick={() => toggleGroup(group)}
+                        className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
+                      >
+                        <span>{group}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">
+                            {groupSessions.length}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="space-y-1 mt-1">
+                          {groupSessions.map((session) => (
+                            <div
+                              key={session.id}
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-all duration-150 ${
                                 currentSessionId === session.id
-                                  ? "text-gray-600"
-                                  : "text-gray-400"
+                                  ? "bg-gray-100 border-l-3 border-gray-400"
+                                  : "hover:bg-gray-50 border-l-3 border-transparent"
                               }`}
-                            />
-                            <span
-                              className={`flex-1 text-sm truncate min-w-0 ${
-                                currentSessionId === session.id
-                                  ? "font-medium text-gray-900"
-                                  : "text-gray-700"
-                              }`}
+                              onClick={() => safeSessionSelect(session.id)}
                             >
-                              {session.title || "新对话"}
-                            </span>
-                            <button
-                              className={`p-1 hover:bg-gray-200 rounded flex-shrink-0 transition-opacity ${
-                                currentSessionId === session.id
-                                  ? "opacity-100"
-                                  : "opacity-0 group-hover:opacity-100"
-                              }`}
-                              onClick={(e) => requestDelete(session.id, e)}
-                              title="删除对话"
-                            >
-                              <Trash2 className="h-3 w-3 text-gray-500" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                              <MessageSquare
+                                className={`h-4 w-4 flex-shrink-0 ${
+                                  currentSessionId === session.id
+                                    ? "text-gray-600"
+                                    : "text-gray-400"
+                                }`}
+                              />
+                              <span
+                                className={`flex-1 text-sm truncate min-w-0 ${
+                                  currentSessionId === session.id
+                                    ? "font-medium text-gray-900"
+                                    : "text-gray-700"
+                                }`}
+                              >
+                                {session.title || "新对话"}
+                              </span>
+                              <button
+                                className={`p-1 hover:bg-gray-200 rounded flex-shrink-0 transition-opacity ${
+                                  currentSessionId === session.id
+                                    ? "opacity-100"
+                                    : "opacity-0 group-hover:opacity-100"
+                                }`}
+                                onClick={(e) => requestDelete(session.id, e)}
+                                title="删除对话"
+                              >
+                                <Trash2 className="h-3 w-3 text-gray-500" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
           )}
         </ScrollArea>

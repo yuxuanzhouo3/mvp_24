@@ -68,6 +68,7 @@ interface HeaderProps {
   currentSessionId?: string | null;
   onSessionSelect?: (sessionId: string) => void;
   onNewChat?: () => void;
+  isWorkspaceProcessing?: boolean;
 }
 
 export function Header({
@@ -76,6 +77,7 @@ export function Header({
   currentSessionId,
   onSessionSelect,
   onNewChat,
+  isWorkspaceProcessing = false,
 }: HeaderProps) {
   const FAVORITES_INITIAL_VISIBLE = 8;
   const router = useRouter();
@@ -89,6 +91,10 @@ export function Header({
   const [deleteTargetSessionId, setDeleteTargetSessionId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const favorites = useMessageFavorites();
+  const blockedMessage =
+    language === "zh"
+      ? "当前对话生成中，请先停止再切换会话"
+      : "A response is in progress. Stop it before switching chats.";
   const visibleFavoritesMobile = showAllFavoritesMobile
     ? favorites.items
     : favorites.items.slice(0, FAVORITES_INITIAL_VISIBLE);
@@ -217,6 +223,10 @@ export function Header({
 
   // 处理新建对话
   const handleNewChatClick = () => {
+    if (isWorkspaceProcessing) {
+      toast.info(blockedMessage);
+      return;
+    }
     if (onNewChat) {
       onNewChat();
     }

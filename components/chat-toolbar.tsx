@@ -21,8 +21,10 @@ interface ChatToolbarProps {
   availableAIs: AIAgent[];
   sessionId?: string;
   sessionConfig?: any;
-  collaborationMode?: "parallel" | "sequential" | "deep" | "graph";
-  onCollaborationModeChange?: (mode: "parallel" | "sequential" | "deep" | "graph") => void;
+  collaborationMode?: "normal" | "parallel" | "sequential" | "deep" | "graph";
+  onCollaborationModeChange?: (
+    mode: "normal" | "parallel" | "sequential" | "deep" | "graph"
+  ) => void;
   variant?: "default" | "integrated";
 }
 
@@ -80,7 +82,7 @@ export function ChatToolbar({
         <div ref={selectorTriggerRef} className="relative min-w-0">
           <Button
             variant="outline"
-            className={`h-7 sm:h-8 px-2 sm:px-3 gap-1 sm:gap-2 text-[11px] sm:text-sm font-normal rounded-lg sm:rounded-xl min-w-0 transition-all ${
+            className={`h-7 sm:h-8 px-2.5 sm:px-3.5 gap-1 sm:gap-2 text-[11px] sm:text-sm font-normal rounded-full min-w-0 transition-all ${
               isSingleSmartModel
                 ? `${smartGradientSoftClass} ${smartGradientHoverClass} border-violet-200 text-slate-700 shadow-[0_10px_24px_-16px_rgba(168,85,247,0.65)]`
                 : "border-gray-200 hover:bg-gray-50"

@@ -315,7 +315,7 @@ export async function saveMultiAIMessage(messageData: {
     status: string;
     timestamp: Date;
   }>;
-  collaboration_mode?: "parallel" | "sequential" | "deep" | "graph";
+  collaboration_mode?: "normal" | "parallel" | "sequential" | "deep" | "graph";
   task_graph?: unknown;
 }) {
   try {

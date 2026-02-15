@@ -15,7 +15,12 @@ export interface MultiAIResponsePayload {
   cost?: number;
 }
 
-export type MultiAICollaborationMode = "parallel" | "sequential" | "deep" | "graph";
+export type MultiAICollaborationMode =
+  | "normal"
+  | "parallel"
+  | "sequential"
+  | "deep"
+  | "graph";
 
 export async function saveIntlMultiAISessionTurn(params: {
   sessionId: string;

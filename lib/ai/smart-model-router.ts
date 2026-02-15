@@ -2,6 +2,7 @@ export const SMART_MODEL_ID = "smart-auto";
 export const SMART_AGENT_ID = "smart-model";
 
 export type SmartCollaborationMode =
+  | "normal"
   | "parallel"
   | "sequential"
   | "deep"
@@ -80,6 +81,7 @@ function normalizeMode(value?: string): SmartCollaborationMode | undefined {
   if (!value) return undefined;
   const mode = normalize(value);
   if (
+    mode === "normal" ||
     mode === "parallel" ||
     mode === "sequential" ||
     mode === "deep" ||
@@ -175,6 +177,11 @@ export function resolveSmartModel(
     candidateBuckets.push({
       reason: "complex_collaboration_mode",
       models: qualityCandidates,
+    });
+  } else if (mode === "normal" || mode === "single") {
+    candidateBuckets.push({
+      reason: "normal_mode_default_deepseek",
+      models: codeCandidates,
     });
   } else if (mode === "parallel") {
     candidateBuckets.push({

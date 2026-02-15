@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, X, Check, Sparkles } from "lucide-react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject, TouchEvent } from "react";
 
 interface AIAgent {
   id: string;
@@ -33,7 +33,12 @@ export function AISelectorDropdown({
   triggerRef,
 }: AISelectorDropdownProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [sheetDragOffsetY, setSheetDragOffsetY] = useState(0);
+  const [sheetDragging, setSheetDragging] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const touchStartYRef = useRef<number | null>(null);
+  const touchLastYRef = useRef(0);
+  const touchStartTimeRef = useRef(0);
   const smartGradientTextClass =
     "bg-[linear-gradient(90deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] bg-clip-text text-transparent";
   const smartGradientSoftClass =
@@ -44,7 +49,8 @@ export function AISelectorDropdown({
     "bg-[linear-gradient(90deg,#2f8cff1f_0%,#7a5cff1f_35%,#ff2d951d_70%,#ff8a1f1d_100%)]";
   const isSmartModel = (ai: AIAgent) =>
     ai.model === "smart-auto" || ai.id.includes("smart-model");
-  const hasSmartSelected = selectedAIs.some((ai) => isSmartModel(ai));
+  const SWIPE_CLOSE_DISTANCE = 90;
+  const SWIPE_CLOSE_VELOCITY = 0.7;
 
   // 点击外部关闭
   useEffect(() => {
@@ -140,13 +146,77 @@ export function AISelectorDropdown({
     onSelectionChange(newSelection);
   };
 
+  const handleSheetTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    if (typeof window !== "undefined" && window.innerWidth >= 640) {
+      return;
+    }
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStartYRef.current = touch.clientY;
+    touchLastYRef.current = touch.clientY;
+    touchStartTimeRef.current = Date.now();
+    setSheetDragging(true);
+  };
+
+  const handleSheetTouchMove = (event: TouchEvent<HTMLDivElement>) => {
+    const startY = touchStartYRef.current;
+    if (startY === null) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchLastYRef.current = touch.clientY;
+    const delta = Math.max(0, touch.clientY - startY);
+    setSheetDragOffsetY(Math.min(delta, 320));
+    if (delta > 0) {
+      event.preventDefault();
+    }
+  };
+
+  const resetSheetDrag = () => {
+    touchStartYRef.current = null;
+    touchLastYRef.current = 0;
+    touchStartTimeRef.current = 0;
+    setSheetDragging(false);
+  };
+
+  const handleSheetTouchEnd = () => {
+    const startY = touchStartYRef.current;
+    if (startY === null) return;
+    const delta = Math.max(0, touchLastYRef.current - startY);
+    const elapsedMs = Math.max(1, Date.now() - touchStartTimeRef.current);
+    const velocity = delta / elapsedMs;
+    resetSheetDrag();
+    if (delta >= SWIPE_CLOSE_DISTANCE || velocity >= SWIPE_CLOSE_VELOCITY) {
+      onClose();
+      return;
+    }
+    setSheetDragOffsetY(0);
+  };
+
+  const handleSheetTouchCancel = () => {
+    resetSheetDrag();
+    setSheetDragOffsetY(0);
+  };
+
   return (
     <Card
       ref={dropdownRef}
-      className="fixed bottom-0 sm:bottom-24 left-0 sm:left-1/2 sm:-translate-x-1/2 right-0 sm:right-auto mb-0 sm:mb-8 sm:w-[500px] shadow-2xl z-[1000] h-[85vh] sm:h-[600px] max-h-[85vh] flex flex-col bg-white/95 backdrop-blur-md border-t sm:border border-gray-200 rounded-t-3xl sm:rounded-2xl overflow-hidden"
+      className={`fixed bottom-0 sm:bottom-24 left-0 sm:left-1/2 sm:-translate-x-1/2 right-0 sm:right-auto mb-0 sm:mb-8 sm:w-[500px] shadow-2xl z-[1000] h-[85vh] sm:h-[600px] max-h-[85vh] flex flex-col bg-white/95 backdrop-blur-md border-t sm:border border-gray-200 rounded-t-3xl sm:rounded-2xl overflow-hidden translate-y-[var(--ai-sheet-drag-y)] sm:translate-y-0 ${
+        sheetDragging ? "" : "transition-transform duration-200 ease-out"
+      }`}
+      style={
+        {
+          "--ai-sheet-drag-y": `${sheetDragOffsetY}px`,
+        } as CSSProperties
+      }
     >
       {/* 移动端拉手 */}
-      <div className="sm:hidden flex justify-center pt-3 pb-1">
+      <div
+        className="sm:hidden flex justify-center pt-3 pb-1"
+        onTouchStart={handleSheetTouchStart}
+        onTouchMove={handleSheetTouchMove}
+        onTouchEnd={handleSheetTouchEnd}
+        onTouchCancel={handleSheetTouchCancel}
+      >
         <div className="w-12 h-1.5 bg-gray-200 rounded-full"></div>
       </div>
 
@@ -218,11 +288,12 @@ export function AISelectorDropdown({
                     {ais.map((ai) => {
                       const isSelected = selectedAIs.some((s) => s.id === ai.id);
                       const isSmart = isSmartModel(ai);
-                      const isDisabledBySmartExclusive =
-                        hasSmartSelected && !isSelected && !isSmart;
+                      const selectedNonSmartCount = selectedAIs.filter(
+                        (item) => !isSmartModel(item)
+                      ).length;
                       const isDisabledByLimit =
-                        !isSelected && !isSmart && selectedAIs.length >= 4;
-                      const isDisabled = isDisabledBySmartExclusive || isDisabledByLimit;
+                        !isSelected && !isSmart && selectedNonSmartCount >= 4;
+                      const isDisabled = isDisabledByLimit;
                       return (
                         <div
                           key={ai.id}
