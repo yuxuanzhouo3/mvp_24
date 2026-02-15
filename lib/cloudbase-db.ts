@@ -4,6 +4,7 @@
  */
 
 import cloudbase from "@cloudbase/node-sdk";
+import { createMessageId } from "@/lib/chat/message-id";
 
 let cachedApp: any = null;
 
@@ -122,7 +123,7 @@ export async function deleteGptSession(sessionId: string, userId: string) {
 export async function updateGptSession(
   sessionId: string,
   userId: string,
-  updates: { title?: string; updated_at?: string }
+  updates: { title?: string; updated_at?: string; multi_ai_config?: any }
 ) {
   try {
     const db = getCloudBaseApp().database();
@@ -210,9 +211,13 @@ export async function getGptMessages(
           } else if (!filterByAgent) {
             // 模式2：返回完整的多AI消息（用于history API）
             return {
+              id: msg.id,
               role: msg.role,
               isMultiAI: true,
               content: msg.content,
+              collaborationMode: msg.collaborationMode,
+              taskGraph: msg.taskGraph,
+              timestamp: msg.timestamp,
               model: sessionModel,
             };
           } else {
@@ -264,6 +269,7 @@ export async function saveGptMessage(messageData: {
     const collection = db.collection("ai_conversations");
 
     const message = {
+      id: createMessageId("msg"),
       role: messageData.role,
       content: messageData.content,
       timestamp: new Date().toISOString(),
@@ -298,6 +304,8 @@ export async function saveGptMessage(messageData: {
 export async function saveMultiAIMessage(messageData: {
   session_id: string;
   user_id: string;
+  user_message_id?: string;
+  assistant_message_id?: string;
   user_message: string;
   ai_responses: Array<{
     agentId: string;
@@ -307,6 +315,7 @@ export async function saveMultiAIMessage(messageData: {
     status: string;
     timestamp: Date;
   }>;
+  collaboration_mode?: "parallel" | "sequential" | "deep" | "graph";
   task_graph?: unknown;
 }) {
   try {
@@ -315,15 +324,32 @@ export async function saveMultiAIMessage(messageData: {
 
     const messages = [
       {
+        id:
+          messageData.user_message_id && messageData.user_message_id.trim()
+            ? messageData.user_message_id
+            : createMessageId("msg"),
         role: "user",
         content: messageData.user_message,
         timestamp: new Date().toISOString(),
         tokens_used: 0,
       },
       {
+        id:
+          messageData.assistant_message_id && messageData.assistant_message_id.trim()
+            ? messageData.assistant_message_id
+            : createMessageId("msg"),
         role: "assistant",
-        content: messageData.ai_responses,
+        content: messageData.ai_responses.map((resp) => ({
+          ...resp,
+          timestamp:
+            resp.timestamp instanceof Date
+              ? resp.timestamp.toISOString()
+              : resp.timestamp || new Date().toISOString(),
+        })),
         isMultiAI: true,
+        ...(messageData.collaboration_mode
+          ? { collaborationMode: messageData.collaboration_mode }
+          : {}),
         timestamp: new Date().toISOString(),
         ...(messageData.task_graph ? { taskGraph: messageData.task_graph } : {}),
       }

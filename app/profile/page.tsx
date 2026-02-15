@@ -13,12 +13,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getAuthClient } from "@/lib/auth/client";
 // import { getDatabase } from "@/lib/database/adapter";
 import { ArrowLeft, Save, User, Mail, Crown } from "lucide-react";
 import { Header } from "@/components/header";
+import { QuotaDisplay } from "@/components/quota-display";
 import { useApp } from "@/components/app-context";
 import { useUser } from "@/components/user-context";
 import { useTranslations } from "@/lib/i18n";
@@ -357,6 +357,15 @@ export default function ProfilePage() {
                       ? t.profile.renew
                       : t.profile.activateMembership}
                   </Button>
+                </div>
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label className="flex items-center gap-2">
+                  <Crown className="w-4 h-4" />
+                  <span>{language === "zh" ? "额度详情" : "Quota Details"}</span>
+                </Label>
+                <div className="rounded-lg border border-gray-200 bg-white p-3">
+                  <QuotaDisplay />
                 </div>
               </div>
             </div>

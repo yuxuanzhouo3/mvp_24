@@ -17,6 +17,47 @@ import {
   createGptSession as createCloudBaseSession,
 } from "@/lib/cloudbase-db";
 
+const GET_SESSION_SUMMARIES_RPC = "get_gpt_session_summaries";
+
+function isRpcMissing(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return (
+    error?.code === "PGRST202" ||
+    text.includes("could not find the function") ||
+    text.includes("does not exist")
+  );
+}
+
+function normalizePreview(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function getLastMessagePreview(messages: any[]): string {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return "";
+  }
+
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage) {
+    return "";
+  }
+
+  let raw = "";
+  if (typeof lastMessage.content === "string") {
+    raw = lastMessage.content;
+  } else if (Array.isArray(lastMessage.content)) {
+    const firstRespWithContent = lastMessage.content.find(
+      (item: any) => typeof item?.content === "string" && item.content.trim()
+    );
+    raw = firstRespWithContent?.content || "";
+  } else if (lastMessage.content && typeof lastMessage.content === "object") {
+    raw = typeof lastMessage.content.content === "string" ? lastMessage.content.content : "";
+  }
+
+  const cleaned = normalizePreview(raw);
+  return cleaned.length > 120 ? `${cleaned.slice(0, 120)}...` : cleaned;
+}
+
 /**
  * GET /api/chat/sessions
  * 获取当前用户的所有会话列表
@@ -74,10 +115,16 @@ export async function GET(req: NextRequest) {
       }
 
       // 标准化会话格式，确保有 id 字段
-      const normalizedSessions = (sessions || []).map((session: any) => ({
-        id: session._id,
-        ...session,
-      }));
+      const normalizedSessions = (sessions || []).map((session: any) => {
+        const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
+        const { messages: _messages, ...rest } = session;
+        return {
+          id: session._id || session.id,
+          ...rest,
+          message_count: sessionMessages.length,
+          last_message: getLastMessagePreview(sessionMessages),
+        };
+      });
 
       return Response.json({
         sessions: normalizedSessions,
@@ -87,30 +134,79 @@ export async function GET(req: NextRequest) {
       });
     } else {
       // 国际版：Supabase
-      const {
-        data: sessions,
-        error,
-        count,
-      } = await supabaseAdmin
+      const { count, error: countError } = await supabaseAdmin
         .from("gpt_sessions")
-        .select("*", { count: "exact" })
-        .eq("user_id", userId)
-        .order("updated_at", { ascending: false })
-        .range(safeOffset, safeOffset + safeLimit - 1);
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", userId);
 
-      if (error) {
-        console.error("Failed to fetch sessions from Supabase:", error);
+      if (countError) {
+        console.error("Failed to count sessions from Supabase:", countError);
         return Response.json(
           { error: "Failed to fetch sessions" },
           { status: 500 }
         );
       }
 
-      // 添加消息计数到每个会话
-      const sessionsWithCount = (sessions || []).map((session: any) => ({
-        ...session,
-        message_count: session.messages ? session.messages.length : 0,
-      }));
+      const { data: summaries, error: summaryError } = await supabaseAdmin.rpc(
+        GET_SESSION_SUMMARIES_RPC,
+        {
+          p_user_id: userId,
+          p_limit: safeLimit,
+          p_offset: safeOffset,
+        }
+      );
+
+      if (summaryError && !isRpcMissing(summaryError)) {
+        console.error("Failed to fetch session summaries from Supabase:", summaryError);
+        return Response.json(
+          { error: "Failed to fetch sessions" },
+          { status: 500 }
+        );
+      }
+
+      let sessionsWithCount: any[] = [];
+      if (summaryError && isRpcMissing(summaryError)) {
+        const { data: sessions, error } = await supabaseAdmin
+          .from("gpt_sessions")
+          .select("id, title, model, created_at, updated_at, multi_ai_config, messages")
+          .eq("user_id", userId)
+          .order("updated_at", { ascending: false })
+          .range(safeOffset, safeOffset + safeLimit - 1);
+
+        if (error) {
+          console.error("Failed to fetch sessions from Supabase:", error);
+          return Response.json(
+            { error: "Failed to fetch sessions" },
+            { status: 500 }
+          );
+        }
+
+        sessionsWithCount = (sessions || []).map((session: any) => {
+          const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
+          return {
+            id: session.id,
+            title: session.title,
+            model: session.model,
+            created_at: session.created_at,
+            updated_at: session.updated_at,
+            multi_ai_config: session.multi_ai_config || null,
+            message_count: sessionMessages.length,
+            last_message: getLastMessagePreview(sessionMessages),
+          };
+        });
+      } else {
+        sessionsWithCount = (summaries || []).map((row: any) => ({
+          id: row.id,
+          title: row.title,
+          model: row.model,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          multi_ai_config: row.multi_ai_config || null,
+          message_count:
+            typeof row.message_count === "number" ? row.message_count : Number(row.message_count || 0),
+          last_message: typeof row.last_message === "string" ? row.last_message : "",
+        }));
+      }
 
       return Response.json({
         sessions: sessionsWithCount,
@@ -171,6 +267,16 @@ export async function POST(req: NextRequest) {
       if (!Array.isArray(selectedAgentIds) || selectedAgentIds.length === 0) {
         return Response.json(
           { error: "selectedAgentIds must be a non-empty array for multi-AI sessions" },
+          { status: 400 }
+        );
+      }
+      const hasSmartAgent = selectedAgentIds.some(
+        (value: unknown) =>
+          typeof value === "string" && value.trim().toLowerCase() === "smart-model"
+      );
+      if (hasSmartAgent && selectedAgentIds.length > 1) {
+        return Response.json(
+          { error: "smart-model must be selected alone" },
           { status: 400 }
         );
       }

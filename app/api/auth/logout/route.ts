@@ -13,6 +13,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAuthToken } from "@/lib/auth-utils";
 import { revokeAllUserTokens } from "@/lib/refresh-token-manager";
 import { logSecurityEvent } from "@/lib/logger";
+import {
+  clearAuthCookies,
+  readAccessTokenFromRequest,
+} from "@/lib/auth/cookies";
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,21 +27,26 @@ export async function POST(request: NextRequest) {
 
     // Step 1: Extract and verify accessToken from Authorization header
     const authHeader = request.headers.get("authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      console.warn(
-        "[/api/auth/logout] Missing or invalid Authorization header"
-      );
+    const bearerToken =
+      authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : null;
+    const token = bearerToken || readAccessTokenFromRequest(request);
+
+    if (!token) {
+      console.warn("[/api/auth/logout] Missing authorization token");
       logSecurityEvent("logout_unauthorized", undefined, clientIP, {
-        reason: "Missing Authorization header",
+        reason: "Missing authorization token",
       });
 
-      return NextResponse.json(
-        { error: "Unauthorized - missing Authorization header" },
+      const response = NextResponse.json(
+        { error: "Unauthorized - missing authorization token" },
         { status: 401 }
       );
+      clearAuthCookies(response);
+      return response;
     }
 
-    const token = authHeader.slice(7); // Remove "Bearer " prefix
     const authResult = await verifyAuthToken(token);
 
     if (!authResult.success || !authResult.userId) {
@@ -46,7 +55,9 @@ export async function POST(request: NextRequest) {
         reason: authResult.error || "Invalid token",
       });
 
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      const response = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      clearAuthCookies(response);
+      return response;
     }
 
     const userId = authResult.userId;
@@ -80,7 +91,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Step 4: Return success response (frontend clears localStorage)
-    return NextResponse.json(
+    const response = NextResponse.json(
       {
         success: true,
         message: "Logged out successfully",
@@ -88,6 +99,8 @@ export async function POST(request: NextRequest) {
       },
       { status: 200 }
     );
+    clearAuthCookies(response);
+    return response;
   } catch (error: any) {
     console.error("[/api/auth/logout] Error:", error.message);
 

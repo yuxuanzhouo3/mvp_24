@@ -8,6 +8,7 @@ import { isChinaRegion } from "@/lib/config/region";
 import { WechatProviderV3 } from "@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3";
 import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
 import { z } from "zod";
+import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 
 // Alipay SDK 需要 Node.js 运行时
 export const runtime = "nodejs";
@@ -26,6 +27,12 @@ const querySchema = z.object({
  */
 export async function GET(request: NextRequest) {
   try {
+    const authResult = await requireAuth(request);
+    if (!authResult) {
+      return createAuthErrorResponse();
+    }
+    const { user } = authResult;
+
     // 1. 解析查询参数
     const searchParams = request.nextUrl.searchParams;
     const paymentId = searchParams.get("paymentId");
@@ -50,18 +57,51 @@ export async function GET(request: NextRequest) {
       // CloudBase 查询
       try {
         const db = getDatabase();
-        const result = await db
-          .collection("payments")
-          .where({
-            $or: [
-              { out_trade_no: paymentId },
-              { _id: paymentId },
-              { transaction_id: paymentId },
-            ],
-          })
-          .get();
+        const _ = (db as any).command;
+        let result: any = null;
 
-        paymentRecord = result.data?.[0];
+        try {
+          result = await db
+            .collection("payments")
+            .where({
+              $or: [
+                { out_trade_no: paymentId },
+                { _id: paymentId },
+                { transaction_id: paymentId },
+              ],
+            })
+            .get();
+        } catch {
+          // 某些 CloudBase 版本不支持 $or，回退为 _.or
+          result = await db
+            .collection("payments")
+            .where(
+              _.or([
+                { out_trade_no: _.eq(paymentId) },
+                { _id: _.eq(paymentId) },
+                { transaction_id: _.eq(paymentId) },
+              ])
+            )
+            .get();
+        }
+
+        if ((!result?.data || result.data.length === 0) && paymentId) {
+          try {
+            const docResult = await db.collection("payments").doc(paymentId).get();
+            if (docResult?.data) {
+              const docData = Array.isArray(docResult.data)
+                ? docResult.data[0]
+                : docResult.data;
+              result = {
+                data: docData ? [docData] : [],
+              };
+            }
+          } catch {
+            // ignore doc fallback errors
+          }
+        }
+
+        paymentRecord = (result.data || []).find((row: any) => row.user_id === user.id);
         paymentMethod = paymentRecord?.payment_method || "";
       } catch (error) {
         console.error("Error querying CloudBase payment:", error);
@@ -72,6 +112,7 @@ export async function GET(request: NextRequest) {
         const { data, error } = await supabaseAdmin
           .from("payments")
           .select("*")
+          .eq("user_id", user.id)
           .or(
             `out_trade_no.eq.${paymentId},transaction_id.eq.${paymentId},id.eq.${paymentId}`
           )
@@ -97,7 +138,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 3. 如果是微信支付，从微信服务器查询最新状态
+    // 3. 主动查询第三方支付状态（微信 / 支付宝）
     let finalStatus = paymentRecord.status || "pending";
 
     if (paymentMethod === "wechat") {
@@ -173,8 +214,73 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 注意：不再主动查询支付宝服务器，状态仅来自数据库和 webhook 更新
-    // 这样避免重复触发业务逻辑，确保 webhook 作为唯一处理来源
+    if (paymentMethod === "alipay" && finalStatus !== "completed") {
+      try {
+        const outTradeNo =
+          paymentRecord.out_trade_no || paymentRecord.transaction_id || paymentId;
+
+        if (outTradeNo) {
+          const now = Date.now();
+          const lastQueryAt = alipayQueryThrottle.get(outTradeNo) || 0;
+          const shouldQuery = now - lastQueryAt > 1500;
+
+          if (shouldQuery) {
+            alipayQueryThrottle.set(outTradeNo, now);
+
+            const alipayProvider = new AlipayProvider(process.env);
+            const alipayStatus = await alipayProvider.queryPayment(outTradeNo);
+            const tradeStatus = (alipayStatus?.trade_status || "").toUpperCase();
+            const tradeNo = alipayStatus?.trade_no;
+
+            finalStatus = mapAlipayTradeStatusToPaymentStatus(tradeStatus);
+
+            console.log("[Payment Status] 支付宝API返回结果", {
+              outTradeNo,
+              tradeStatus,
+              tradeNo,
+              finalStatus,
+            });
+
+            if (finalStatus === "completed" && paymentRecord.status !== "completed") {
+              try {
+                const updatePayload = {
+                  status: "completed",
+                  transaction_id: tradeNo || paymentRecord.transaction_id,
+                  updated_at: new Date().toISOString(),
+                };
+
+                if (isChinaRegion()) {
+                  const db = getDatabase();
+                  if (paymentRecord._id) {
+                    await db
+                      .collection("payments")
+                      .doc(paymentRecord._id)
+                      .update(updatePayload);
+                  } else {
+                    await db
+                      .collection("payments")
+                      .where({ out_trade_no: outTradeNo })
+                      .update(updatePayload);
+                  }
+                } else {
+                  await supabaseAdmin
+                    .from("payments")
+                    .update(updatePayload)
+                    .eq("id", paymentRecord.id);
+                }
+
+                console.log("[Payment Status] 支付宝支付状态已补写为 completed");
+              } catch (updateError) {
+                console.error("Error updating Alipay payment status:", updateError);
+              }
+            }
+          }
+        }
+      } catch (alipayError) {
+        console.error("Error querying Alipay status:", alipayError);
+        finalStatus = paymentRecord.status || "pending";
+      }
+    }
 
     // 4. 返回支付状态
     return NextResponse.json(
@@ -220,4 +326,18 @@ function mapTradeStateToPaymentStatus(tradeState: string): string {
   };
 
   return stateMap[tradeState] || "unknown";
+}
+
+/**
+ * 将支付宝状态映射到通用支付状态
+ */
+function mapAlipayTradeStatusToPaymentStatus(tradeStatus: string): string {
+  const stateMap: Record<string, string> = {
+    TRADE_SUCCESS: "completed",
+    TRADE_FINISHED: "completed",
+    WAIT_BUYER_PAY: "pending",
+    TRADE_CLOSED: "failed",
+  };
+
+  return stateMap[tradeStatus] || "pending";
 }

@@ -370,6 +370,18 @@ function AuthPageContent() {
     try {
       // 根据区域采用不同的注册方式
       if (userRegion === RegionType.CHINA) {
+        if (!signupOtpSent) {
+          setError("请先发送邮箱验证码");
+          setLoading(false);
+          return;
+        }
+
+        if (!signupOtp || signupOtp.length < 4) {
+          setError("请输入有效的邮箱验证码");
+          setLoading(false);
+          return;
+        }
+
         // 中国区域：直接使用 email + password + confirmPassword 注册
         // 无需 OTP 验证，直接调用后端 API
 
@@ -380,6 +392,7 @@ function AuthPageContent() {
             email,
             password,
             confirmPassword,
+            signupOtp,
             fullName: email.split("@")[0], // 使用邮箱前缀作为默认名称
           }),
         });
@@ -408,6 +421,8 @@ function AuthPageContent() {
         setPassword("");
         setConfirmPassword("");
         setEmail("");
+        setSignupOtp("");
+        setSignupOtpSent(false);
         setLoginMethod("password");
         setAgreeToPrivacy(false);
         setLoading(false);
@@ -422,12 +437,7 @@ function AuthPageContent() {
           const { data, error: signUpError } = await authClient.signUp({
             email,
             password,
-            options: {
-              data: {
-                name: email.split("@")[0], // 存储用户名
-              },
-            },
-          });
+          } as any);
 
           if (signUpError) {
             // 处理特定的错误信息
@@ -717,22 +727,41 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const resetOtpPromise = authClient.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo: buildUrl(`${window.location.origin}/auth`),
-        },
-      });
+      if (userRegion === RegionType.CHINA) {
+        const requestPromise = fetch("/api/auth/email-otp/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, purpose: "password_reset" }),
+        }).then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.success) {
+            throw new Error(data?.error || "发送验证码失败");
+          }
+          return data;
+        });
 
-      const { error } = await Promise.race([resetOtpPromise, timeoutPromise]);
-
-      if (error) {
-        setError(error.message);
-      } else {
+        await Promise.race([requestPromise, timeoutPromise]);
         setForgotPasswordStep("verify");
         setError("验证码已发送到您的邮箱，请输入验证码。");
         setLoading(false);
+      } else {
+        const resetOtpPromise = authClient.signInWithOtp({
+          email,
+          options: {
+            shouldCreateUser: false,
+            emailRedirectTo: buildUrl(`${window.location.origin}/auth`),
+          },
+        });
+
+        const { error } = await Promise.race([resetOtpPromise, timeoutPromise]);
+
+        if (error) {
+          setError(error.message);
+        } else {
+          setForgotPasswordStep("verify");
+          setError("验证码已发送到您的邮箱，请输入验证码。");
+          setLoading(false);
+        }
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -764,21 +793,32 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const verifyPromise = authClient.verifyOtp({
-        email,
-        token: resetOtp,
-        type: "email",
-      });
-
-      const { error } = await Promise.race([verifyPromise, timeoutPromise]);
-
-      if (error) {
-        setError(error.message);
-      } else {
+      if (userRegion === RegionType.CHINA) {
+        // CN 模式下在最终重置时校验验证码，这里只进入下一步
+        await Promise.race([
+          Promise.resolve(true),
+          timeoutPromise,
+        ]);
         setForgotPasswordStep("reset");
-        setResetOtp("");
-        setError("验证码验证成功，请设置新密码。");
+        setError("验证码已记录，请设置新密码。");
         setLoading(false);
+      } else {
+        const verifyPromise = authClient.verifyOtp({
+          email,
+          token: resetOtp,
+          type: "email",
+        });
+
+        const { error } = await Promise.race([verifyPromise, timeoutPromise]);
+
+        if (error) {
+          setError(error.message);
+        } else {
+          setForgotPasswordStep("reset");
+          setResetOtp("");
+          setError("验证码验证成功，请设置新密码。");
+          setLoading(false);
+        }
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -815,18 +855,39 @@ function AuthPageContent() {
         }, 15000);
       });
 
-      const updatePromise = authClient.updateUser({
-        password: newPassword,
-      });
+      if (userRegion === RegionType.CHINA) {
+        const resetPromise = fetch("/api/auth/password/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            otp: resetOtp,
+            newPassword,
+            confirmPassword: confirmNewPassword,
+          }),
+        }).then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.success) {
+            throw new Error(data?.error || "重置密码失败");
+          }
+          return data;
+        });
 
-      const { error } = await Promise.race([updatePromise, timeoutPromise]);
+        await Promise.race([resetPromise, timeoutPromise]);
+      } else {
+        const updatePromise = authClient.updateUser({
+          password: newPassword,
+        });
 
-      if (error) {
-        setError(error.message);
-        return;
+        const { error } = await Promise.race([updatePromise, timeoutPromise]);
+
+        if (error) {
+          setError(error.message);
+          return;
+        }
+
+        await authClient.signOut();
       }
-
-      await authClient.signOut();
 
       setForgotPassword(false);
       resetForgotPasswordFlow();
@@ -865,6 +926,43 @@ function AuthPageContent() {
   };
 
   const buttonText = getButtonText();
+
+  const handleSendSignupOtp = async () => {
+    if (loading) return;
+    if (!email) {
+      setError("请输入邮箱");
+      return;
+    }
+    if (userRegion !== RegionType.CHINA) {
+      setError("当前模式不需要验证码");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/email-otp/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, purpose: "signup" }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        setError(data?.error || "发送验证码失败");
+        setLoading(false);
+        return;
+      }
+
+      setSignupOtpSent(true);
+      setSignupStep("verify");
+      setError("验证码已发送，请查收邮箱并输入。");
+      setLoading(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "发送验证码失败");
+      setLoading(false);
+    }
+  };
 
   const renderForgotPasswordForm = () => {
     if (forgotPasswordStep === "request") {
@@ -1377,6 +1475,31 @@ function AuthPageContent() {
                     </button>
                   </div>
                 </div>
+
+                {userRegion === RegionType.CHINA && (
+                  <div className="space-y-2">
+                    <Label htmlFor="signup-otp">邮箱验证码</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="signup-otp"
+                        type="text"
+                        placeholder={signupOtpSent ? "请输入验证码" : "先发送验证码"}
+                        value={signupOtp}
+                        onChange={(e) => setSignupOtp(e.target.value)}
+                        maxLength={6}
+                        required
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleSendSignupOtp}
+                        disabled={loading || !email}
+                      >
+                        {signupOtpSent ? "重发" : "发送"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {/* 隐私政策同意 - 中国版本强制同意，国际版本可选 */}
                 <div className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">

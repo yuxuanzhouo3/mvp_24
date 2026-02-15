@@ -11,7 +11,8 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import { getClientAuthToken } from "@/lib/client-auth";
 
 export interface AppleIAPStatus {
   success: boolean;
@@ -24,21 +25,46 @@ export interface AppleIAPStatus {
   source: "apple" | "cached";
 }
 
-export function useAppleIAPStatus() {
+export function useAppleIAPStatus(enabled = true) {
   const [status, setStatus] = useState<AppleIAPStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
+    if (!enabled) {
+      setLoading(false);
+      setError(null);
+      setStatus(null);
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch("/api/payment/ios-iap/status");
+      const { token, error: authError } = await getClientAuthToken();
+      if (authError || !token) {
+        setStatus(null);
+        setError(null);
+        return;
+      }
+
+      const response = await fetch("/api/payment/ios-iap/status", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       if (response.status === 404) {
         // 用户没有 Apple IAP 订阅
         setStatus(null);
+        return;
+      }
+
+      if (response.status === 401 || response.status === 403) {
+        // 无鉴权或会话过期：静默处理，避免污染全局错误提示
+        setStatus(null);
+        setError(null);
         return;
       }
 
@@ -59,8 +85,8 @@ export function useAppleIAPStatus() {
 
   // 组件挂载时获取状态
   useEffect(() => {
-    fetchStatus();
-  }, []);
+    void fetchStatus();
+  }, [enabled]);
 
   return {
     status,

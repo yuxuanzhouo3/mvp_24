@@ -21,12 +21,18 @@ export async function signInWithEmailCN(
   password: string
 ): Promise<CloudBaseAuthResponse> {
   try {
-    const response = await fetch("/api/auth", {
+    const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "login", email, password }),
+      body: JSON.stringify({ email, password }),
     });
-    return await response.json();
+    const data = await response.json();
+    return {
+      success: response.ok,
+      message: data.error || data.message || (response.ok ? "ok" : "登录失败"),
+      user: data.user,
+      token: data.accessToken || data.token,
+    };
   } catch (error: any) {
     return {
       success: false,
@@ -39,17 +45,8 @@ export async function signUpWithEmailCN(
   email: string,
   password: string
 ): Promise<CloudBaseAuthResponse> {
-  try {
-    const response = await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "signup", email, password }),
-    });
-    return await response.json();
-  } catch (error: any) {
-    return {
-      success: false,
-      message: error.message || "请求失败",
-    };
-  }
+  return {
+    success: false,
+    message: "Sign up requires OTP. Please use /api/auth/register with signupOtp.",
+  };
 }

@@ -4,8 +4,9 @@ import { logSecurityEvent, logInfo } from "@/lib/logger";
 import { getCloudBaseApp } from "@/lib/cloudbase/init";
 import { createRefreshToken } from "@/lib/refresh-token-manager";
 import { getWechatUserByCode } from "@/lib/wechat/token-exchange";
-import * as jwt from "jsonwebtoken";
 import { z } from "zod";
+import { signAccessToken } from "@/lib/security/jwt";
+import { setAuthCookies } from "@/lib/auth/cookies";
 
 // 1️⃣ 请求参数验证
 const miniprogramLoginSchema = z.object({
@@ -125,7 +126,9 @@ export async function POST(request: NextRequest) {
         throw new Error("Miniprogram config not available, skip to native/web fallback");
       }
 
-      logInfo("Miniprogram login: exchanging code for openid", { code });
+      logInfo("Miniprogram login: exchanging code for openid", {
+        codeLength: code.length,
+      });
       const wechatData = await getOpenIdByCode(code, mpAppId!, mpAppSecret!);
       ({ openid, unionid } = wechatData);
       logInfo("Miniprogram login: got openid", { openid });
@@ -140,7 +143,9 @@ export async function POST(request: NextRequest) {
       // 原生 App（Android/iOS）开放平台 AppID
       if (hasNativeConfig) {
         loginSource = "oauth"; // 仍然走 OAuth 用户信息流程，但使用原生 AppID
-        logInfo("Native app fallback: exchanging code for access_token", { code });
+        logInfo("Native app fallback: exchanging code for access_token", {
+          codeLength: code.length,
+        });
         const wechatUser = await getWechatUserByCode(code, nativeAppId!, nativeAppSecret!);
         openid = wechatUser.openid;
         unionid = wechatUser.unionid;
@@ -150,7 +155,9 @@ export async function POST(request: NextRequest) {
       } else if (hasOauthConfig) {
         // 网页公众号/网站 OAuth 兜底
         loginSource = "oauth";
-        logInfo("Web OAuth fallback: exchanging code for access_token", { code });
+        logInfo("Web OAuth fallback: exchanging code for access_token", {
+          codeLength: code.length,
+        });
         const wechatUser = await getWechatUserByCode(code, oauthAppId!, oauthAppSecret!);
         openid = wechatUser.openid;
         unionid = wechatUser.unionid;
@@ -232,7 +239,7 @@ export async function POST(request: NextRequest) {
       const insertResult = await usersCollection.add(newUser);
       userId = insertResult.id || insertResult._id;
 
-      logSecurityEvent("miniprogram_user_created", userId, clientIP, {
+      logSecurityEvent("miniprogram_user_created", userId || undefined, clientIP, {
         openid,
         loginSource,
       });
@@ -270,18 +277,12 @@ export async function POST(request: NextRequest) {
     }
 
     // 7️⃣ 生成 JWT tokens
-    const accessPayload = {
+    const accessToken = signAccessToken({
       userId,
       email: loginEmail,
       region: "CN",
       source: loginSource,
-    };
-
-    const accessToken = jwt.sign(
-      accessPayload,
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      { expiresIn: "1h" }
-    );
+    });
 
     logInfo("Generated access token for miniprogram user", { userId });
 
@@ -303,7 +304,7 @@ export async function POST(request: NextRequest) {
     logInfo("Generated refresh token for miniprogram user", { userId });
 
     // 8️⃣ 返回登录成功 - 使用小程序期望的响应格式
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         token: accessToken, // ✅ 小程序需要的 token
@@ -318,6 +319,8 @@ export async function POST(request: NextRequest) {
       },
       message: "登录成功",
     });
+    setAuthCookies(response, accessToken, refreshToken);
+    return response;
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";

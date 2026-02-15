@@ -4,6 +4,7 @@
 
 import { chinaAIConfig } from "./china-ai.config";
 import { globalAIConfig } from "./global-ai.config";
+import { isChinaRegion } from "@/lib/config/region";
 import type { AIAgent } from "./types";
 
 export interface AIAgentConfig {
@@ -65,17 +66,29 @@ function convertToLegacyFormat(agent: AIAgent): AIAgentConfig {
   };
 }
 
+const CHINA_AI_AGENTS_LIBRARY: AIAgentConfig[] = chinaAIConfig.agents.map(
+  convertToLegacyFormat
+);
+const GLOBAL_AI_AGENTS_LIBRARY: AIAgentConfig[] = globalAIConfig.agents.map(
+  convertToLegacyFormat
+);
+
 export const AI_AGENTS_LIBRARY: AIAgentConfig[] = [
-  ...chinaAIConfig.agents.map(convertToLegacyFormat),
-  ...globalAIConfig.agents.map(convertToLegacyFormat),
+  ...CHINA_AI_AGENTS_LIBRARY,
+  ...GLOBAL_AI_AGENTS_LIBRARY,
 ];
 
+function getRegionAgentLibrary(): AIAgentConfig[] {
+  return isChinaRegion() ? CHINA_AI_AGENTS_LIBRARY : GLOBAL_AI_AGENTS_LIBRARY;
+}
+
 export function getEnabledAgents(): AIAgentConfig[] {
-  return AI_AGENTS_LIBRARY.filter((a) => a.enabled);
+  return getRegionAgentLibrary().filter((a) => a.enabled);
 }
 
 export function getAgentById(id: string): AIAgentConfig | undefined {
-  return AI_AGENTS_LIBRARY.find((a) => a.id === id);
+  const regionMatched = getRegionAgentLibrary().find((a) => a.id === id);
+  return regionMatched || AI_AGENTS_LIBRARY.find((a) => a.id === id);
 }
 
 export function validateAgents(agentIds: string[], userPlan: string) {

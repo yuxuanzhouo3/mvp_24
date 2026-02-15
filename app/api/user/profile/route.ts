@@ -1,5 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDatabase } from "@/lib/database/adapter";
+import { extractTokenFromHeader, verifyAuthToken } from "@/lib/auth-utils";
+
+async function requireAuth(request: NextRequest) {
+  const authHeader = request.headers.get("authorization");
+  const { token, error: tokenError } = extractTokenFromHeader(authHeader);
+
+  if (tokenError || !token) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { error: tokenError || "Unauthorized" },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const authResult = await verifyAuthToken(token);
+  if (!authResult.success || !authResult.userId) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        { error: authResult.error || "Invalid token" },
+        { status: 401 }
+      ),
+    };
+  }
+
+  return {
+    ok: true as const,
+    userId: authResult.userId,
+  };
+}
 
 /**
  * GET /api/user/profile
@@ -7,14 +39,24 @@ import { getDatabase } from "@/lib/database/adapter";
  */
 export async function GET(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (!auth.ok) {
+      return auth.response;
+    }
+
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get("userId");
+    const queryUserId = searchParams.get("userId");
+    const userId = queryUserId || auth.userId;
 
     if (!userId) {
       return NextResponse.json(
         { error: "User ID is required" },
         { status: 400 }
       );
+    }
+
+    if (userId !== auth.userId) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const db = getDatabase();
@@ -48,28 +90,35 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    const auth = await requireAuth(request);
+    if (!auth.ok) {
+      return auth.response;
+    }
+
     const body = await request.json();
     const { id, ...profileData } = body;
 
-    if (!id) {
-      return NextResponse.json(
-        { error: "User ID is required" },
-        { status: 400 }
-      );
+    if (id && id !== auth.userId) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+
+    const targetUserId = auth.userId;
 
     const db = getDatabase();
 
     // 尝试获取现有用户资料
-    const existing = await db.getById("web_users", id);
+    const existing = await db.getById("web_users", targetUserId);
 
     if (existing) {
       // 更新 web_users 表中的用户记录
-      const updated = await db.update("web_users", id, profileData);
+      const updated = await db.update("web_users", targetUserId, profileData);
       return NextResponse.json(updated);
     } else {
       // 创建新记录（注意：web_users 通常已经存在，这个分支可能不会执行）
-      const created = await db.insert("web_users", { id, ...profileData });
+      const created = await db.insert("web_users", {
+        id: targetUserId,
+        ...profileData,
+      });
       return NextResponse.json(created);
     }
   } catch (error) {

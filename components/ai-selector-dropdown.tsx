@@ -4,8 +4,8 @@ import { useState, useEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Search, X, Check } from "lucide-react";
+import { Search, X, Check, Sparkles } from "lucide-react";
+import type { RefObject } from "react";
 
 interface AIAgent {
   id: string;
@@ -22,6 +22,7 @@ interface AISelectorDropdownProps {
   selectedAIs: AIAgent[];
   onSelectionChange: (ais: AIAgent[]) => void;
   onClose: () => void;
+  triggerRef?: RefObject<HTMLElement | null>;
 }
 
 export function AISelectorDropdown({
@@ -29,13 +30,31 @@ export function AISelectorDropdown({
   selectedAIs,
   onSelectionChange,
   onClose,
+  triggerRef,
 }: AISelectorDropdownProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const smartGradientTextClass =
+    "bg-[linear-gradient(90deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] bg-clip-text text-transparent";
+  const smartGradientSoftClass =
+    "bg-[linear-gradient(90deg,#2f8cff14_0%,#7a5cff14_35%,#ff2d9514_70%,#ff8a1f14_100%)]";
+  const smartGradientStrongClass =
+    "bg-[linear-gradient(90deg,#2f8cff2e_0%,#7a5cff2e_35%,#ff2d952b_70%,#ff8a1f2b_100%)]";
+  const smartGradientLockedClass =
+    "bg-[linear-gradient(90deg,#2f8cff1f_0%,#7a5cff1f_35%,#ff2d951d_70%,#ff8a1f1d_100%)]";
+  const isSmartModel = (ai: AIAgent) =>
+    ai.model === "smart-auto" || ai.id.includes("smart-model");
+  const hasSmartSelected = selectedAIs.some((ai) => isSmartModel(ai));
 
   // 点击外部关闭
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      if (
+        triggerRef?.current &&
+        triggerRef.current.contains(event.target as Node)
+      ) {
+        return;
+      }
       if (
         dropdownRef.current &&
         !dropdownRef.current.contains(event.target as Node)
@@ -46,7 +65,7 @@ export function AISelectorDropdown({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+  }, [onClose, triggerRef]);
 
   // 过滤AI
   const filteredAIs = availableAIs.filter((ai) =>
@@ -55,6 +74,15 @@ export function AISelectorDropdown({
 
   // 按类别分组
   const groupedAIs = filteredAIs.reduce((groups, ai) => {
+    if (isSmartModel(ai)) {
+      const smartCategory = "智能推荐";
+      if (!groups[smartCategory]) {
+        groups[smartCategory] = [];
+      }
+      groups[smartCategory].push(ai);
+      return groups;
+    }
+
     // 根据描述或名称判断分类
     let category = "其他模型";
     const desc = ai.description.toLowerCase();
@@ -80,7 +108,7 @@ export function AISelectorDropdown({
   }, {} as Record<string, AIAgent[]>);
 
   // 排序分类
-  const categoryOrder = ["旗舰模型", "深度思考", "平衡模型", "快速模型", "特殊场景", "其他模型"];
+  const categoryOrder = ["智能推荐", "旗舰模型", "深度思考", "平衡模型", "快速模型", "特殊场景", "其他模型"];
   const sortedCategories = Object.keys(groupedAIs).sort((a, b) => {
     const indexA = categoryOrder.indexOf(a);
     const indexB = categoryOrder.indexOf(b);
@@ -90,16 +118,22 @@ export function AISelectorDropdown({
   // 切换选择 - 直接生效
   const toggleAI = (ai: AIAgent) => {
     const isSelected = selectedAIs.some((s) => s.id === ai.id);
+    const isSmart = isSmartModel(ai);
     let newSelection: AIAgent[];
 
     if (isSelected) {
       newSelection = selectedAIs.filter((s) => s.id !== ai.id);
+    } else if (isSmart) {
+      // 智能模型独占：选中后只能保留它一个
+      newSelection = [ai];
     } else {
+      // 兜底：移除可能残留的智能模型（例如旧会话数据）
+      const withoutSmart = selectedAIs.filter((s) => !isSmartModel(s));
       // 检查是否已达到最大选择数量
-      if (selectedAIs.length >= 4) {
+      if (withoutSmart.length >= 4) {
         return; // 不允许选择更多
       }
-      newSelection = [...selectedAIs, ai];
+      newSelection = [...withoutSmart, ai];
     }
 
     // 立即更新选择
@@ -120,7 +154,9 @@ export function AISelectorDropdown({
       <div className="flex items-center justify-between p-4 border-b bg-gray-50/50">
         <div>
           <h3 className="text-sm font-bold text-gray-900">选择 AI 模型</h3>
-          <p className="text-[10px] text-gray-500 mt-0.5">最多可选 4 个模型并行对话</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">
+            最多可选 4 个模型并行对话（智能模型仅可单独选择）
+          </p>
         </div>
         <Button
           variant="ghost"
@@ -181,31 +217,77 @@ export function AISelectorDropdown({
                   <div className="grid grid-cols-1 gap-1">
                     {ais.map((ai) => {
                       const isSelected = selectedAIs.some((s) => s.id === ai.id);
-                      const isDisabled = !isSelected && selectedAIs.length >= 4;
+                      const isSmart = isSmartModel(ai);
+                      const isDisabledBySmartExclusive =
+                        hasSmartSelected && !isSelected && !isSmart;
+                      const isDisabledByLimit =
+                        !isSelected && !isSmart && selectedAIs.length >= 4;
+                      const isDisabled = isDisabledBySmartExclusive || isDisabledByLimit;
                       return (
                         <div
                           key={ai.id}
-                          className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
-                            isDisabled
-                              ? "cursor-not-allowed opacity-40"
-                              : "cursor-pointer hover:bg-blue-50/50 active:scale-[0.98]"
-                          } ${isSelected ? "bg-blue-50 ring-1 ring-blue-200" : ""}`}
+                          className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+                            isSmart
+                              ? isDisabled
+                                ? `cursor-not-allowed opacity-40 ${smartGradientLockedClass} border border-fuchsia-100`
+                                : `cursor-pointer active:scale-[0.98] border ${
+                                    isSelected
+                                      ? `${smartGradientStrongClass} border-fuchsia-300 ring-2 ring-fuchsia-200 shadow-lg shadow-fuchsia-100/80`
+                                      : `${smartGradientSoftClass} border-violet-200 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-100/80`
+                                  }`
+                              : isDisabled
+                                ? "cursor-not-allowed opacity-40"
+                                : "cursor-pointer hover:bg-blue-50/50 active:scale-[0.98]"
+                          } ${!isSmart && isSelected ? "bg-blue-50 ring-1 ring-blue-200" : ""}`}
                           onClick={() => !isDisabled && toggleAI(ai)}
                         >
+                          {isSmart && (
+                            <div className="absolute top-2 right-2 flex items-center gap-1 rounded-full bg-white/85 border border-violet-200 px-1.5 py-0.5">
+                              <Sparkles className="h-3 w-3 text-fuchsia-500" />
+                              <span className={`text-[9px] font-bold tracking-wide ${smartGradientTextClass}`}>
+                                AUTO
+                              </span>
+                            </div>
+                          )}
+
                           <div className={`flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center border transition-colors ${
-                            isSelected ? "bg-blue-500 border-blue-500" : "bg-white border-gray-300 group-hover:border-blue-400"
+                            isSmart
+                              ? isSelected
+                                ? "bg-[linear-gradient(135deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] border-transparent"
+                                : "bg-white/85 border-violet-200"
+                              : isSelected
+                                ? "bg-blue-500 border-blue-500"
+                                : "bg-white border-gray-300 group-hover:border-blue-400"
                           }`}>
-                            {isSelected && <Check className="h-3.5 w-3.5 text-white" />}
+                            {isSelected && (
+                              <Check className={`h-3.5 w-3.5 ${isSmart ? "text-white" : "text-white"}`} />
+                            )}
                           </div>
                           
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              {ai.icon && <span className="text-base leading-none">{ai.icon}</span>}
-                              <span className={`text-sm font-semibold truncate ${isSelected ? "text-blue-700" : "text-gray-700"}`}>
+                              {isSmart ? (
+                                <Sparkles className="h-4 w-4 text-fuchsia-500 drop-shadow-[0_0_6px_rgba(217,70,239,0.45)]" />
+                              ) : (
+                                ai.icon && <span className="text-base leading-none">{ai.icon}</span>
+                              )}
+                              <span
+                                className={`text-sm font-semibold truncate ${
+                                  isSmart
+                                    ? smartGradientTextClass
+                                    : isSelected
+                                      ? "text-blue-700"
+                                      : "text-gray-700"
+                                }`}
+                              >
                                 {ai.name}
                               </span>
                             </div>
-                            <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-1">
+                            <p
+                              className={`text-[11px] mt-0.5 line-clamp-1 ${
+                                isSmart ? "text-slate-600" : "text-gray-500"
+                              }`}
+                            >
                               {ai.description}
                             </p>
                           </div>

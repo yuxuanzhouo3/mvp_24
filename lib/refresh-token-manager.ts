@@ -5,14 +5,21 @@
  */
 
 import * as crypto from "crypto";
-import * as jwt from "jsonwebtoken";
 import { getCloudBaseApp } from "@/lib/cloudbase/init";
 import { RefreshTokenRecord } from "@/lib/database/cloudbase-schema";
 import { CLOUDBASE_COLLECTIONS } from "@/lib/database/cloudbase-schema";
+import {
+  signRefreshToken,
+  verifyRefreshTokenJwt,
+} from "@/lib/security/jwt";
 
 // 生成 UUID v4
 function generateUUID(): string {
   return crypto.randomUUID();
+}
+
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 interface CreateRefreshTokenOptions {
@@ -43,12 +50,8 @@ export async function createRefreshToken(
     // 生成唯一的 token ID
     const tokenId = generateUUID();
 
-    // 生成 refresh token JWT
-    const refreshToken = jwt.sign(
-      { userId, tokenId },
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      { expiresIn: "7d" }
-    );
+    const refreshToken = signRefreshToken({ userId, tokenId });
+    const refreshTokenHash = hashToken(refreshToken);
 
     // 保存到腾讯云
     const db = getCloudBaseApp().database();
@@ -59,7 +62,7 @@ export async function createRefreshToken(
       tokenId,
       userId,
       email,
-      refreshToken, // 可选：保存加密后的token副本
+      refreshTokenHash,
       deviceInfo,
       ipAddress,
       userAgent,
@@ -106,13 +109,10 @@ export async function verifyRefreshToken(
   token: string
 ): Promise<VerifyRefreshTokenResult> {
   try {
-    // 1. 验证 JWT 签名和过期时间
+    // 1. 验证 JWT 签名、过期时间和 token 类型
     let payload: any;
     try {
-      payload = jwt.verify(
-        token,
-        process.env.JWT_SECRET || "fallback-secret-key-for-development-only"
-      );
+      payload = verifyRefreshTokenJwt(token);
     } catch (error) {
       console.warn("[Refresh Token Manager] JWT 验证失败:", error);
       return {
@@ -151,6 +151,22 @@ export async function verifyRefreshToken(
     }
 
     const tokenRecord = result.data[0];
+
+    const providedTokenHash = hashToken(token);
+    if (tokenRecord.refreshTokenHash) {
+      if (tokenRecord.refreshTokenHash !== providedTokenHash) {
+        return {
+          valid: false,
+          error: "Refresh token mismatch",
+        };
+      }
+    } else if (tokenRecord.refreshToken && tokenRecord.refreshToken !== token) {
+      // 兼容历史版本：旧数据可能存储了明文 refresh token
+      return {
+        valid: false,
+        error: "Refresh token mismatch",
+      };
+    }
 
     // 3. 检查是否已过期
     if (new Date(tokenRecord.expiresAt) < new Date()) {

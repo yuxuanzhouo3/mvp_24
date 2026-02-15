@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import {
   Card,
   CardContent,
@@ -13,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Check, Package, Sparkles, Gem } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
-import { ADDON_PACKAGES, getAddonPackageById, type AddonPackage } from "@/constants/addon-packages";
+import { ADDON_PACKAGES, type AddonPackage } from "@/constants/addon-packages";
 
 interface AddonPackagesProps {
   onSelectPackage: (packageId: string) => void;
@@ -26,9 +25,8 @@ export function AddonPackages({
 }: AddonPackagesProps) {
   const { language } = useLanguage();
 
-  // 获取包图标
-  const getPackageIcon = (packageId: string) => {
-    switch (packageId) {
+  const getPackageIcon = (tier: AddonPackage["tier"]) => {
+    switch (tier) {
       case "starter":
         return <Package className="h-6 w-6 text-blue-500" />;
       case "standard":
@@ -40,35 +38,6 @@ export function AddonPackages({
     }
   };
 
-  // 获取包名称翻译
-  const getPackageName = (packageId: string) => {
-    const names: Record<string, { zh: string; en: string }> = {
-      starter: { zh: "入门包", en: "Starter Pack" },
-      standard: { zh: "标准包", en: "Standard Pack" },
-      premium: { zh: "豪华包", en: "Premium Pack" },
-    };
-    return names[packageId]?.[language] || packageId;
-  };
-
-  // 获取包描述
-  const getPackageDescription = (packageId: string) => {
-    const descriptions: Record<string, { zh: string; en: string }> = {
-      starter: {
-        zh: "适合尝鲜用户",
-        en: "Perfect for trying out"
-      },
-      standard: {
-        zh: "最佳性价比",
-        en: "Best value"
-      },
-      premium: {
-        zh: "专业创作者首选",
-        en: "For power users"
-      },
-    };
-    return descriptions[packageId]?.[language] || "";
-  };
-
   const formatPrice = (price: number, curr: string) => {
     return new Intl.NumberFormat(language === "zh" ? "zh-CN" : "en-US", {
       style: "currency",
@@ -77,7 +46,7 @@ export function AddonPackages({
   };
 
   const getPrice = (pkg: AddonPackage) => {
-    return currency === "CNY" ? pkg.priceCNY : pkg.priceUSD;
+    return currency === "CNY" ? pkg.priceZh : pkg.price;
   };
 
   return (
@@ -95,7 +64,7 @@ export function AddonPackages({
 
       <div className="grid gap-6 md:grid-cols-3 max-w-6xl mx-auto">
         {ADDON_PACKAGES.map((pkg) => {
-          const isPopular = pkg.id === "standard";
+          const isPopular = !!pkg.popular;
 
           return (
             <Card
@@ -113,9 +82,13 @@ export function AddonPackages({
               )}
 
               <CardHeader className="text-center">
-                <div className="flex justify-center mb-2">{getPackageIcon(pkg.id)}</div>
-                <CardTitle className="text-xl">{getPackageName(pkg.id)}</CardTitle>
-                <CardDescription>{getPackageDescription(pkg.id)}</CardDescription>
+                <div className="flex justify-center mb-2">{getPackageIcon(pkg.tier)}</div>
+                <CardTitle className="text-xl">
+                  {language === "zh" ? pkg.nameZh : pkg.name}
+                </CardTitle>
+                <CardDescription>
+                  {language === "zh" ? pkg.descriptionZh : pkg.description}
+                </CardDescription>
               </CardHeader>
 
               <CardContent className="text-center">

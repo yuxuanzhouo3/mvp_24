@@ -156,7 +156,7 @@ function PlatformContent() {
     setCurrentSessionId(null);
     setContextSessionId(undefined);
     clearMessages();
-    setSelectedGPTs([]);
+    setSelectedGPTs(availableAIs[0] ? [availableAIs[0]] : []);
   };
 
   // 选择历史对话 - 加载对话消息
@@ -186,12 +186,20 @@ function PlatformContent() {
       }
 
       const data = await response.json();
-      const messages = (data.messages || []).map((msg: any) => {
+      const messages = (data.messages || []).map((msg: any, idx: number) => {
+        const fallbackId = `legacy-${sessionId}-${idx}-${msg?.role || "unknown"}-${
+          msg?.timestamp || msg?.created_at || "no-ts"
+        }`;
+        const messageId =
+          typeof msg?.id === "string" && msg.id.trim().length > 0
+            ? msg.id
+            : fallbackId;
+
         // 检查是否是多AI消息
         if (msg.isMultiAI && Array.isArray(msg.content)) {
           // 多AI消息：content 是 AIResponse[] 数组
           return {
-            id: msg.id || `msg-${Date.now()}-${Math.random()}`,
+            id: messageId,
             role: msg.role,
             content: msg.content.map((aiResponse: any) => ({
               agentId: aiResponse.agentId,
@@ -207,6 +215,7 @@ function PlatformContent() {
               timestamp: new Date(aiResponse.timestamp || Date.now()),
             })),
             isMultiAI: true,
+            collaborationMode: msg.collaborationMode,
             taskGraph: msg.taskGraph,
             timestamp: new Date(msg.timestamp || msg.created_at || Date.now()),
           };
@@ -216,10 +225,10 @@ function PlatformContent() {
         const aiAgent = availableAIs.find((ai) => ai.model === msg.model);
 
         return {
-          id: msg.id || `msg-${Date.now()}-${Math.random()}`,
+          id: messageId,
           role: msg.role,
           content: msg.content,
-          timestamp: new Date(msg.created_at || Date.now()),
+          timestamp: new Date(msg.timestamp || msg.created_at || Date.now()),
           model: msg.model,
           agentName: aiAgent?.name || msg.model,
           tokens: msg.tokens_used,

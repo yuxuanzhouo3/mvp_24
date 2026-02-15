@@ -176,6 +176,7 @@ export interface RefreshTokenRecord {
   userId: string; // 关联到 web_users._id
   email: string; // 用户邮箱，便于查询
   refreshToken?: string; // 可选：加密后的 token（如果需要存储）
+  refreshTokenHash?: string; // refresh token 的哈希值（推荐）
   deviceInfo?: string; // 设备信息（浏览器、系统等）
   ipAddress?: string; // 登录 IP 地址
   userAgent?: string; // User-Agent 字符串

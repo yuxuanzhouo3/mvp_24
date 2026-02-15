@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { WechatProviderV3 } from '@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3';
 import { getDatabase } from '@/lib/cloudbase-service';
 import { z } from 'zod';
+import { requireAuth, createAuthErrorResponse } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
@@ -19,6 +20,12 @@ const querySchema = z.object({
  */
 export async function GET(request: NextRequest) {
   try {
+    const authResult = await requireAuth(request);
+    if (!authResult) {
+      return createAuthErrorResponse();
+    }
+    const { user } = authResult;
+
     // 1. 解析查询参数
     const searchParams = request.nextUrl.searchParams;
     const out_trade_no = searchParams.get('out_trade_no');
@@ -35,7 +42,32 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // 2. 初始化微信支付提供商
+    // 2. 从 CloudBase 查询订单信息（必须属于当前登录用户）
+    let localPayment: any = null;
+
+    try {
+      const db = getDatabase();
+      const result = await db
+        .collection('payments')
+        .where({ out_trade_no, user_id: user.id })
+        .get();
+
+      localPayment = result.data?.[0];
+    } catch (error) {
+      console.error('Error querying CloudBase payment:', error);
+    }
+
+    if (!localPayment) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Payment record not found',
+        },
+        { status: 404 }
+      );
+    }
+
+    // 3. 初始化微信支付提供商
     const wechatProvider = new WechatProviderV3({
       appId: process.env.WECHAT_APP_ID!,
       mchId: process.env.WECHAT_PAY_MCH_ID!,
@@ -45,23 +77,8 @@ export async function GET(request: NextRequest) {
       notifyUrl: `${process.env.APP_URL}/api/payment/webhook/wechat`,
     });
 
-    // 3. 查询微信支付订单状态
+    // 4. 查询微信支付订单状态
     const paymentStatus = await wechatProvider.queryOrderByOutTradeNo(out_trade_no);
-
-    // 4. 从 CloudBase 查询订单信息
-    let localPayment: any = null;
-
-    try {
-      const db = getDatabase();
-      const result = await db
-        .collection('payments')
-        .where({ out_trade_no })
-        .get();
-
-      localPayment = result.data?.[0];
-    } catch (error) {
-      console.error('Error querying CloudBase payment:', error);
-    }
 
     // 5. 如果微信报告支付成功但本地数据库还没更新，则更新
     if (
@@ -77,10 +94,14 @@ export async function GET(request: NextRequest) {
 
       try {
         const db = getDatabase();
-        await db
-          .collection('payments')
-          .where({ out_trade_no })
-          .update(updatedPayment);
+        if (localPayment._id) {
+          await db.collection('payments').doc(localPayment._id).update(updatedPayment);
+        } else {
+          await db
+            .collection('payments')
+            .where({ out_trade_no, user_id: user.id })
+            .update(updatedPayment);
+        }
 
         localPayment = { ...localPayment, ...updatedPayment };
       } catch (error) {

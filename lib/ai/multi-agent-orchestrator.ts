@@ -6,6 +6,7 @@
 import { aiRouter } from "./router";
 import { AIMessage, AIResponse, StreamChunk } from "./types";
 import { AIAgentConfig, getAgentById } from "./ai-agents.config";
+import { resolveSmartModel } from "./smart-model-router";
 
 export type CollaborationMode =
   | "sequential"
@@ -16,6 +17,7 @@ export type CollaborationMode =
 export interface AgentResponse {
   agentId: string;
   agentName: string;
+  model?: string;
   content: string;
   tokens: number;
   cost: number;
@@ -35,6 +37,21 @@ export interface MultiAgentResult {
  * 多AI协作编排器类
  */
 export class MultiAgentOrchestrator {
+  private resolveRuntimeModel(
+    requestedModel: string,
+    userMessage: string,
+    mode: CollaborationMode
+  ): string {
+    const resolved = resolveSmartModel({
+      requestedModel,
+      message: userMessage,
+      collaborationMode: mode,
+      availableModels: aiRouter.getAllModels(),
+      fallbackModel: aiRouter.getDefaultModel(),
+    });
+    return resolved.model;
+  }
+
   /**
    * 顺序协作 - AI按顺序处理，后面的AI可以看到前面的结果
    */
@@ -67,10 +84,16 @@ export class MultiAgentOrchestrator {
           { role: "user", content: accumulatedContext },
         ];
 
+        const runtimeModel = this.resolveRuntimeModel(
+          agent.model,
+          accumulatedContext,
+          "sequential"
+        );
+
         // 调用AI
-        const provider = aiRouter.getProviderForModel(agent.model);
+        const provider = aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
-          model: agent.model,
+          model: runtimeModel,
           temperature: agent.temperature,
           maxTokens: agent.maxTokens,
         });
@@ -78,10 +101,11 @@ export class MultiAgentOrchestrator {
         const response: AgentResponse = {
           agentId,
           agentName: agent.name,
+          model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
           cost: this.calculateCost(
-            agent.model,
+            runtimeModel,
             result.tokens.prompt,
             result.tokens.completion
           ),
@@ -148,9 +172,14 @@ export class MultiAgentOrchestrator {
           { role: "user", content: userMessage },
         ];
 
-        const provider = aiRouter.getProviderForModel(agent.model);
+        const runtimeModel = this.resolveRuntimeModel(
+          agent.model,
+          userMessage,
+          "parallel"
+        );
+        const provider = aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
-          model: agent.model,
+          model: runtimeModel,
           temperature: agent.temperature,
           maxTokens: agent.maxTokens,
         });
@@ -158,10 +187,11 @@ export class MultiAgentOrchestrator {
         const response: AgentResponse = {
           agentId,
           agentName: agent.name,
+          model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
           cost: this.calculateCost(
-            agent.model,
+            runtimeModel,
             result.tokens.prompt,
             result.tokens.completion
           ),
@@ -236,9 +266,14 @@ export class MultiAgentOrchestrator {
           { role: "user", content: `请提供你的分析（第${round + 1}轮）` },
         ];
 
-        const provider = aiRouter.getProviderForModel(agent.model);
+        const runtimeModel = this.resolveRuntimeModel(
+          agent.model,
+          debatePrompt,
+          "debate"
+        );
+        const provider = aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
-          model: agent.model,
+          model: runtimeModel,
           temperature: agent.temperature || 0.7,
           maxTokens: agent.maxTokens,
         });
@@ -246,10 +281,11 @@ export class MultiAgentOrchestrator {
         const response: AgentResponse = {
           agentId,
           agentName: agent.name,
+          model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
           cost: this.calculateCost(
-            agent.model,
+            runtimeModel,
             result.tokens.prompt,
             result.tokens.completion
           ),
@@ -316,9 +352,14 @@ ${analysisText}
       { role: "user", content: synthesisPrompt },
     ];
 
-    const provider = aiRouter.getProviderForModel(synthesizer.model);
+    const synthesisModel = this.resolveRuntimeModel(
+      synthesizer.model,
+      synthesisPrompt,
+      "synthesis"
+    );
+    const provider = aiRouter.getProviderForModel(synthesisModel);
     const result = await provider.chat(messages, {
-      model: synthesizer.model,
+      model: synthesisModel,
       temperature: 0.7,
       maxTokens: synthesizer.maxTokens,
     });
@@ -326,10 +367,11 @@ ${analysisText}
     const synthesisResponse: AgentResponse = {
       agentId: synthesizer.id,
       agentName: `${synthesizer.name} (综合者)`,
+      model: synthesisModel,
       content: result.content,
       tokens: result.tokens.total,
       cost: this.calculateCost(
-        synthesizer.model,
+        synthesisModel,
         result.tokens.prompt,
         result.tokens.completion
       ),
@@ -361,9 +403,16 @@ ${analysisText}
         { role: "user", content: userMessage },
       ];
 
-      const provider = aiRouter.getProviderForModel(agent.model);
+      const runtimeModel = resolveSmartModel({
+        requestedModel: agent.model,
+        message: userMessage,
+        collaborationMode: "parallel",
+        availableModels: aiRouter.getAllModels(),
+        fallbackModel: aiRouter.getDefaultModel(),
+      }).model;
+      const provider = aiRouter.getProviderForModel(runtimeModel);
       const stream = provider.chatStream(messages, {
-        model: agent.model,
+        model: runtimeModel,
         temperature: agent.temperature,
         maxTokens: agent.maxTokens,
       });

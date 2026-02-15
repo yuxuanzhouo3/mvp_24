@@ -27,12 +27,13 @@ export function AdDisplay({ position }: AdDisplayProps) {
   // 检查用户是否是会员
   const isMember = user && user.subscription_plan && user.subscription_plan !== "free";
 
-  // 如果是会员，不显示广告
-  if (isMember) {
-    return null;
-  }
-
   useEffect(() => {
+    if (isMember) {
+      setAds([]);
+      setLoading(false);
+      return;
+    }
+
     const loadAds = async () => {
       try {
         console.log(`[AdDisplay] Fetching ads for position: ${position}`);
@@ -63,7 +64,12 @@ export function AdDisplay({ position }: AdDisplayProps) {
       loadAds();
     }, 15000);
     return () => clearInterval(interval);
-  }, [position]);
+  }, [position, isMember]);
+
+  // 如果是会员，不显示广告
+  if (isMember) {
+    return null;
+  }
 
   const availableAds = ads.filter(ad => !dismissed.has(ad.id));
 

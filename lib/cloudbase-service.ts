@@ -1,7 +1,7 @@
 ﻿import cloudbase from "@cloudbase/node-sdk";
 import bcrypt from "bcryptjs";
-import * as jwt from "jsonwebtoken";
 import { createRefreshToken } from "@/lib/refresh-token-manager";
+import { signAccessToken, verifyAccessToken } from "@/lib/security/jwt";
 
 let cachedApp: any = null;
 
@@ -99,18 +99,11 @@ export async function loginUser(
 
     console.log(" [CloudBase Service] 登录成功");
 
-    const tokenPayload = {
+    const accessToken = signAccessToken({
       userId: user._id,
       email: user.email,
-      region: "china",
-    };
-
-    // ✅ 生成短期 Access Token (1小时)
-    const accessToken = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      { expiresIn: "1h" }
-    );
+      region: "CN",
+    });
 
     // ✅ 生成并保存长期 Refresh Token (7天) - 方案 B
     const refreshTokenRecord = await createRefreshToken({
@@ -195,18 +188,11 @@ export async function signupUser(
 
     console.log(" [CloudBase Service] 注册成功");
 
-    const tokenPayload = {
+    const accessToken = signAccessToken({
       userId: result.id,
       email,
-      region: "china",
-    };
-
-    // ✅ 生成短期 accessToken (1小时)
-    const accessToken = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      { expiresIn: "1h" }
-    );
+      region: "CN",
+    });
 
     console.log("[CloudBase Service] AccessToken generated for signup");
 
@@ -264,8 +250,8 @@ export function getDatabase() {
 
 export async function verifyToken(token: string): Promise<boolean> {
   try {
-    const userId = extractUserIdFromToken(token);
-    return !!userId;
+    const payload = verifyAccessToken(token);
+    return Boolean(payload.userId);
   } catch (error) {
     console.error(" [CloudBase Service] Token 验证失败:", error);
     return false;

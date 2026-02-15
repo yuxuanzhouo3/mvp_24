@@ -28,6 +28,9 @@ export const GENERAL_MODELS = [GENERAL_MODEL_ID];
  */
 export const EXTERNAL_MODELS = [
   // 国内版模型
+  "qwen3-max-2026-01-23",
+  "qwen-plus-2025-12-01",
+  "deepseek-v3.2",
   "qwen3-max",
   "qwen-plus",
   "qwen-flash",
@@ -221,6 +224,46 @@ export function getEnterpriseMonthlyVideoAudioLimit(): number {
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return 200;
   return Math.min(20000, n);
+}
+
+/**
+ * 获取 Free 套餐上下文消息数量限制
+ */
+export function getFreeContextMsgLimit(): number {
+  const raw = process.env.NEXT_PUBLIC_FREE_CONTEXT_MSG_LIMIT || "20";
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 20;
+  return Math.min(500, n);
+}
+
+/**
+ * 获取 Basic 套餐上下文消息数量限制
+ */
+export function getBasicContextMsgLimit(): number {
+  const raw = process.env.NEXT_PUBLIC_BASIC_CONTEXT_MSG_LIMIT || "50";
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 50;
+  return Math.min(2000, n);
+}
+
+/**
+ * 获取 Pro 套餐上下文消息数量限制
+ */
+export function getProContextMsgLimit(): number {
+  const raw = process.env.NEXT_PUBLIC_PRO_CONTEXT_MSG_LIMIT || "100";
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 100;
+  return Math.min(5000, n);
+}
+
+/**
+ * 获取 Enterprise 套餐上下文消息数量限制
+ */
+export function getEnterpriseContextMsgLimit(): number {
+  const raw = process.env.NEXT_PUBLIC_ENTERPRISE_CONTEXT_MSG_LIMIT || "200";
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return 200;
+  return Math.min(10000, n);
 }
 
 // =============================================================================

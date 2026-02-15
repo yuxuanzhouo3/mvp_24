@@ -16,12 +16,17 @@ import { logSecurityEvent } from "@/lib/logger";
 import {
   verifyRefreshToken,
   createRefreshToken,
+  revokeRefreshToken,
 } from "@/lib/refresh-token-manager";
-import * as jwt from "jsonwebtoken";
 import { z } from "zod";
+import { signAccessToken } from "@/lib/security/jwt";
+import {
+  readRefreshTokenFromRequest,
+  setAuthCookies,
+} from "@/lib/auth/cookies";
 
 const refreshSchema = z.object({
-  refreshToken: z.string().min(1, "Refresh token is required"),
+  refreshToken: z.string().min(1, "Refresh token is required").optional(),
 });
 
 /**
@@ -57,30 +62,19 @@ async function refreshTokenForChina(
       };
     }
 
-    const { userId, email } = tokenResult;
+    const { userId, email, tokenId: oldTokenId } = tokenResult;
     console.log("[/api/auth/refresh] Refresh token 验证成功，userId:", userId);
 
     // Step 2: Generate new accessToken (1 hour)
-    const newAccessPayload = {
+    const newAccessToken = signAccessToken({
       userId,
       email,
       region: "CN",
-    };
-
-    const newAccessToken = jwt.sign(
-      newAccessPayload,
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      {
-        expiresIn: "1h",
-      }
-    );
+    });
 
     console.log("[/api/auth/refresh] New accessToken generated (1h expiry)");
 
-    // Step 3 & 4: Create new refreshToken + rotate old one
-    // The old refresh token is implicitly replaced by creating a new one
-    // For extra security, we could revoke the old one, but token rotation
-    // in CloudBase naturally replaces it
+    // Step 3: Create new refreshToken
     const newTokenRecord = await createRefreshToken({
       userId,
       email,
@@ -100,6 +94,20 @@ async function refreshTokenForChina(
 
     const newRefreshToken = newTokenRecord.refreshToken;
     console.log("[/api/auth/refresh] New refreshToken created with rotation");
+
+    // Step 4: Revoke old refresh token to complete rotation
+    if (oldTokenId) {
+      const revokeOk = await revokeRefreshToken(oldTokenId, "rotated");
+      if (!revokeOk) {
+        // 撤销旧 token 失败时，回滚撤销新 token，避免多个活跃 refresh token 并存
+        await revokeRefreshToken(newTokenRecord.tokenId, "rotation_rollback");
+        return {
+          success: false,
+          error: "Failed to rotate refresh token",
+          status: 500,
+        };
+      }
+    }
 
     // Step 5: Fetch user profile
     const userProfile = await getOrCreateUserProfile(userId, {
@@ -157,7 +165,7 @@ async function refreshTokenForIntl(refreshToken: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const clientIP =
       request.headers.get("x-forwarded-for") ||
       request.headers.get("x-real-ip") ||
@@ -180,7 +188,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { refreshToken } = validationResult.data;
+    const refreshToken =
+      validationResult.data.refreshToken || readRefreshTokenFromRequest(request);
+
+    if (!refreshToken) {
+      return NextResponse.json(
+        {
+          error: "Refresh token is required",
+        },
+        { status: 400 }
+      );
+    }
 
     // 根据部署区域调用相应的刷新函数
     const result = isChinaRegion()
@@ -207,7 +225,15 @@ export async function POST(request: NextRequest) {
 
     // 返回成功响应
     const { success, status, ...responseData } = result;
-    return NextResponse.json(responseData, { status });
+    const response = NextResponse.json(responseData, { status });
+    if ("accessToken" in responseData && "refreshToken" in responseData) {
+      setAuthCookies(
+        response,
+        (responseData as any).accessToken,
+        (responseData as any).refreshToken
+      );
+    }
+    return response;
   } catch (error: any) {
     console.error("[/api/auth/refresh] Error:", error);
 

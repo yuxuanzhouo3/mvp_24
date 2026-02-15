@@ -4,7 +4,7 @@
  */
 
 import { supabaseAdmin } from "../../supabase-admin";
-import { getDatabase } from "../../auth-utils";
+import { getDatabase } from "../../cloudbase-service";
 import { isChinaRegion } from "../../config/region";
 import {
   logError,
@@ -38,7 +38,6 @@ export async function handlePaymentSuccess(
   });
 
   try {
-    // 提取支付数据
     const paymentData = await extractPaymentData(provider, data);
     if (!paymentData) {
       return false;
@@ -46,7 +45,6 @@ export async function handlePaymentSuccess(
 
     const { subscriptionId, userId, amount, currency, days, paypalOrderId } = paymentData;
 
-    // 查找待处理的支付记录
     const pendingPayment = await findPendingPayment(
       provider,
       subscriptionId,
@@ -55,10 +53,96 @@ export async function handlePaymentSuccess(
       paypalOrderId
     );
 
-    // 从 metadata 中读取天数
+    const productType = String(
+      pendingPayment?.type || pendingPayment?.metadata?.productType || "SUBSCRIPTION"
+    ).toUpperCase();
+
+    // ADDON: 仅发放额度，不更新订阅状态
+    if (productType === "ADDON") {
+      try {
+        if (!pendingPayment) {
+          logWarn("ADDON payment webhook received but payment record missing", {
+            provider,
+            subscriptionId,
+            userId,
+          });
+          return false;
+        }
+
+        const nowIso = new Date().toISOString();
+
+        if (isChinaRegion()) {
+          const db = getDatabase();
+          const docId = pendingPayment._id;
+          if (docId && pendingPayment.status !== "completed") {
+            await db.collection("payments").doc(docId).update({
+              status: "completed",
+              updated_at: nowIso,
+            });
+          }
+        } else {
+          const rowId = pendingPayment.id;
+          if (rowId && pendingPayment.status !== "completed") {
+            await supabaseAdmin
+              .from("payments")
+              .update({
+                status: "completed",
+                updated_at: nowIso,
+              })
+              .eq("id", rowId);
+          }
+        }
+
+        await updateUserWallet(userId, pendingPayment, provider);
+
+        const mergedMetadata = {
+          ...(pendingPayment?.metadata || {}),
+          addonCreditsGranted: true,
+          addonCreditsGrantedAt: nowIso,
+        };
+
+        if (isChinaRegion()) {
+          const docId = pendingPayment._id;
+          if (docId) {
+            await getDatabase().collection("payments").doc(docId).update({
+              metadata: mergedMetadata,
+              updated_at: nowIso,
+            });
+          }
+        } else {
+          const rowId = pendingPayment.id;
+          if (rowId) {
+            await supabaseAdmin
+              .from("payments")
+              .update({
+                metadata: mergedMetadata,
+                updated_at: nowIso,
+              })
+              .eq("id", rowId);
+          }
+        }
+
+        logBusinessEvent("payment_success_processed", userId, {
+          provider,
+          subscriptionId,
+          amount,
+          currency,
+          productType: "ADDON",
+        });
+
+        return true;
+      } catch (addonError) {
+        logError("Failed to process ADDON payment in webhook", addonError as Error, {
+          provider,
+          subscriptionId,
+          userId,
+        });
+        return false;
+      }
+    }
+
     const finalDays = getDaysFromPayment(pendingPayment, provider, amount, currency, days);
 
-    // 更新订阅状态
     const success = await updateSubscriptionStatus(
       userId,
       subscriptionId,
@@ -79,7 +163,6 @@ export async function handlePaymentSuccess(
         daysAdded: finalDays,
       });
 
-      // 更新用户钱包
       if (pendingPayment) {
         await updateUserWallet(userId, pendingPayment, provider);
       }
@@ -95,7 +178,6 @@ export async function handlePaymentSuccess(
     return false;
   }
 }
-
 /**
  * 从不同支付提供商提取支付数据
  */
@@ -428,45 +510,43 @@ function getDaysFromPayment(
   currency: string,
   defaultDays: number
 ): number {
-  if (payment?.metadata?.days) {
-    const days =
-      typeof payment.metadata.days === "string"
-        ? parseInt(payment.metadata.days, 10)
-        : payment.metadata.days;
+  const rawDays = payment?.metadata?.days;
+  const parsedDays =
+    typeof rawDays === "number"
+      ? rawDays
+      : typeof rawDays === "string"
+      ? parseInt(rawDays, 10)
+      : NaN;
+
+  if (Number.isFinite(parsedDays) && parsedDays > 0) {
     logInfo(`Days extracted from ${provider} payment metadata`, {
-      days,
-      metadata: payment.metadata,
+      days: parsedDays,
+      metadata: payment?.metadata,
     });
-    return days;
+    return parsedDays;
   }
 
-  logWarn(`Days not found in ${provider} payment metadata, inferring from amount`, {
-    amount,
-    currency,
-    hasPayment: !!payment,
-  });
-
-  // Alipay 特殊处理
-  if (provider === "alipay" && !payment?.metadata?.days) {
-    logError("CRITICAL: Alipay payment metadata missing days field", undefined, {
-      amount,
-      hasPayment: !!payment,
-    });
+  const billingCycle = String(payment?.metadata?.billingCycle || "").toLowerCase();
+  if (billingCycle === "yearly" || billingCycle === "annual" || billingCycle === "year") {
+    return 365;
+  }
+  if (billingCycle === "monthly" || billingCycle === "month") {
     return 30;
   }
 
-  // PayPal 根据金额推断
-  if (provider === "paypal" && currency === "USD") {
-    if (amount >= 99) {
-      logInfo("PayPal: Inferred 365 days from amount", { amount });
-      return 365;
-    } else if (amount >= 9) {
-      logInfo("PayPal: Inferred 30 days from amount", { amount });
-      return 30;
-    }
+  if (defaultDays && Number.isFinite(defaultDays) && defaultDays > 0) {
+    return defaultDays;
   }
 
-  return defaultDays || 30;
+  logWarn(`Days metadata missing for ${provider}, using safe default`, {
+    provider,
+    amount,
+    currency,
+    hasPayment: !!payment,
+    defaultDays,
+  });
+
+  return 30;
 }
 
 /**

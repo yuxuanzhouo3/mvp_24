@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { logBusinessEvent, logError, logSecurityEvent } from "@/lib/logger";
+import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
+import { isChinaRegion } from "@/lib/config/region";
+import { getDatabase } from "@/lib/cloudbase-service";
 
 export async function POST(request: NextRequest) {
   // Apply payment rate limiting
@@ -28,6 +31,12 @@ async function handlePaymentCancel(request: NextRequest) {
     .substr(2, 9)}`;
 
   try {
+    const authResult = await requireAuth(request);
+    if (!authResult) {
+      return createAuthErrorResponse();
+    }
+
+    const { user } = authResult;
     const body = await request.json();
     const { paymentId } = body;
 
@@ -38,35 +47,49 @@ async function handlePaymentCancel(request: NextRequest) {
       );
     }
 
-    // 验证用户身份
-    const authHeader = request.headers.get("authorization");
-    if (!authHeader) {
-      logSecurityEvent(
-        "payment_cancel_unauthorized",
-        undefined,
-        request.headers.get("x-forwarded-for") || "unknown",
-        {
-          operationId,
-          reason: "missing_authorization_header",
-        }
-      );
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
-
-    logBusinessEvent("payment_cancel_requested", undefined, {
+    logBusinessEvent("payment_cancel_requested", user.id, {
       operationId,
       paymentId,
     });
 
     // 从数据库获取支付记录
-    const { data: payment, error: fetchError } = await supabaseAdmin
-      .from("payments")
-      .select("*")
-      .eq("id", paymentId)
-      .single();
+    let payment: any = null;
+    let fetchError: any = null;
+
+    if (isChinaRegion()) {
+      try {
+        const db = getDatabase();
+        const docResult = await db.collection("payments").doc(paymentId).get();
+        const row = Array.isArray(docResult.data)
+          ? docResult.data[0]
+          : docResult.data;
+        if (row && row.user_id === user.id) {
+          payment = row;
+        } else if (row && row.user_id !== user.id) {
+          logSecurityEvent(
+            "payment_cancel_forbidden",
+            user.id,
+            request.headers.get("x-forwarded-for") || "unknown",
+            {
+              operationId,
+              paymentId,
+              ownerUserId: row.user_id,
+            }
+          );
+        }
+      } catch (error) {
+        fetchError = error;
+      }
+    } else {
+      const { data, error } = await supabaseAdmin
+        .from("payments")
+        .select("*")
+        .eq("id", paymentId)
+        .eq("user_id", user.id)
+        .single();
+      payment = data;
+      fetchError = error;
+    }
 
     if (fetchError || !payment) {
       logBusinessEvent("payment_cancel_not_found", undefined, {
@@ -97,13 +120,39 @@ async function handlePaymentCancel(request: NextRequest) {
     }
 
     // 更新支付状态为 failed (数据库约束只允许: pending, completed, failed, refunded)
-    const { error: updateError } = await supabaseAdmin
-      .from("payments")
-      .update({
-        status: "failed",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", paymentId);
+    let updateError: any = null;
+
+    if (isChinaRegion()) {
+      try {
+        const db = getDatabase();
+        if (payment?._id) {
+          await db.collection("payments").doc(payment._id).update({
+            status: "failed",
+            updated_at: new Date().toISOString(),
+          });
+        } else {
+          await db
+            .collection("payments")
+            .where({ _id: paymentId, user_id: user.id })
+            .update({
+              status: "failed",
+              updated_at: new Date().toISOString(),
+            });
+        }
+      } catch (error) {
+        updateError = error;
+      }
+    } else {
+      const { error } = await supabaseAdmin
+        .from("payments")
+        .update({
+          status: "failed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", paymentId)
+        .eq("user_id", user.id);
+      updateError = error;
+    }
 
     if (updateError) {
       logError("payment_cancel_update_error", updateError, {

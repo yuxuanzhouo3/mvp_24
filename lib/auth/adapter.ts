@@ -249,15 +249,32 @@ class CloudBaseAuthAdapter implements AuthAdapter {
 
   async signInWithWechat(code: string): Promise<AuthResponse> {
     try {
-      const response = await fetch("/api/auth", {
+      const response = await fetch("/api/auth/wechat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "login_wechat", code }),
+        body: JSON.stringify({ code }),
       });
       const data = await response.json();
-      return data.success
-        ? { user: data.user }
-        : { user: null, error: new Error(data.message) };
+      if (response.ok && data.success && data.user) {
+        return {
+          user: {
+            id: data.user.id,
+            email: data.user.email,
+            name: data.user.name,
+            avatar: data.user.avatar,
+            phone: undefined,
+            createdAt: undefined,
+            metadata: { openid: data.user.openid, region: "china" },
+          },
+          session: data.accessToken
+            ? { access_token: data.accessToken }
+            : undefined,
+        };
+      }
+      return {
+        user: null,
+        error: new Error(data.error || data.message || "WeChat login failed"),
+      };
     } catch (error) {
       return { user: null, error: error as Error };
     }
@@ -294,13 +311,13 @@ class CloudBaseAuthAdapter implements AuthAdapter {
         return { user: null, error: new Error(result.message) };
       } else {
         // 客户端：通过 fetch 调用 API 端点
-        const response = await fetch("/api/auth", {
+        const response = await fetch("/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "login", email, password }),
+          body: JSON.stringify({ email, password }),
         });
         const data = await response.json();
-        if (data.success && data.user) {
+        if (response.ok && data.user) {
           return {
             user: {
               id: data.user.id || data.user.userId || "",
@@ -313,10 +330,13 @@ class CloudBaseAuthAdapter implements AuthAdapter {
                 : undefined,
               metadata: { pro: data.user.pro, region: data.user.region },
             },
-            session: data.token ? { access_token: data.token } : undefined,
+            session:
+              data.accessToken || data.token
+                ? { access_token: data.accessToken || data.token }
+                : undefined,
           };
         }
-        return { user: null, error: new Error(data.message) };
+        return { user: null, error: new Error(data.error || data.message) };
       }
     } catch (error) {
       return { user: null, error: error as Error };
@@ -327,60 +347,12 @@ class CloudBaseAuthAdapter implements AuthAdapter {
     email: string,
     password: string
   ): Promise<AuthResponse> {
-    try {
-      // 通过 API 端点进行认证，而不是直接调用 Node.js 函数
-      if (typeof window === "undefined") {
-        // 服务器端：直接调用 cloudbase-auth 函数
-        const { cloudbaseSignUpWithEmail } = await import(
-          "@/lib/auth/cloudbase-auth"
-        );
-        const result = await cloudbaseSignUpWithEmail(email, password);
-        if (result.success && result.user) {
-          return {
-            user: {
-              id: result.user._id || "",
-              email: result.user.email,
-              name: result.user.name,
-              avatar: undefined,
-              phone: undefined,
-              createdAt: result.user.createdAt
-                ? new Date(result.user.createdAt)
-                : undefined,
-              metadata: { pro: result.user.pro, region: result.user.region },
-            },
-            session: result.token ? { access_token: result.token } : undefined,
-          };
-        }
-        return { user: null, error: new Error(result.message) };
-      } else {
-        // 客户端：通过 fetch 调用 API 端点
-        const response = await fetch("/api/auth", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "signup", email, password }),
-        });
-        const data = await response.json();
-        if (data.success && data.user) {
-          return {
-            user: {
-              id: data.user.id || data.user.userId || "",
-              email: data.user.email,
-              name: data.user.name,
-              avatar: data.user.avatar,
-              phone: undefined,
-              createdAt: data.user.createdAt
-                ? new Date(data.user.createdAt)
-                : undefined,
-              metadata: { pro: data.user.pro, region: data.user.region },
-            },
-            session: data.token ? { access_token: data.token } : undefined,
-          };
-        }
-        return { user: null, error: new Error(data.message) };
-      }
-    } catch (error) {
-      return { user: null, error: error as Error };
-    }
+    return {
+      user: null,
+      error: new Error(
+        "Sign up requires OTP. Please use /api/auth/register with signupOtp."
+      ),
+    };
   }
 
   async toDefaultLoginPage(redirectUrl?: string): Promise<void> {
@@ -390,18 +362,46 @@ class CloudBaseAuthAdapter implements AuthAdapter {
   async signOut(): Promise<void> {
     console.log("✅ 登出");
     if (typeof window !== "undefined") {
-      localStorage.removeItem("auth-token");
-      localStorage.removeItem("auth-user");
-      localStorage.removeItem("auth-logged-in");
+      try {
+        const { getValidAccessToken, clearAuthState } = await import(
+          "@/lib/auth-state-manager"
+        );
+        const token = await getValidAccessToken();
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        clearAuthState();
+      } catch (error) {
+        console.error("CloudBase adapter signOut failed:", error);
+      }
     }
   }
 
   async getCurrentUser(): Promise<User | null> {
-    // 尝试从 localStorage 获取用户信息（客户端）
+    // 先从新的认证状态读取
     if (typeof window !== "undefined") {
+      try {
+        const { getStoredAuthState } = await import("@/lib/auth-state-manager");
+        const authState = getStoredAuthState();
+        if (authState?.user?.id) {
+          const user = authState.user;
+          return {
+            id: user.id || "",
+            email: user.email,
+            name: user.name,
+            avatar: user.avatar,
+            phone: undefined,
+            createdAt: undefined,
+            metadata: { pro: user.pro, region: user.region },
+          };
+        }
+      } catch (e) {
+        console.error("Failed to read user from auth-state-manager:", e);
+      }
+
       const userJson = localStorage.getItem("auth-user");
       const token = localStorage.getItem("auth-token");
-
       if (userJson && token) {
         try {
           const user = JSON.parse(userJson);

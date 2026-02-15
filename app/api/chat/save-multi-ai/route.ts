@@ -8,7 +8,10 @@ import { NextRequest } from "next/server";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { saveMultiAIMessage } from "@/lib/cloudbase-db";
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  saveIntlMultiAISessionTurn,
+  type MultiAIResponsePayload,
+} from "@/lib/chat/save-multi-ai-intl";
 import type { TaskGraphExecutionRun, TaskGraphSpec } from "@/types/task-graph";
 
 export const runtime = "nodejs";
@@ -20,7 +23,14 @@ interface AIResponse {
   model: string;
   status: string;
   timestamp: Date;
+  nodeId?: string;
+  nodeTitle?: string;
+  dependsOn?: string[];
+  tokens?: number;
+  cost?: number;
 }
+
+type MultiAICollaborationMode = "parallel" | "sequential" | "deep" | "graph";
 
 /**
  * POST /api/chat/save-multi-ai
@@ -48,12 +58,33 @@ export async function POST(req: NextRequest) {
 
     // 解析请求体
     const body = await req.json();
-    const { sessionId, userMessage, aiResponses, taskGraph } = body as {
+    const {
+      sessionId,
+      userMessageId,
+      assistantMessageId,
+      userMessage,
+      aiResponses,
+      taskGraph,
+      collaborationMode,
+    } = body as {
       sessionId: string;
+      userMessageId?: string;
+      assistantMessageId?: string;
       userMessage: string;
       aiResponses: AIResponse[];
       taskGraph?: { spec: TaskGraphSpec; run?: TaskGraphExecutionRun };
+      collaborationMode?: MultiAICollaborationMode;
     };
+
+    if (
+      collaborationMode !== undefined &&
+      collaborationMode !== "parallel" &&
+      collaborationMode !== "sequential" &&
+      collaborationMode !== "deep" &&
+      collaborationMode !== "graph"
+    ) {
+      return Response.json({ error: "Invalid collaborationMode" }, { status: 400 });
+    }
 
     if (!sessionId || !userMessage || !aiResponses || aiResponses.length === 0) {
       return Response.json(
@@ -69,7 +100,10 @@ export async function POST(req: NextRequest) {
         session_id: sessionId,
         user_id: userId,
         user_message: userMessage,
+        user_message_id: userMessageId,
+        assistant_message_id: assistantMessageId,
         ai_responses: aiResponses,
+        collaboration_mode: collaborationMode,
         task_graph: taskGraph,
       });
 
@@ -88,84 +122,16 @@ export async function POST(req: NextRequest) {
     } else {
       // 国际版：保存到 Supabase - 统一使用 gpt_sessions.messages 结构
       try {
-        // 1. 获取当前会话的消息数组
-        const { data: session, error: fetchError } = await supabaseAdmin
-          .from("gpt_sessions")
-          .select("messages")
-          .eq("id", sessionId)
-          .eq("user_id", userId)
-          .single();
-
-        if (fetchError) {
-          console.error("[save-multi-ai] Failed to fetch session:", fetchError);
-          return Response.json(
-            { error: "Failed to fetch session" },
-            { status: 500 }
-          );
-        }
-
-        if (!session) {
-          return Response.json(
-            { error: "Session not found" },
-            { status: 404 }
-          );
-        }
-
-        const currentMessages = session.messages || [];
-        const timestamp = new Date().toISOString();
-        const updatedMessages = [...currentMessages];
-
-        // 2. 检查用户消息是否已经保存（如果没有保存则添加）
-        const userMessageExists = updatedMessages.some(
-          (msg) => msg.role === "user" && msg.content === userMessage
-        );
-
-        if (!userMessageExists) {
-          updatedMessages.push({
-            content: userMessage,
-            role: "user",
-            timestamp,
-            tokens_used: 0,
-          });
-        }
-
-        // 3. 添加所有 AI 响应（使用多 AI 格式）
-        updatedMessages.push({
-          content: aiResponses.map((response) => ({
-            agentName: response.agentName,
-            agentId: response.agentId,
-            model: response.model,
-            content: response.content,
-            status: response.status,
-            timestamp: response.timestamp,
-            // task-graph node metadata (optional)
-            nodeId: (response as any).nodeId,
-            nodeTitle: (response as any).nodeTitle,
-            dependsOn: (response as any).dependsOn,
-            tokens: (response as any).tokens,
-            cost: (response as any).cost,
-          })),
-          role: "assistant",
-          timestamp,
-          tokens_used: 0,
-          isMultiAI: true,
-          ...(taskGraph ? { taskGraph } : {}),
+        await saveIntlMultiAISessionTurn({
+          sessionId,
+          userId,
+          userMessageId,
+          assistantMessageId,
+          userMessage,
+          aiResponses: aiResponses as MultiAIResponsePayload[],
+          collaborationMode,
+          taskGraph,
         });
-
-        // 4. 更新会话的消息数组
-        const { error: updateError } = await supabaseAdmin
-          .from("gpt_sessions")
-          .update({ messages: updatedMessages })
-          .eq("id", sessionId)
-          .eq("user_id", userId);
-
-        if (updateError) {
-          console.error("[save-multi-ai] Failed to update session:", updateError);
-          return Response.json(
-            { error: "Failed to save messages" },
-            { status: 500 }
-          );
-        }
 
         return Response.json({
           success: true,
@@ -173,6 +139,9 @@ export async function POST(req: NextRequest) {
         });
       } catch (error) {
         console.error("[save-multi-ai] Supabase error:", error);
+        if (error instanceof Error && error.message.includes("Session not found")) {
+          return Response.json({ error: "Session not found" }, { status: 404 });
+        }
         return Response.json(
           { error: "Failed to save to Supabase" },
           { status: 500 }

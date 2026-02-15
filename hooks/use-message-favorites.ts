@@ -26,17 +26,31 @@ function safeJsonParse<T>(value: string | null, fallback: T): T {
 }
 
 function normalizePreview(text: string, maxLen = 80) {
-  const cleaned = (text || "").replace(/\s+/g, " ").trim();
+  const noCodeFence = (text || "").replace(/```[\s\S]*?```/g, " ");
+  const noInlineCode = noCodeFence.replace(/`([^`]+)`/g, "$1");
+  const noImages = noInlineCode.replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1");
+  const noLinks = noImages.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  const noHeading = noLinks.replace(/^#{1,6}\s+/gm, "");
+  const noQuote = noHeading.replace(/^>\s+/gm, "");
+  const noList = noQuote.replace(/^\s*[-*+]\s+/gm, "");
+  const noOrderedList = noList.replace(/^\s*\d+\.\s+/gm, "");
+  const noEmphasis = noOrderedList.replace(/[*_~]+/g, "");
+  const noLooseHash = noEmphasis.replace(/(^|\s)#+(?=\s|$)/g, " ");
+  const cleaned = noLooseHash.replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxLen) return cleaned;
   return cleaned.slice(0, maxLen) + "…";
 }
 
-export function setPendingFavoriteScroll(sessionId: string, anchorId: string) {
+export function setPendingFavoriteScroll(
+  sessionId: string,
+  anchorId: string,
+  preview?: string
+) {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.setItem(
       "multigpt:pendingScroll:v1",
-      JSON.stringify({ sessionId, anchorId, ts: Date.now() })
+      JSON.stringify({ sessionId, anchorId, preview, ts: Date.now() })
     );
   } catch {
     // ignore
@@ -44,7 +58,7 @@ export function setPendingFavoriteScroll(sessionId: string, anchorId: string) {
 }
 
 export function peekPendingFavoriteScroll():
-  | { sessionId: string; anchorId: string }
+  | { sessionId: string; anchorId: string; preview?: string }
   | null {
   if (typeof window === "undefined") return null;
   try {
@@ -52,7 +66,11 @@ export function peekPendingFavoriteScroll():
     if (!raw) return null;
     const parsed = safeJsonParse<any>(raw, null);
     if (!parsed?.sessionId || !parsed?.anchorId) return null;
-    return { sessionId: parsed.sessionId, anchorId: parsed.anchorId };
+    return {
+      sessionId: parsed.sessionId,
+      anchorId: parsed.anchorId,
+      preview: typeof parsed.preview === "string" ? parsed.preview : undefined,
+    };
   } catch {
     return null;
   }
@@ -68,7 +86,7 @@ export function clearPendingFavoriteScroll() {
 }
 
 export function consumePendingFavoriteScroll():
-  | { sessionId: string; anchorId: string }
+  | { sessionId: string; anchorId: string; preview?: string }
   | null {
   if (typeof window === "undefined") return null;
   try {
@@ -77,9 +95,54 @@ export function consumePendingFavoriteScroll():
     const parsed = safeJsonParse<any>(raw, null);
     if (!parsed?.sessionId || !parsed?.anchorId) return null;
     window.sessionStorage.removeItem("multigpt:pendingScroll:v1");
-    return { sessionId: parsed.sessionId, anchorId: parsed.anchorId };
+    return {
+      sessionId: parsed.sessionId,
+      anchorId: parsed.anchorId,
+      preview: typeof parsed.preview === "string" ? parsed.preview : undefined,
+    };
   } catch {
     return null;
+  }
+}
+
+export function rewriteFavoriteAnchor(
+  sessionId: string,
+  oldAnchorId: string,
+  newAnchorId: string
+) {
+  if (typeof window === "undefined") return false;
+  if (!sessionId || !oldAnchorId || !newAnchorId || oldAnchorId === newAnchorId) {
+    return false;
+  }
+  try {
+    const loaded = safeJsonParse<FavoriteMessageItem[]>(
+      window.localStorage.getItem(STORAGE_KEY),
+      []
+    );
+    if (!Array.isArray(loaded) || loaded.length === 0) return false;
+
+    let changed = false;
+    const next = loaded.map((item) => {
+      if (item.sessionId === sessionId && item.anchorId === oldAnchorId) {
+        changed = true;
+        return {
+          ...item,
+          anchorId: newAnchorId,
+          id: `${sessionId}:${newAnchorId}`,
+        };
+      }
+      return item;
+    });
+    if (!changed) return false;
+
+    const deduped = Array.from(
+      new Map(next.map((item) => [item.id, item])).values()
+    );
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(deduped));
+    window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: deduped }));
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -160,7 +223,12 @@ export function useMessageFavorites() {
   );
 
   const sorted = useMemo(() => {
-    return [...items].sort((a, b) => b.createdAt - a.createdAt);
+    return [...items]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((item) => ({
+        ...item,
+        preview: normalizePreview(item.preview),
+      }));
   }, [items]);
 
   return { items: sorted, isFavorite, toggle, remove };

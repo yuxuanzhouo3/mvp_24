@@ -1,6 +1,25 @@
 import { AIAgent, AIProviderConfig, AIRegionConfig } from "./types";
 
 export const GLOBAL_AI_AGENTS: AIAgent[] = [
+  {
+    id: "smart-model",
+    name: "Smart Model",
+    provider: "mistral",
+    model: "smart-auto",
+    description: "Auto-select the best available model for each task",
+    capabilities: [
+      "analysis",
+      "conversation",
+      "coding",
+      "creative",
+      "research",
+      "translation",
+    ] as const,
+    maxTokens: 16000,
+    temperature: 0.7,
+    icon: "⭐",
+  },
+
   // Mistral Text Models - Using exact model names from verified API endpoints
   {
     id: "mistral-tiny",

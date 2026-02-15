@@ -6,12 +6,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { isChinaRegion } from "@/lib/config/region";
-import { logSecurityEvent } from "@/lib/logger";
-import cloudbase from "@cloudbase/js-sdk";
-import adapter from "@cloudbase/adapter-node";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { createClient } from "@supabase/supabase-js";
+import { getPlanInfo } from "@/utils/plan-utils";
+import { resolveIntlUserPlan } from "@/lib/user-plan";
 
 // 延迟初始化 Supabase 管理员客户端
 let supabaseAdminInstance: ReturnType<typeof createClient> | null = null;
@@ -90,13 +89,29 @@ export async function GET(request: NextRequest) {
           .get();
 
         if (subscriptionResult.data && subscriptionResult.data.length > 0) {
-          const subscription = subscriptionResult.data[0] as any;
-          membershipExpiresAt = subscription.current_period_end;
+          const latestSubscription = [...subscriptionResult.data]
+            .sort((a: any, b: any) => {
+              const aTime = new Date(a.current_period_end || 0).getTime();
+              const bTime = new Date(b.current_period_end || 0).getTime();
+              return bTime - aTime;
+            })[0] as any;
+          membershipExpiresAt = latestSubscription?.current_period_end || membershipExpiresAt;
           console.log("✅ [/api/profile] 从 subscriptions 表读取会员过期时间:", membershipExpiresAt);
         }
       } catch (error) {
         console.warn("⚠️ [/api/profile] 从 subscriptions 表读取失败，使用用户表中的值:", error);
       }
+
+      const walletResult = await db
+        .collection("user_wallets")
+        .where({ user_id: userId })
+        .limit(1)
+        .get();
+      const wallet = walletResult?.data?.[0] || null;
+      const planInfo = getPlanInfo(user, wallet);
+      const hasActiveSubscription =
+        (planInfo.isBasic || planInfo.isPro || planInfo.isEnterprise || !!(wallet?.pro ?? user.pro)) &&
+        !!planInfo.planActive;
 
       const response = {
         id: user._id || user.id,
@@ -105,12 +120,15 @@ export async function GET(request: NextRequest) {
         avatar: user.avatar || "",
         phone: user.phone || "",
         pro: user.pro || false,
-        subscription_plan:
-          user.subscription_plan || (user.pro ? "pro" : "free"),
-        subscription_status:
-          user.subscription_status || (user.pro ? "active" : "inactive"),
+        subscription_plan: planInfo.planLabel || user.subscription_plan || (user.pro ? "pro" : "free"),
+        subscription_status: hasActiveSubscription ? "active" : "inactive",
         subscription_expires_at: user.subscription_expires_at,
         membership_expires_at: membershipExpiresAt, // ✅ 使用从 subscriptions 读取的值
+        subscription_tier: wallet?.subscription_tier || planInfo.planLabel,
+        plan_exp: planInfo.planExp ? planInfo.planExp.toISOString() : null,
+        isPaid: hasActiveSubscription,
+        hasActiveSubscription,
+        hide_ads: user.hide_ads ?? false,
         preferences: user.preferences || {
           language: "zh",
           theme: "light",
@@ -152,15 +170,36 @@ export async function GET(request: NextRequest) {
           .select("current_period_end")
           .eq("user_id", userId)
           .eq("status", "active")
-          .single();
+          .not("current_period_end", "is", null)
+          .order("current_period_end", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const subscriptionRow = subscriptions as any;
 
-        if (!subError && subscriptions?.current_period_end) {
-          membershipExpiresAt = subscriptions.current_period_end;
+        if (!subError && subscriptionRow?.current_period_end) {
+          membershipExpiresAt = subscriptionRow.current_period_end;
           console.log("✅ [/api/profile] 从 subscriptions 表读取会员过期时间:", membershipExpiresAt);
         }
       } catch (error) {
         console.warn("⚠️ [/api/profile] 从 subscriptions 表读取失败，使用 user_metadata 中的值:", error);
       }
+
+      const { data: wallet } = await getSupabaseAdmin()
+        .from("user_wallets")
+        .select("plan, subscription_tier, plan_exp, pro")
+        .eq("user_id", userId)
+        .maybeSingle();
+      const walletRow = wallet as any;
+
+      const planInfo = getPlanInfo(user.user_metadata || {}, walletRow || null);
+      const resolvedPlan = await resolveIntlUserPlan(
+        userId,
+        user.user_metadata || {}
+      );
+      const hasActiveSubscription = resolvedPlan !== "free";
+      const planExpIso =
+        planInfo.planExp?.toISOString() ||
+        (typeof membershipExpiresAt === "string" ? membershipExpiresAt : null);
 
       // 构建响应数据
       const response = {
@@ -172,15 +211,19 @@ export async function GET(request: NextRequest) {
           "",
         avatar: user.user_metadata?.avatar || "",
         phone: user.user_metadata?.phone || "",
-        pro: user.user_metadata?.pro || false,
-        subscription_plan:
-          user.user_metadata?.subscription_plan ||
-          (user.user_metadata?.pro ? "pro" : "free"),
-        subscription_status:
-          user.user_metadata?.subscription_status ||
-          (user.user_metadata?.pro ? "active" : "inactive"),
+        pro: user.user_metadata?.pro || walletRow?.pro || false,
+        subscription_plan: resolvedPlan,
+        subscription_status: hasActiveSubscription ? "active" : "inactive",
         subscription_expires_at: user.user_metadata?.subscription_expires_at,
         membership_expires_at: membershipExpiresAt, // ✅ 使用从 subscriptions 读取的值
+        subscription_tier:
+          walletRow?.subscription_tier ||
+          planInfo.planLabel ||
+          resolvedPlan,
+        plan_exp: planExpIso,
+        isPaid: hasActiveSubscription,
+        hasActiveSubscription,
+        hide_ads: user.user_metadata?.hide_ads ?? false,
         preferences: user.user_metadata?.preferences || {
           language: "en",
           theme: "light",

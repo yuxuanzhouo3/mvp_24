@@ -6,7 +6,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import cloudbase from '@cloudbase/node-sdk'
 import bcrypt from 'bcryptjs'
-import * as jwt from 'jsonwebtoken'
+import { signAccessToken } from "@/lib/security/jwt";
 
 /**
  * 国内用户邮箱注册/登录 API
@@ -93,23 +93,18 @@ export default async function authCnHandler(
 
         console.log('✅ [Creating User]:', JSON.stringify(newUser, null, 2))
         const result = await usersCollection.add(newUser)
+        const newUserId = result.id
+        if (!newUserId) {
+          throw new Error("Failed to get created user id")
+        }
         console.log(`✅ [User Created Successfully]: ID=${result.id}, Email=${email}`)
 
-        // 生成 JWT Token（注册成功后自动登录）
-        const tokenPayload = {
-          userId: result.id,
-          email: email,
-          region: 'china'
-        }
-
-        // ✅ 动态设置 Token 有效期：普通用户 30 天，高级会员 90 天
-        const expiresIn = newUser.pro ? '90d' : '30d'
-
-        const token = jwt.sign(
-          tokenPayload,
-          process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-          { expiresIn: expiresIn }
-        )
+        const token = signAccessToken({
+          userId: newUserId,
+          email,
+          region: "CN",
+          source: "legacy-cloudbase-auth-api",
+        });
 
         console.log(`✅ [JWT Token Generated]: For new user ${email}`)
 
@@ -118,7 +113,7 @@ export default async function authCnHandler(
           message: '注册成功',
           user: {
             id: result.id,
-            userId: result.id,
+            userId: newUserId,
             email,
             name: newUser.name,
             pro: false,
@@ -177,20 +172,12 @@ export default async function authCnHandler(
 
         console.log(`✅ [Login Success]: User ${email} logged in successfully`)
 
-        // 生成 JWT Token
-        const tokenPayload = {
+        const token = signAccessToken({
           userId: user._id,
           email: user.email,
-          region: 'china'
-        }
-
-        const expiresIn = user.pro ? '90d' : '30d'
-
-        const token = jwt.sign(
-          tokenPayload,
-          process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-          { expiresIn: expiresIn }
-        )
+          region: "CN",
+          source: "legacy-cloudbase-auth-api",
+        });
 
         console.log(`✅ [JWT Token Generated]: For user ${email}`)
 
@@ -249,28 +236,20 @@ export default async function authCnHandler(
 
         const user = userResult.data[0]
 
-        // 生成新的JWT Token
-        const tokenPayload = {
+        const newToken = signAccessToken({
           userId: user._id,
           email: user.email,
-          region: 'china'
-        }
+          region: "CN",
+          source: "legacy-cloudbase-auth-api",
+        });
 
-        const expiresIn = user.pro ? '90d' : '30d'
-
-        const newToken = jwt.sign(
-          tokenPayload,
-          process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-          { expiresIn: expiresIn }
-        )
-
-        console.log(`✅ [Token Refreshed]: For user ${user.email}, expires in ${expiresIn}`)
+        console.log(`✅ [Token Refreshed]: For user ${user.email}`)
 
         return res.status(200).json({
           success: true,
           message: 'Token刷新成功',
           token: newToken,
-          expiresIn: expiresIn
+          expiresIn: "1h"
         })
       } catch (error: any) {
         console.error('Token刷新错误:', error)

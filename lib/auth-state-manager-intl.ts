@@ -20,6 +20,10 @@ export interface SupabaseUserCache {
   expiresIn: number; // 缓存有效期 (秒)
 }
 
+interface ClearSupabaseUserCacheOptions {
+  notify?: boolean;
+}
+
 const SUPABASE_USER_CACHE_KEY = "supabase-user-cache";
 const DEFAULT_CACHE_DURATION = 3600; // 1小时 (遵循现代平台最佳实践)
 
@@ -91,7 +95,7 @@ export function getSupabaseUserCache(): SupabaseUserProfile | null {
     // 验证数据完整性
     if (!cache.user?.id || !cache.user?.email) {
       console.warn("⚠️ [Supabase Cache] 缓存数据不完整");
-      clearSupabaseUserCache();
+      clearSupabaseUserCache({ notify: false });
       return null;
     }
 
@@ -104,7 +108,7 @@ export function getSupabaseUserCache(): SupabaseUserProfile | null {
         age: `${ageInSeconds}秒`,
         expiresIn: `${cache.expiresIn}秒`,
       });
-      clearSupabaseUserCache();
+      clearSupabaseUserCache({ notify: false });
       return null;
     }
 
@@ -117,7 +121,7 @@ export function getSupabaseUserCache(): SupabaseUserProfile | null {
     return cache.user;
   } catch (error) {
     console.error("❌ [Supabase Cache] 读取缓存失败:", error);
-    clearSupabaseUserCache();
+    clearSupabaseUserCache({ notify: false });
     return null;
   }
 }
@@ -125,19 +129,24 @@ export function getSupabaseUserCache(): SupabaseUserProfile | null {
 /**
  * 清除本地缓存的用户信息
  */
-export function clearSupabaseUserCache(): void {
+export function clearSupabaseUserCache(
+  options: ClearSupabaseUserCacheOptions = {}
+): void {
   if (typeof window === "undefined") return;
+  const { notify = true } = options;
 
   try {
     localStorage.removeItem(SUPABASE_USER_CACHE_KEY);
     console.log("🗑️  [Supabase Cache] 用户缓存已清除");
 
-    // 触发跨标签页同步事件
-    window.dispatchEvent(
-      new CustomEvent("supabase-user-changed", {
-        detail: null,
-      })
-    );
+    if (notify) {
+      // 触发跨标签页同步事件
+      window.dispatchEvent(
+        new CustomEvent("supabase-user-changed", {
+          detail: null,
+        })
+      );
+    }
   } catch (error) {
     console.error("❌ [Supabase Cache] 清除缓存失败:", error);
   }

@@ -1,6 +1,7 @@
 import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
 import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
 import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
+import { WechatProviderV3 } from "@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isChinaRegion } from "@/lib/config/region";
 import { getDatabase } from "@/lib/cloudbase-service";
@@ -30,6 +31,77 @@ export class PaymentConfirmationError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+function parseDaysValue(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function resolveDaysFromBillingCycle(raw: unknown): number | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  const cycle = raw.toLowerCase().trim();
+  if (cycle === "yearly" || cycle === "annual" || cycle === "year") {
+    return 365;
+  }
+  if (cycle === "monthly" || cycle === "month") {
+    return 30;
+  }
+
+  return null;
+}
+
+function resolveDaysFromPaymentRecord(payment: any): number | null {
+  if (!payment) {
+    return null;
+  }
+
+  const metadataDays = parseDaysValue(payment?.metadata?.days);
+  if (metadataDays) {
+    return metadataDays;
+  }
+
+  const billingCycleDays =
+    resolveDaysFromBillingCycle(payment?.metadata?.billingCycle) ||
+    resolveDaysFromBillingCycle(payment?.billing_cycle) ||
+    resolveDaysFromBillingCycle(payment?.period);
+
+  return billingCycleDays || null;
+}
+
+function resolveDaysOrDefault(
+  payment: any,
+  provider: string,
+  operationId: string,
+  defaultDays = 30
+): number {
+  const resolvedDays = resolveDaysFromPaymentRecord(payment);
+  if (resolvedDays) {
+    return resolvedDays;
+  }
+
+  logWarn(`${provider} payment days missing, using safe default`, {
+    operationId,
+    provider,
+    defaultDays,
+    hasPayment: !!payment,
+    paymentStatus: payment?.status,
+  });
+
+  return defaultDays;
 }
 
 export async function confirmPayment(
@@ -115,24 +187,24 @@ async function confirmStripePayment({
 
   let days = 0;
   try {
-    const { data: stripePendingPayment } = await supabaseAdmin
+    const { data: stripePayment } = await supabaseAdmin
       .from("payments")
-      .select("metadata")
+      .select("metadata, status, payment_method, created_at")
       .eq("transaction_id", sessionId)
-      .eq("status", "pending")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    days =
-      stripePendingPayment?.metadata?.days ||
-      (confirmation.amount > 50 ? 365 : 30);
+    days = resolveDaysOrDefault(stripePayment, "stripe", operationId);
   } catch (error) {
-    logWarn("Stripe pending payment lookup failed", {
+    logWarn("Stripe payment lookup failed", {
       operationId,
       userId,
       sessionId,
       error,
     });
-    days = confirmation.amount > 50 ? 365 : 30;
+    days = 30;
   }
 
   return {
@@ -163,9 +235,11 @@ async function confirmPayPalPayment({
   try {
     const { data: paypalPendingPayment } = await supabaseAdmin
       .from("payments")
-      .select("amount, currency, metadata")
+      .select("amount, currency, metadata, status, payment_method, created_at")
       .eq("transaction_id", token)
-      .eq("status", "pending")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     const captureResult = await paypalProvider.captureOnetimePayment(token);
@@ -217,8 +291,7 @@ async function confirmPayPalPayment({
       });
     }
 
-    const days =
-      paypalPendingPayment?.metadata?.days || (amount > 50 ? 365 : 30);
+    const days = resolveDaysOrDefault(paypalPendingPayment, "paypal", operationId);
 
     logInfo("PayPal capture successful", {
       operationId,
@@ -328,9 +401,7 @@ async function confirmAlipayPayment({
       });
     }
 
-    const days =
-      alipayPendingPayment?.metadata?.days ||
-      (alipayPendingPayment?.amount > 50 ? 365 : 30);
+    const days = resolveDaysOrDefault(alipayPendingPayment, "alipay", operationId);
 
     try {
       const alipayProvider = new AlipayProvider(process.env);
@@ -387,57 +458,121 @@ async function confirmAlipayPayment({
     tradeNo,
   });
 
+  // 安全校验：同步回跳必须主动向支付宝查单确认已支付成功
+  let verifiedTradeNo: string | null = null;
+  let verifiedAmount = 0;
+  try {
+    const alipayProvider = new AlipayProvider(process.env);
+    const queryResult = await alipayProvider.queryPayment(actualOutTradeNo);
+    const tradeStatus = String(queryResult?.trade_status || "").toUpperCase();
+    verifiedTradeNo = queryResult?.trade_no || null;
+    verifiedAmount = Number(
+      queryResult?.buyer_pay_amount || queryResult?.total_amount || 0
+    );
+
+    if (!["TRADE_SUCCESS", "TRADE_FINISHED"].includes(tradeStatus)) {
+      throw new PaymentConfirmationError("Alipay payment not completed", 400);
+    }
+
+    if (verifiedTradeNo && tradeNo && verifiedTradeNo !== tradeNo) {
+      logWarn("Alipay trade number mismatch", {
+        operationId,
+        userId,
+        outTradeNo: actualOutTradeNo,
+        providedTradeNo: tradeNo,
+        verifiedTradeNo,
+      });
+      throw new PaymentConfirmationError("Alipay trade verification failed", 400);
+    }
+  } catch (error) {
+    if (error instanceof PaymentConfirmationError) {
+      throw error;
+    }
+    logError("Alipay active verification error", error as Error, {
+      operationId,
+      userId,
+      outTradeNo: actualOutTradeNo,
+      tradeNo,
+    });
+    throw new PaymentConfirmationError("Failed to verify Alipay payment", 500);
+  }
+
   // Query payment record to get days, amount, currency for sync return
   let alipayPayment: any = null;
   
   if (isChinaRegion()) {
     try {
       const db = getDatabase();
-      const result = await db
-        .collection("payments")
-        .where({
-          transaction_id: outTradeNo,
-          user_id: userId,
-        })
-        .orderBy("created_at", "desc")
-        .limit(1)
-        .get();
+        const result = await db
+          .collection("payments")
+          .where({
+            transaction_id: actualOutTradeNo,
+            user_id: userId,
+          })
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .get();
       alipayPayment = result.data?.[0] || null;
+
+      if (!alipayPayment) {
+        const byOutTradeNo = await db
+          .collection("payments")
+          .where({
+            out_trade_no: actualOutTradeNo,
+            user_id: userId,
+          })
+          .orderBy("created_at", "desc")
+          .limit(1)
+          .get();
+        alipayPayment = byOutTradeNo.data?.[0] || null;
+      }
     } catch (error) {
       logWarn("Error fetching CloudBase payment for sync return", {
         operationId,
         userId,
-        outTradeNo,
+        outTradeNo: actualOutTradeNo,
         error,
       });
     }
   } else {
     try {
-      const { data } = await supabaseAdmin
+      const { data: byTransaction } = await supabaseAdmin
         .from("payments")
         .select("amount, currency, metadata")
-        .eq("transaction_id", outTradeNo)
+        .eq("transaction_id", actualOutTradeNo)
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-      alipayPayment = data || null;
+      alipayPayment = byTransaction || null;
+
+      if (!alipayPayment) {
+        const { data: byOutTradeNo } = await supabaseAdmin
+          .from("payments")
+          .select("amount, currency, metadata")
+          .eq("out_trade_no", actualOutTradeNo)
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        alipayPayment = byOutTradeNo || null;
+      }
     } catch (error) {
       logWarn("Error fetching Supabase payment for sync return", {
         operationId,
         userId,
-        outTradeNo,
+        outTradeNo: actualOutTradeNo,
         error,
       });
     }
   }
 
-  const days = alipayPayment?.metadata?.days || (alipayPayment?.amount > 50 ? 365 : 30);
-  const amount = alipayPayment?.amount || 0;
+  const days = resolveDaysOrDefault(alipayPayment, "alipay", operationId);
+  const amount = verifiedAmount > 0 ? verifiedAmount : alipayPayment?.amount || 0;
   const currency = alipayPayment?.currency || "CNY";
 
   return {
-    transactionId: outTradeNo || tradeNo || "",
+    transactionId: actualOutTradeNo,
     amount,
     currency,
     days,
@@ -476,7 +611,8 @@ async function confirmWeChatPayment({
         })
         .get();
 
-      wechatPendingPayment = result.data?.[0] || null;
+      wechatPendingPayment =
+        (result.data || []).find((row: any) => row.user_id === userId) || null;
     } catch (error) {
       logError("Error fetching CloudBase pending WeChat payment", error as Error, {
         operationId,
@@ -486,15 +622,39 @@ async function confirmWeChatPayment({
     }
   } else {
     try {
-      const { data } = await supabaseAdmin
+      const { data: byOutTradeNo } = await supabaseAdmin
         .from("payments")
         .select("*")
-        .or(
-          `out_trade_no.eq.${wechatOutTradeNo},transaction_id.eq.${wechatOutTradeNo},id.eq.${wechatOutTradeNo}`
-        )
-        .single();
+        .eq("out_trade_no", wechatOutTradeNo)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      wechatPendingPayment = byOutTradeNo || null;
 
-      wechatPendingPayment = data || null;
+      if (!wechatPendingPayment) {
+        const { data: byTransaction } = await supabaseAdmin
+          .from("payments")
+          .select("*")
+          .eq("transaction_id", wechatOutTradeNo)
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        wechatPendingPayment = byTransaction || null;
+      }
+
+      if (!wechatPendingPayment) {
+        const { data: byId } = await supabaseAdmin
+          .from("payments")
+          .select("*")
+          .eq("id", wechatOutTradeNo)
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        wechatPendingPayment = byId || null;
+      }
     } catch (error) {
       logError("Error fetching Supabase pending WeChat payment", error as Error, {
         operationId,
@@ -513,17 +673,64 @@ async function confirmWeChatPayment({
     throw new PaymentConfirmationError("Payment record not found", 400);
   }
 
+  // 安全校验：必须向微信主动查单确认 SUCCESS
+  const outTradeNoToVerify =
+    wechatPendingPayment.out_trade_no || wechatPendingPayment.transaction_id;
+  if (!outTradeNoToVerify) {
+    throw new PaymentConfirmationError("Missing WeChat order number", 400);
+  }
+
+  let wechatStatus: any;
+  try {
+    const wechatProvider = new WechatProviderV3({
+      appId: process.env.WECHAT_APP_ID!,
+      mchId: process.env.WECHAT_PAY_MCH_ID!,
+      apiV3Key: process.env.WECHAT_PAY_API_V3_KEY!,
+      privateKey: process.env.WECHAT_PAY_PRIVATE_KEY!,
+      serialNo: process.env.WECHAT_PAY_SERIAL_NO!,
+      notifyUrl: `${process.env.APP_URL}/api/payment/webhook/wechat`,
+    });
+    wechatStatus = await wechatProvider.queryOrderByOutTradeNo(outTradeNoToVerify);
+  } catch (error) {
+    logError("WeChat active verification error", error as Error, {
+      operationId,
+      userId,
+      outTradeNoToVerify,
+    });
+    throw new PaymentConfirmationError("Failed to verify WeChat payment", 500);
+  }
+
+  if (wechatStatus?.tradeState !== "SUCCESS") {
+    logWarn("WeChat payment not completed", {
+      operationId,
+      userId,
+      outTradeNoToVerify,
+      tradeState: wechatStatus?.tradeState,
+    });
+    throw new PaymentConfirmationError("WeChat payment not completed", 400);
+  }
+
+  const verifiedAmount = Number(wechatStatus?.amount || 0) / 100;
+  const localAmount = Number(wechatPendingPayment.amount || 0);
+  if (verifiedAmount > 0 && localAmount > 0 && verifiedAmount !== localAmount) {
+    logWarn("WeChat payment amount mismatch", {
+      operationId,
+      userId,
+      outTradeNoToVerify,
+      verifiedAmount,
+      localAmount,
+    });
+    throw new PaymentConfirmationError("WeChat payment amount mismatch", 400);
+  }
+
   const transactionId =
+    wechatStatus?.transactionId ||
     wechatPendingPayment.transaction_id ||
     wechatPendingPayment.out_trade_no ||
     wechatOutTradeNo;
-  const amount = wechatPendingPayment.amount || 0;
+  const amount = verifiedAmount > 0 ? verifiedAmount : wechatPendingPayment.amount || 0;
   const currency = wechatPendingPayment.currency || "CNY";
-  const days = wechatPendingPayment.metadata?.days
-    ? wechatPendingPayment.metadata.days
-    : amount >= 300
-    ? 365
-    : 30;
+  const days = resolveDaysOrDefault(wechatPendingPayment, "wechat", operationId);
 
   logInfo("WeChat payment details extracted", {
     operationId,

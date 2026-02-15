@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPayment } from "@/lib/payment/adapter";
 import { z } from "zod";
+import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
+import { isChinaRegion } from "@/lib/config/region";
+import { getDatabase } from "@/lib/cloudbase-service";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 
 // 验证支付请求验证schema
 const verifyPaymentSchema = z.object({
@@ -14,6 +18,12 @@ const verifyPaymentSchema = z.object({
  */
 export async function POST(request: NextRequest) {
   try {
+    const authResult = await requireAuth(request);
+    if (!authResult) {
+      return createAuthErrorResponse();
+    }
+
+    const { user } = authResult;
     const body = await request.json();
 
     // 验证输入
@@ -30,6 +40,42 @@ export async function POST(request: NextRequest) {
     }
 
     const { orderId, params = {} } = validationResult.data;
+
+    // 仅允许验证当前用户自己的订单
+    let ownsPayment = false;
+    if (isChinaRegion()) {
+      try {
+        const db = getDatabase();
+        const result = await db
+          .collection("payments")
+          .where({
+            user_id: user.id,
+            transaction_id: orderId,
+          })
+          .limit(1)
+          .get();
+
+        ownsPayment = (result.data?.length || 0) > 0;
+      } catch {
+        ownsPayment = false;
+      }
+    } else {
+      const { data } = await supabaseAdmin
+        .from("payments")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("transaction_id", orderId)
+        .limit(1)
+        .maybeSingle();
+      ownsPayment = !!data?.id;
+    }
+
+    if (!ownsPayment) {
+      return NextResponse.json(
+        { error: "Payment not found", code: "PAYMENT_NOT_FOUND" },
+        { status: 404 }
+      );
+    }
 
     // 获取支付适配器
     const payment = getPayment();

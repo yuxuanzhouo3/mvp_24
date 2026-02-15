@@ -530,42 +530,12 @@ class CloudBaseAuthClient implements AuthClient {
     email: string;
     password: string;
   }): Promise<AuthResponse> {
-    // 中国版支持邮箱注册 - 通过 API 调用后端
-    try {
-      const response = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: params.email,
-          password: params.password,
-          confirmPassword: params.password,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        return {
-          data: { user: null, session: null },
-          error: new Error(
-            errorData.details || errorData.error || "Registration failed"
-          ),
-        };
-      }
-
-      const data = await response.json();
-      return {
-        data: {
-          user: data.user,
-          session: data.session,
-        },
-        error: null,
-      };
-    } catch (error) {
-      return {
-        data: { user: null, session: null },
-        error: error as Error,
-      };
-    }
+    return {
+      data: { user: null, session: null },
+      error: new Error(
+        "Sign up requires OTP flow in China region. Use /auth page signup flow."
+      ),
+    };
   }
 
   async signInWithOAuth(params: {
@@ -606,9 +576,14 @@ class CloudBaseAuthClient implements AuthClient {
   }): Promise<{ data: { user: AuthUser | null }; error: Error | null }> {
     // 中国版支持用户信息更新 - 通过 API 调用后端
     try {
+      const { getValidAccessToken } = await import("@/lib/auth-state-manager");
+      const token = await getValidAccessToken();
       const response = await fetch("/api/auth/update", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(params),
       });
 
@@ -662,10 +637,13 @@ class CloudBaseAuthClient implements AuthClient {
   async signOut(): Promise<{ error: Error | null }> {
     // 通过 API 调用登出
     try {
+      const { getValidAccessToken } = await import("@/lib/auth-state-manager");
+      const token = await getValidAccessToken();
       const response = await fetch("/api/auth/logout", {
         method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (!response.ok) {
+      if (!response.ok && response.status !== 401) {
         throw new Error("Logout failed");
       }
 
@@ -733,6 +711,22 @@ class CloudBaseAuthClient implements AuthClient {
     data: { session: AuthSession | null };
     error: Error | null;
   }> {
+    const readTokenFromStorage = async (): Promise<string | null> => {
+      if (typeof window === "undefined") return null;
+
+      try {
+        const { getStoredAuthState } = await import("@/lib/auth-state-manager");
+        const authState = getStoredAuthState();
+        if (authState?.accessToken) {
+          return authState.accessToken;
+        }
+      } catch (error) {
+        console.warn("📋 [getSession] 获取认证状态失败:", error);
+      }
+
+      return localStorage.getItem("auth-token");
+    };
+
     // 优先使用新的认证状态管理器
     if (typeof window !== "undefined") {
       try {
@@ -797,15 +791,22 @@ class CloudBaseAuthClient implements AuthClient {
               },
             };
 
-            return {
-              data: {
-                session: {
-                  access_token: "cached-session",
-                  user: authUser,
+            const token = await readTokenFromStorage();
+            if (token) {
+              return {
+                data: {
+                  session: {
+                    access_token: token,
+                    user: authUser,
+                  },
                 },
-              },
-              error: null,
-            };
+                error: null,
+              };
+            }
+
+            console.warn(
+              "📋 [getSession] 检测到登录标志但缺少有效 token，返回空会话"
+            );
           } catch (parseError) {
             console.error("📋 [getSession] 解析缓存用户信息失败:", parseError);
           }
@@ -817,36 +818,21 @@ class CloudBaseAuthClient implements AuthClient {
     const userResult = await this.getUser();
     if (userResult.data.user) {
       // 优先使用新的认证状态管理器获取 token
-      let token: string | null = null;
-      if (typeof window !== "undefined") {
-        try {
-          const { getStoredAuthState } = await import(
-            "@/lib/auth-state-manager"
-          );
-          const authState = getStoredAuthState();
-          token = authState?.accessToken || null;
-          console.log(
-            "📋 [getSession] 从认证状态管理器获取 token:",
-            token ? "成功" : "失败"
-          );
-        } catch (error) {
-          console.warn("📋 [getSession] 获取认证状态失败:", error);
-        }
-      }
+      const token = await readTokenFromStorage();
+      console.log(
+        "📋 [getSession] 从本地存储获取 token:",
+        token ? "成功" : "失败"
+      );
 
-      // 如果没有从新状态管理器获取到，回退到旧的 localStorage
-      if (!token && typeof window !== "undefined") {
-        token = localStorage.getItem("auth-token");
-        console.log(
-          "📋 [getSession] 从旧 localStorage 获取 token:",
-          token ? "成功" : "失败"
-        );
+      if (!token) {
+        console.warn("📋 [getSession] 用户信息存在但 token 缺失，返回空会话");
+        return { data: { session: null }, error: null };
       }
 
       return {
         data: {
           session: {
-            access_token: token || "cloudbase-session",
+            access_token: token,
             user: userResult.data.user,
           },
         },
@@ -876,15 +862,20 @@ class CloudBaseAuthClient implements AuthClient {
             },
           };
 
-          return {
-            data: {
-              session: {
-                access_token: "cached-session",
-                user: authUser,
+          const token = await readTokenFromStorage();
+          if (token) {
+            return {
+              data: {
+                session: {
+                  access_token: token,
+                  user: authUser,
+                },
               },
-            },
-            error: null,
-          };
+              error: null,
+            };
+          }
+
+          console.warn("📋 [getSession] 仅有缓存用户，无有效 token，返回空会话");
         } catch (parseError) {
           console.error("📋 [getSession] 解析缓存用户信息失败:", parseError);
         }

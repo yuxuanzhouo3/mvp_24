@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { apiRateLimit } from "@/lib/rate-limit";
-import { logBusinessEvent, logError, logSecurityEvent } from "@/lib/logger";
+import { logBusinessEvent, logError } from "@/lib/logger";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
-import { getDatabase } from "@/lib/auth-utils";
+import { getDatabase } from "@/lib/cloudbase-service";
 import { isChinaRegion } from "@/lib/config/region";
+import { getAddonPackageById } from "@/constants/addon-packages";
 
 // GET /api/payment/history?page=1&pageSize=20
 // Requires Authorization: Bearer <supabase access token>
 export async function GET(request: NextRequest) {
-  // Apply API rate limiting
   return new Promise<NextResponse>((resolve) => {
     const mockRes = {
       status: (code: number) => ({
@@ -20,7 +20,6 @@ export async function GET(request: NextRequest) {
     };
 
     apiRateLimit(request as any, mockRes as any, async () => {
-      // Rate limit not exceeded, handle the request
       resolve(await handlePaymentHistory(request));
     });
   });
@@ -32,13 +31,13 @@ async function handlePaymentHistory(request: NextRequest) {
     .substr(2, 9)}`;
 
   try {
-    // 验证用户认证
     const authResult = await requireAuth(request);
     if (!authResult) {
       return createAuthErrorResponse();
     }
 
     const { user } = authResult;
+    const accessToken = authResult.session?.access_token;
     const userId = user.id;
 
     const { searchParams } = new URL(request.url);
@@ -58,12 +57,10 @@ async function handlePaymentHistory(request: NextRequest) {
       to,
     });
 
-    // Query payments for this user with pagination
     let payments: any[] = [];
     let queryError: any = null;
 
     if (isChinaRegion()) {
-      // CloudBase 查询
       try {
         const db = getDatabase();
         const result = await db
@@ -79,7 +76,6 @@ async function handlePaymentHistory(request: NextRequest) {
         queryError = error;
       }
     } else {
-      // Supabase 查询
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !anonKey) {
@@ -96,21 +92,20 @@ async function handlePaymentHistory(request: NextRequest) {
         );
       }
 
-      // Use anon client with the caller's JWT so RLS enforces per-user access
       const supabase = createClient(supabaseUrl, anonKey, {
         auth: { persistSession: false, autoRefreshToken: false },
         global: {
           headers: {
-            Authorization: `Bearer ${request.headers.get("authorization")}`,
+            Authorization: accessToken
+              ? `Bearer ${accessToken}`
+              : "",
           },
         },
       });
 
       const { data, error } = await supabase
         .from("payments")
-        .select(
-          "id, created_at, amount, currency, status, payment_method, transaction_id, subscription_id"
-        )
+        .select("*")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
         .range(from, to);
@@ -138,9 +133,7 @@ async function handlePaymentHistory(request: NextRequest) {
       );
     }
 
-    // Map DB rows to UI schema
     const records = (payments || []).map((p: any) => {
-      // Normalize status for UI: completed -> paid
       let uiStatus: "paid" | "pending" | "failed" | "refunded" = "pending";
       switch (p.status) {
         case "completed":
@@ -156,21 +149,38 @@ async function handlePaymentHistory(request: NextRequest) {
           uiStatus = "pending";
       }
 
-      const method = (p.payment_method || "").toString();
+      const method = (p.payment_method || "").toString().toLowerCase();
       const paymentMethod =
-        method.toLowerCase() === "stripe"
+        method === "stripe"
           ? "Stripe"
-          : method.toLowerCase() === "paypal"
+          : method === "paypal"
           ? "PayPal"
+          : method === "alipay"
+          ? "Alipay"
+          : method === "wechat"
+          ? "WeChat"
           : method || "";
+
+      const productType = String(
+        p.type || p.metadata?.productType || "SUBSCRIPTION"
+      ).toUpperCase();
+      const addonPackageId = p.addon_package_id || p.metadata?.addonPackageId;
+      const addonPkg = addonPackageId ? getAddonPackageById(addonPackageId) : undefined;
+
+      const description =
+        productType === "ADDON"
+          ? addonPkg
+            ? addonPkg.nameZh
+            : "Addon package"
+          : "Subscription payment";
 
       return {
         id: p._id || p.id,
-        date: p.created_at,
+        date: p.created_at || p.createdAt,
         amount: Number(p.amount),
         currency: p.currency || "USD",
         status: uiStatus,
-        description: "Subscription payment",
+        description,
         paymentMethod,
         invoiceUrl: null as string | null,
       };

@@ -25,9 +25,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // TODO: 添加管理员角色检查
-    // 这里应该检查用户是否是管理员
-    // 暂时允许所有认证用户访问（生产环境应该限制）
+    const user = authResult.user as any;
+    const isAdmin = Boolean(
+      user?.is_admin ||
+        user?.isAdmin ||
+        user?.role === "admin" ||
+        user?.metadata?.role === "admin"
+    );
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: "Admin permission required" },
+        { status: 403 }
+      );
+    }
 
     const body = await request.json();
     const clientIP =

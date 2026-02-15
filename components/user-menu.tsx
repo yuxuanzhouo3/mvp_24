@@ -31,7 +31,7 @@ import { QuotaDisplay } from "./quota-display";
 import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
 import {
   getSavedAccounts,
-  saveAuthState,
+  restoreSavedAuthState,
   removeSavedAccount,
 } from "@/lib/auth-state-manager";
 
@@ -39,7 +39,7 @@ export function UserMenu() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, loading, refreshUser, signOut } = useUser();
-  const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus();
+  const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus(!!user);
   const [isLoading, setIsLoading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { language } = useLanguage();
@@ -201,13 +201,8 @@ export function UserMenu() {
                   <DropdownMenuItem
                     className="flex-1 flex items-center space-x-3 cursor-pointer rounded-md"
                     onSelect={() => {
-                      saveAuthState(
-                        account.accessToken,
-                        account.refreshToken,
-                        account.user,
-                        account.tokenMeta
-                      );
-                      refreshUser();
+                      restoreSavedAuthState(account);
+                      void refreshUser();
                     }}
                   >
                     <Avatar className="w-8 h-8">
@@ -363,13 +358,8 @@ export function UserMenu() {
                   <DropdownMenuItem
                     className="flex-1 flex items-center space-x-2 cursor-pointer rounded-md py-1.5"
                     onSelect={() => {
-                      saveAuthState(
-                        account.accessToken,
-                        account.refreshToken,
-                        account.user,
-                        account.tokenMeta
-                      );
-                      refreshUser();
+                      restoreSavedAuthState(account);
+                      void refreshUser();
                     }}
                   >
                     <Avatar className="w-6 h-6">

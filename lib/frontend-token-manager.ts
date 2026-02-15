@@ -265,6 +265,8 @@ class TokenManager {
    */
   private setupAutoRefresh(): void {
     if (typeof window === "undefined") return;
+    // INTL 会话由 Supabase SDK 自己维护刷新；避免本地过期判断误清 token
+    if (!isChinaRegion()) return;
 
     // 每 30 秒检查一次 Token 状态
     this.refreshTimer = setInterval(() => {

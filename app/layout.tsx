@@ -4,7 +4,8 @@ import { AppProvider } from "@/components/app-context";
 import { UserProvider } from "@/components/user-context";
 import { LanguageProvider } from "@/components/language-provider";
 import { GeoProvider } from "@/components/geo-provider";
-import { Toaster } from "@/components/ui/toaster";
+import { Toaster as AppToaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { DebugModeIndicator } from "@/components/debug-mode-indicator";
 import { Suspense } from "react";
 import InitializeApp from "@/components/initialize-app";
@@ -50,8 +51,9 @@ export default function RootLayout({
                 <Suspense fallback={null}>
                   <DebugModeIndicator />
                 </Suspense>
-                {/* Global toast portal */}
-                <Toaster />
+                {/* Global toast portals */}
+                <AppToaster />
+                <SonnerToaster />
                 {/* H5 日志控制台 - 仅在 debug=true 时显示 */}
                 <WebLogConsole />
               </UserProvider>

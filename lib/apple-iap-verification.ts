@@ -47,7 +47,7 @@ interface DecodedRenewalInfo {
 export async function verifyAppleSubscription(
   originalTransactionId: string,
   bundleId: string,
-  productId: string,
+  productId?: string,
   useProduction: boolean = true
 ): Promise<{
   isValid: boolean;
@@ -89,7 +89,7 @@ export async function verifyAppleSubscription(
     logInfo("Verifying Apple subscription", {
       originalTransactionId,
       bundleId,
-      productId,
+      productId: productId || "(not provided)",
       useProduction,
     });
 
@@ -132,15 +132,23 @@ export async function verifyAppleSubscription(
       };
     }
 
-    // 验证 bundle ID 和 product ID
-    if (
-      transactionInfo.bundleId !== appleBundleId ||
-      transactionInfo.productId !== productId
-    ) {
-      logWarn("Apple IAP verification: product mismatch", {
+    // 验证 bundle ID（必须匹配）
+    if (transactionInfo.bundleId !== appleBundleId) {
+      logWarn("Apple IAP verification: bundle mismatch", {
         expectedBundleId: appleBundleId,
         actualBundleId: transactionInfo.bundleId,
-        expectedProductId: productId,
+      });
+      return {
+        isValid: false,
+        errorMessage: "Bundle ID mismatch",
+      };
+    }
+
+    // productId 仅在提供时校验（status 查询可不传）
+    const expectedProductId = typeof productId === "string" ? productId.trim() : "";
+    if (expectedProductId && transactionInfo.productId !== expectedProductId) {
+      logWarn("Apple IAP verification: product mismatch", {
+        expectedProductId,
         actualProductId: transactionInfo.productId,
       });
       return {

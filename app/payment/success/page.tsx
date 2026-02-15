@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { CheckCircle, Loader2 } from "lucide-react";
 import { useUser } from "@/components/user-context";
 
+type ProductType = "SUBSCRIPTION" | "ADDON";
+
 function PaymentSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -26,40 +28,29 @@ function PaymentSuccessContent() {
     daysAdded?: number;
     amount?: number;
     currency?: string;
+    productType?: ProductType;
+    imageCredits?: number;
+    videoAudioCredits?: number;
   }>({});
-  const [hasProcessed, setHasProcessed] = useState(false); // 🔑 防止重复处理
+  const [hasProcessed, setHasProcessed] = useState(false);
 
   useEffect(() => {
-    // 🔑 如果已经处理过，直接返回
     if (hasProcessed) {
       return;
     }
 
     const handlePaymentSuccess = async () => {
       try {
-        // 🔄 一次性支付使用不同的参数
-        const sessionId = searchParams.get("session_id"); // Stripe
-        const token = searchParams.get("token"); // PayPal
-        const outTradeNo = searchParams.get("out_trade_no"); // Alipay
-        const tradeNo = searchParams.get("trade_no"); // Alipay交易号
-        const wechatOutTradeNo = searchParams.get("wechat_out_trade_no"); // WeChat Native QR Code
+        const sessionId = searchParams.get("session_id");
+        const token = searchParams.get("token");
+        const outTradeNo = searchParams.get("out_trade_no");
+        const tradeNo = searchParams.get("trade_no");
+        const wechatOutTradeNo = searchParams.get("wechat_out_trade_no");
         const iapTransactionId = searchParams.get("iap_transaction_id");
         const iapProductId = searchParams.get("iap_product_id");
         const iapPlanId = searchParams.get("iap_plan_id");
         const iapBillingCycle = searchParams.get("iap_billing_cycle");
 
-        console.log("Payment success callback:", {
-          sessionId,
-          token,
-          outTradeNo,
-          tradeNo,
-          wechatOutTradeNo,
-          iapTransactionId,
-          iapProductId,
-          allParams: Object.fromEntries(searchParams.entries()),
-        });
-
-        // 一次性支付:至少要有一个参数
         if (
           !sessionId &&
           !token &&
@@ -71,7 +62,7 @@ function PaymentSuccessContent() {
           throw new Error("Missing payment confirmation parameters");
         }
 
-        // ✅ Apple IAP：走独立确认接口
+        // Apple IAP
         if (iapTransactionId && iapProductId && iapPlanId && iapBillingCycle) {
           const { getAuthClient } = await import("@/lib/auth/client");
           const sessionResult = await getAuthClient().getSession();
@@ -108,6 +99,7 @@ function PaymentSuccessContent() {
               daysAdded: result.daysAdded,
               amount: result.amount,
               currency: result.currency,
+              productType: "SUBSCRIPTION",
             });
 
             try {
@@ -123,11 +115,10 @@ function PaymentSuccessContent() {
           throw new Error(result.error || "IAP confirmation failed");
         }
 
-        // ✅ Alipay App 通道：没有 trade_no（同步 return 不存在），改用支付状态轮询等待 webhook 完成
+        // Alipay App 通道：先轮询 status，再走 confirm
         if (outTradeNo && !tradeNo && !sessionId && !token && !wechatOutTradeNo) {
           const paymentId = outTradeNo;
 
-          // 如果是 App 通道（payment page 会把 orderString 放在 sessionStorage），这里负责拉起支付宝一次
           try {
             const orderStringKey = `alipay:orderString:${paymentId}`;
             const launchedKey = `alipay:launched:${paymentId}`;
@@ -155,16 +146,56 @@ function PaymentSuccessContent() {
             if (res.ok) {
               const data = await res.json();
               if (data?.status === "completed") {
-                // 支付已完成，webhook 已处理延期，无需额外确认
+                const params = new URLSearchParams({
+                  out_trade_no: paymentId,
+                });
+
+                const { getAuthClient } = await import("@/lib/auth/client");
+                const sessionResult = await getAuthClient().getSession();
+                const session = sessionResult.data.session;
+
+                const headers: Record<string, string> = {};
+                if (session?.access_token) {
+                  headers["Authorization"] = `Bearer ${session.access_token}`;
+                }
+
+                const confirmResponse = await fetch(
+                  `/api/payment/confirm?${params.toString()}`,
+                  { headers }
+                );
+
+                if (!confirmResponse.ok) {
+                  const confirmErrorData = await confirmResponse
+                    .json()
+                    .catch(() => ({}));
+                  throw new Error(
+                    confirmErrorData.error || "Payment confirmation failed"
+                  );
+                }
+
+                const confirmResult = await confirmResponse.json();
+
+                if (!confirmResult.success) {
+                  throw new Error(
+                    confirmResult.error || "Payment confirmation failed"
+                  );
+                }
+
                 setPaymentStatus("success");
                 setPaymentDetails({
-                  daysAdded: data.daysAdded || 30, // 从响应中获取或默认值
-                  amount: data.amount,
-                  currency: data.currency,
+                  daysAdded: confirmResult.daysAdded,
+                  amount: confirmResult.amount || data.amount,
+                  currency: confirmResult.currency || data.currency,
+                  productType:
+                    confirmResult.productType === "ADDON"
+                      ? "ADDON"
+                      : "SUBSCRIPTION",
+                  imageCredits: confirmResult.imageCredits,
+                  videoAudioCredits: confirmResult.videoAudioCredits,
                 });
-                refreshUser();
+                await refreshUser();
                 setHasProcessed(true);
-                break;
+                return;
               }
             }
             await new Promise((r) => setTimeout(r, INTERVAL_MS));
@@ -173,7 +204,6 @@ function PaymentSuccessContent() {
           throw new Error("Payment is still processing, please try again");
         }
 
-        // 🔄 调用一次性支付确认API (需要带认证token)
         const params = new URLSearchParams();
         if (sessionId) params.set("session_id", sessionId);
         if (token) params.set("token", token);
@@ -181,7 +211,6 @@ function PaymentSuccessContent() {
         if (tradeNo) params.set("trade_no", tradeNo);
         if (wechatOutTradeNo) params.set("wechat_out_trade_no", wechatOutTradeNo);
 
-        // 获取认证 token
         const { getAuthClient } = await import("@/lib/auth/client");
         const sessionResult = await getAuthClient().getSession();
         const session = sessionResult.data.session;
@@ -191,10 +220,9 @@ function PaymentSuccessContent() {
           headers["Authorization"] = `Bearer ${session.access_token}`;
         }
 
-        const response = await fetch(
-          `/api/payment/confirm?${params.toString()}`,
-          { headers }
-        );
+        const response = await fetch(`/api/payment/confirm?${params.toString()}`, {
+          headers,
+        });
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
@@ -204,28 +232,26 @@ function PaymentSuccessContent() {
         const result = await response.json();
 
         if (result.success) {
-          console.log("Payment confirmed:", result);
-          // 🔑 标记为已处理，防止重复调用
           setHasProcessed(true);
 
-          // 保存支付详情
           setPaymentDetails({
             daysAdded: result.daysAdded,
             amount: result.amount,
             currency: result.currency,
+            productType:
+              result.productType === "ADDON" ? "ADDON" : "SUBSCRIPTION",
+            imageCredits: result.imageCredits,
+            videoAudioCredits: result.videoAudioCredits,
           });
-          // 清除本地存储的支付信息(如果有)
+
           try {
             localStorage.removeItem("pending_payment");
-          } catch (e) {
-            // 忽略localStorage错误
+          } catch {
+            // ignore localStorage errors
           }
 
-          // ✅ 关键修复：刷新用户信息以反映新的会员状态
-          console.log("🔄 刷新用户信息以获取最新的会员状态...");
           try {
             await refreshUser();
-            console.log("✅ 用户信息已刷新，会员状态已更新");
           } catch (refreshError) {
             console.warn("⚠️ 刷新用户信息失败，但支付已成功:", refreshError);
           }
@@ -237,17 +263,36 @@ function PaymentSuccessContent() {
       } catch (error) {
         console.error("Payment confirmation error:", error);
         setPaymentStatus("error");
-        setHasProcessed(true); // 🔑 即使失败也标记为已处理，避免无限重试
+        setHasProcessed(true);
       } finally {
         setIsProcessing(false);
       }
     };
 
     handlePaymentSuccess();
-  }, [searchParams, hasProcessed]); // 🔑 添加 hasProcessed 到依赖
+  }, [searchParams, hasProcessed, refreshUser]);
 
   const handleContinue = () => {
-    router.push("/"); // 或者跳转到用户仪表板
+    router.push("/");
+  };
+
+  const renderSuccessDescription = () => {
+    if (paymentDetails.productType === "ADDON") {
+      const imageCredits = paymentDetails.imageCredits || 0;
+      const videoAudioCredits = paymentDetails.videoAudioCredits || 0;
+
+      if (imageCredits > 0 || videoAudioCredits > 0) {
+        return `加油包已到账：+${imageCredits} 图片额度，+${videoAudioCredits} 视频/音频额度`;
+      }
+
+      return "加油包购买成功，额度已更新";
+    }
+
+    if (paymentDetails.daysAdded) {
+      return `已为您添加 ${paymentDetails.daysAdded} 天高级会员`;
+    }
+
+    return "您的会员已激活，感谢您的支持";
   };
 
   return (
@@ -265,14 +310,8 @@ function PaymentSuccessContent() {
           {paymentStatus === "success" && (
             <>
               <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-4" />
-              <CardTitle className="text-xl text-green-600">
-                支付成功！
-              </CardTitle>
-              <CardDescription>
-                {paymentDetails.daysAdded
-                  ? `已为您添加 ${paymentDetails.daysAdded} 天高级会员`
-                  : "您的会员已激活，感谢您的支持"}
-              </CardDescription>
+              <CardTitle className="text-xl text-green-600">支付成功！</CardTitle>
+              <CardDescription>{renderSuccessDescription()}</CardDescription>
               {paymentDetails.amount &&
                 paymentDetails.amount > 0 &&
                 paymentDetails.currency && (
@@ -288,9 +327,7 @@ function PaymentSuccessContent() {
               <div className="h-12 w-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span className="text-red-600 text-2xl">✕</span>
               </div>
-              <CardTitle className="text-xl text-red-600">
-                支付确认失败
-              </CardTitle>
+              <CardTitle className="text-xl text-red-600">支付确认失败</CardTitle>
               <CardDescription>请联系客服或稍后重试</CardDescription>
             </>
           )}

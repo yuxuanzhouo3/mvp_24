@@ -15,7 +15,8 @@
 import { NextRequest } from "next/server";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import { appendSessionMessages } from "@/lib/chat-session-store";
+import { createMessageId } from "@/lib/chat/message-id";
 
 export const runtime = "nodejs";
 
@@ -41,6 +42,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       sessionId,
+      userMessageId,
+      assistantMessageId,
       userMessage,
       finalAnswer,
       finalAgentId,
@@ -48,6 +51,8 @@ export async function POST(req: NextRequest) {
       finalModel,
     } = body as {
       sessionId: string;
+      userMessageId?: string;
+      assistantMessageId?: string;
       userMessage: string;
       finalAnswer: string;
       finalAgentId?: string;
@@ -94,12 +99,17 @@ export async function POST(req: NextRequest) {
       const dbCmd = cloudbase.command;
       const messagesToAppend = [
         {
+          id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),
           role: "user",
           content: userMessage,
           timestamp,
           tokens_used: 0,
         },
         {
+          id:
+            assistantMessageId && assistantMessageId.trim()
+              ? assistantMessageId
+              : createMessageId("msg"),
           role: "assistant",
           content: finalAnswer,
           timestamp,
@@ -119,48 +129,37 @@ export async function POST(req: NextRequest) {
     }
 
     // Supabase (international)
-    const { data: session, error: fetchError } = await supabaseAdmin
-      .from("gpt_sessions")
-      .select("messages")
-      .eq("id", sessionId)
-      .eq("user_id", userId)
-      .single();
-
-    if (fetchError) {
-      return Response.json({ error: "Failed to fetch session" }, { status: 500 });
-    }
-
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    const currentMessages = session.messages || [];
-    const updatedMessages = [...currentMessages];
-
-    updatedMessages.push({
-      content: userMessage,
-      role: "user",
-      timestamp,
-      tokens_used: 0,
-    });
-
-    updatedMessages.push({
-      content: finalAnswer,
-      role: "assistant",
-      timestamp,
-      tokens_used: 0,
-      finalAgentId: finalAgentId || undefined,
-      finalAgentName: finalAgentName || undefined,
-      model: finalModel || undefined,
-    });
-
-    const { error: updateError } = await supabaseAdmin
-      .from("gpt_sessions")
-      .update({ messages: updatedMessages })
-      .eq("id", sessionId)
-      .eq("user_id", userId);
-
-    if (updateError) {
+    try {
+      await appendSessionMessages({
+        sessionId,
+        userId,
+        messages: [
+          {
+            id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),
+            content: userMessage,
+            role: "user",
+            timestamp,
+            tokens_used: 0,
+          },
+          {
+            id:
+              assistantMessageId && assistantMessageId.trim()
+                ? assistantMessageId
+                : createMessageId("msg"),
+            content: finalAnswer,
+            role: "assistant",
+            timestamp,
+            tokens_used: 0,
+            finalAgentId: finalAgentId || undefined,
+            finalAgentName: finalAgentName || undefined,
+            model: finalModel || undefined,
+          },
+        ],
+      });
+    } catch (saveError) {
+      if (saveError instanceof Error && saveError.message.includes("Session not found")) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
       return Response.json({ error: "Failed to save messages" }, { status: 500 });
     }
 

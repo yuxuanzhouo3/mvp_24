@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Loader2, RefreshCw } from "lucide-react";
+import { saveWechatState } from "@/lib/wechat/oauth";
 
 /**
  * 微信二维码登录组件
@@ -39,6 +40,9 @@ export function WechatQrcodeLogin({
 
       const data = await response.json();
       setQrcodeUrl(data.qrcodeUrl);
+      if (data.state) {
+        saveWechatState(data.state);
+      }
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to load QR code";

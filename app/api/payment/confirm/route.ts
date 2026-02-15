@@ -4,23 +4,470 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 import { isChinaRegion } from "@/lib/config/region";
 import { getDatabase } from "@/lib/cloudbase-service";
-import { logInfo, logError, logWarn, logBusinessEvent } from "@/lib/logger";
+import { logInfo, logError, logWarn } from "@/lib/logger";
 import {
   confirmPayment,
   PaymentConfirmationError,
 } from "@/app/api/payment/lib/confirm-payment";
 import { extendMembership } from "@/app/api/payment/lib/extend-membership";
+import { addAddonCredits } from "@/services/wallet";
+import { getAddonPackageById } from "@/constants/addon-packages";
+
+type ResolvedProductType = "ADDON" | "SUBSCRIPTION";
+
+type PaymentStatus = "pending" | "completed";
+
+function resolveProductType(payment: any): ResolvedProductType {
+  const type = String(
+    payment?.type || payment?.metadata?.productType || "SUBSCRIPTION"
+  ).toUpperCase();
+  return type === "ADDON" ? "ADDON" : "SUBSCRIPTION";
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  const unique = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    unique.add(trimmed);
+  }
+  return Array.from(unique);
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
+function isMissingColumnError(error: any, column: string): boolean {
+  if (!error) {
+    return false;
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    String(error?.code || "") === "42703" &&
+    message.includes(column.toLowerCase())
+  );
+}
+
+async function findSupabasePaymentForUser(
+  userId: string,
+  status: PaymentStatus,
+  identifiers: string[],
+  operationId: string
+): Promise<{ payment: any | null; error: any }> {
+  if (identifiers.length === 0) {
+    return { payment: null, error: null };
+  }
+
+  let lastError: any = null;
+
+  const { data: byTransaction, error: byTransactionError } = await supabaseAdmin
+    .from("payments")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", status)
+    .in("transaction_id", identifiers)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (byTransaction) {
+    return { payment: byTransaction, error: null };
+  }
+  if (byTransactionError && (byTransactionError as any)?.code !== "PGRST116") {
+    lastError = byTransactionError;
+  }
+
+  const { data: byOutTradeNo, error: byOutTradeNoError } = await supabaseAdmin
+    .from("payments")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", status)
+    .in("out_trade_no", identifiers)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (byOutTradeNo) {
+    return { payment: byOutTradeNo, error: null };
+  }
+  if (byOutTradeNoError && (byOutTradeNoError as any)?.code !== "PGRST116") {
+    if (isMissingColumnError(byOutTradeNoError, "out_trade_no")) {
+      logWarn("payments.out_trade_no column is missing, skipping lookup", {
+        operationId,
+        userId,
+        status,
+      });
+    } else if (!lastError) {
+      lastError = byOutTradeNoError;
+    }
+  }
+
+  const uuidIdentifiers = identifiers.filter(isUuidLike);
+  if (uuidIdentifiers.length > 0) {
+    const { data: byId, error: byIdError } = await supabaseAdmin
+      .from("payments")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("status", status)
+      .in("id", uuidIdentifiers)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byId) {
+      return { payment: byId, error: null };
+    }
+    if (byIdError && (byIdError as any)?.code !== "PGRST116" && !lastError) {
+      lastError = byIdError;
+    }
+  }
+
+  return { payment: null, error: lastError };
+}
+
+async function findCloudbasePaymentForUser(
+  userId: string,
+  status: PaymentStatus,
+  identifiers: string[]
+): Promise<{ payment: any | null; error: any }> {
+  if (identifiers.length === 0) {
+    return { payment: null, error: null };
+  }
+
+  try {
+    const db = getDatabase();
+    const result = await db
+      .collection("payments")
+      .where({
+        user_id: userId,
+        status,
+      })
+      .orderBy("created_at", "desc")
+      .limit(100)
+      .get();
+
+    const identifierSet = new Set(identifiers);
+    const payment =
+      (result.data || []).find((row: any) => {
+        const candidates = [
+          row?.transaction_id,
+          row?.out_trade_no,
+          row?._id,
+          row?.id,
+        ];
+        return candidates.some(
+          (candidate) =>
+            typeof candidate === "string" && identifierSet.has(candidate)
+        );
+      }) || null;
+
+    return { payment, error: null };
+  } catch (error) {
+    return { payment: null, error };
+  }
+}
+
+async function findPaymentForUser(
+  userId: string,
+  status: PaymentStatus,
+  identifiers: string[],
+  operationId: string
+): Promise<{ payment: any | null; error: any }> {
+  if (isChinaRegion()) {
+    return findCloudbasePaymentForUser(userId, status, identifiers);
+  }
+  return findSupabasePaymentForUser(userId, status, identifiers, operationId);
+}
+
+async function hasSubscriptionForTransaction(
+  userId: string,
+  transactionId: string,
+  operationId: string
+): Promise<boolean> {
+  if (!transactionId) {
+    return false;
+  }
+
+  if (isChinaRegion()) {
+    try {
+      const db = getDatabase();
+      const subscriptionsCollection = db.collection("subscriptions");
+
+      const byTransaction = await subscriptionsCollection
+        .where({
+          user_id: userId,
+          transaction_id: transactionId,
+        })
+        .limit(1)
+        .get();
+
+      if ((byTransaction.data?.length || 0) > 0) {
+        return true;
+      }
+
+      const byProviderSubscription = await subscriptionsCollection
+        .where({
+          user_id: userId,
+          provider_subscription_id: transactionId,
+        })
+        .limit(1)
+        .get();
+
+      return (byProviderSubscription.data?.length || 0) > 0;
+    } catch (error) {
+      logWarn("CloudBase subscription idempotency lookup failed", {
+        operationId,
+        userId,
+        transactionId,
+        error,
+      });
+      return false;
+    }
+  }
+
+  try {
+    const { data: byTransaction, error: byTransactionError } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("transaction_id", transactionId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byTransactionError && (byTransactionError as any)?.code !== "PGRST116") {
+      logWarn("Supabase transaction_id idempotency lookup failed", {
+        operationId,
+        userId,
+        transactionId,
+        error: byTransactionError,
+      });
+    }
+
+    if (byTransaction?.id) {
+      return true;
+    }
+
+    const { data: byProviderSubscription, error: byProviderError } =
+      await supabaseAdmin
+        .from("subscriptions")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("provider_subscription_id", transactionId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    if (byProviderError && (byProviderError as any)?.code !== "PGRST116") {
+      logWarn("Supabase provider_subscription_id idempotency lookup failed", {
+        operationId,
+        userId,
+        transactionId,
+        error: byProviderError,
+      });
+    }
+
+    return !!byProviderSubscription?.id;
+  } catch (error) {
+    logWarn("Supabase subscription idempotency lookup threw unexpectedly", {
+      operationId,
+      userId,
+      transactionId,
+      error,
+    });
+    return false;
+  }
+}
+
+async function ensureMembershipExtended(
+  userId: string,
+  days: number,
+  transactionId: string,
+  operationId: string
+): Promise<boolean> {
+  const alreadyExtended = await hasSubscriptionForTransaction(
+    userId,
+    transactionId,
+    operationId
+  );
+  if (alreadyExtended) {
+    logInfo("Membership already extended for transaction, skipping duplicate", {
+      operationId,
+      userId,
+      transactionId,
+      days,
+    });
+    return true;
+  }
+
+  if (days <= 0) {
+    logWarn("Cannot extend membership with non-positive days", {
+      operationId,
+      userId,
+      transactionId,
+      days,
+    });
+    return false;
+  }
+
+  return extendMembership(userId, days, transactionId);
+}
+
+function resolveAddonCredits(payment: any): {
+  addonPackageId?: string;
+  imageCredits: number;
+  videoAudioCredits: number;
+} {
+  const addonPackageId =
+    payment?.addon_package_id ||
+    payment?.metadata?.addonPackageId ||
+    payment?.metadata?.productId;
+
+  let imageCredits = Number(
+    payment?.image_credits ?? payment?.metadata?.imageCredits ?? 0
+  );
+  let videoAudioCredits = Number(
+    payment?.video_audio_credits ?? payment?.metadata?.videoAudioCredits ?? 0
+  );
+
+  if (imageCredits <= 0 && videoAudioCredits <= 0 && addonPackageId) {
+    const addonPkg = getAddonPackageById(addonPackageId);
+    if (addonPkg) {
+      imageCredits = addonPkg.imageCredits;
+      videoAudioCredits = addonPkg.videoAudioCredits;
+    }
+  }
+
+  return {
+    addonPackageId: addonPackageId || undefined,
+    imageCredits: Math.max(0, imageCredits),
+    videoAudioCredits: Math.max(0, videoAudioCredits),
+  };
+}
+
+function isAddonCreditsGranted(payment: any): boolean {
+  return Boolean(
+    payment?.addon_credits_granted ||
+      payment?.metadata?.addonCreditsGranted ||
+      payment?.metadata?.addon_credits_granted
+  );
+}
+
+async function markAddonCreditsGranted(payment: any) {
+  const nowIso = new Date().toISOString();
+  const mergedMetadata = {
+    ...(payment?.metadata || {}),
+    addonCreditsGranted: true,
+    addonCreditsGrantedAt: nowIso,
+  };
+
+  if (isChinaRegion()) {
+    const db = getDatabase();
+    const docId = payment?._id;
+    if (docId) {
+      await db.collection("payments").doc(docId).update({
+        metadata: mergedMetadata,
+        updated_at: nowIso,
+      });
+    }
+    return;
+  }
+
+  const rowId = payment?.id;
+  if (rowId) {
+    await supabaseAdmin
+      .from("payments")
+      .update({
+        metadata: mergedMetadata,
+        updated_at: nowIso,
+      })
+      .eq("id", rowId);
+  }
+}
+
+async function ensureAddonCreditsGranted(
+  userId: string,
+  payment: any,
+  operationId: string
+): Promise<
+  | {
+      success: true;
+      addonPackageId?: string;
+      imageCredits: number;
+      videoAudioCredits: number;
+    }
+  | { success: false; error: string }
+> {
+  const { addonPackageId, imageCredits, videoAudioCredits } =
+    resolveAddonCredits(payment);
+
+  if (isAddonCreditsGranted(payment)) {
+    return {
+      success: true,
+      addonPackageId,
+      imageCredits,
+      videoAudioCredits,
+    };
+  }
+
+  if (imageCredits <= 0 && videoAudioCredits <= 0) {
+    return {
+      success: false,
+      error: "Invalid addon credits configuration",
+    };
+  }
+
+  const addRes = await addAddonCredits(userId, imageCredits, videoAudioCredits);
+  if (!addRes.success) {
+    logError("Failed to add addon credits", undefined, {
+      operationId,
+      userId,
+      addonPackageId,
+      imageCredits,
+      videoAudioCredits,
+      error: addRes.error,
+    });
+    return {
+      success: false,
+      error: addRes.error || "Failed to add addon credits",
+    };
+  }
+
+  try {
+    await markAddonCreditsGranted(payment);
+  } catch (markError) {
+    logWarn("Addon credits granted but marker update failed", {
+      operationId,
+      userId,
+      addonPackageId,
+      markError,
+    });
+  }
+
+  return {
+    success: true,
+    addonPackageId,
+    imageCredits,
+    videoAudioCredits,
+  };
+}
 
 export async function GET(request: NextRequest) {
-  console.log("🚀🚀🚀 [CONFIRM API] STARTED - Entry point");
-
   const startTime = Date.now();
   const operationId = `payment_confirm_${Date.now()}_${Math.random()
     .toString(36)
     .substr(2, 9)}`;
 
   try {
-    // 验证用户认证
     const authResult = await requireAuth(request);
     if (!authResult) {
       return createAuthErrorResponse();
@@ -33,14 +480,6 @@ export async function GET(request: NextRequest) {
     const outTradeNo = searchParams.get("out_trade_no");
     const tradeNo = searchParams.get("trade_no");
     const wechatOutTradeNo = searchParams.get("wechat_out_trade_no");
-
-    console.log("🚀🚀🚀 [CONFIRM API] Parameters extracted", {
-      hasSessionId: !!sessionId,
-      hasToken: !!token,
-      hasOutTradeNo: !!outTradeNo,
-      hasTradeNo: !!tradeNo,
-      hasWechatOutTradeNo: !!wechatOutTradeNo,
-    });
 
     logInfo("Processing payment confirmation", {
       operationId,
@@ -93,42 +532,21 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    // 检查是否已存在完成状态的支付记录
-    let existingCompletedPayment: any = null;
-    let existingCheckError: any = null;
-
-    if (isChinaRegion()) {
-      try {
-        const db = getDatabase();
-        const paymentsCollection = db.collection("payments");
-
-        const result = await paymentsCollection
-          .where({
-            transaction_id: transactionId,
-            status: "completed",
-          })
-          .get();
-
-        existingCompletedPayment = result.data?.[0] || null;
-      } catch (error) {
-        logError("Error checking existing CloudBase payment", error as Error, {
-          operationId,
-          userId: user.id,
-          transactionId,
-        });
-        existingCheckError = error;
-      }
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from("payments")
-        .select("id, status")
-        .eq("transaction_id", transactionId)
-        .eq("status", "completed")
-        .maybeSingle();
-
-      existingCompletedPayment = data;
-      existingCheckError = error;
-    }
+    const completedLookupKeys = uniqueNonEmpty([
+      transactionId,
+      sessionId,
+      token,
+      outTradeNo,
+      wechatOutTradeNo,
+      tradeNo,
+    ]);
+    const { payment: existingCompletedPayment, error: existingCheckError } =
+      await findPaymentForUser(
+        user.id,
+        "completed",
+        completedLookupKeys,
+        operationId
+      );
 
     if (existingCheckError) {
       logError("Error checking existing payment", existingCheckError as Error, {
@@ -147,6 +565,37 @@ export async function GET(request: NextRequest) {
           existingCompletedPayment.id || existingCompletedPayment._id,
       });
 
+      const existingProductType = resolveProductType(existingCompletedPayment);
+
+      if (existingProductType === "ADDON") {
+        const addonGrantResult = await ensureAddonCreditsGranted(
+          user.id,
+          existingCompletedPayment,
+          operationId
+        );
+
+        if (!addonGrantResult.success) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: addonGrantResult.error,
+            },
+            { status: 500 }
+          );
+        }
+
+        return NextResponse.json({
+          success: true,
+          message: "Addon payment already processed",
+          transactionId,
+          productType: "ADDON",
+          amount,
+          currency,
+          imageCredits: addonGrantResult.imageCredits,
+          videoAudioCredits: addonGrantResult.videoAudioCredits,
+        });
+      }
+
       if (days > 0 && transactionId) {
         logInfo("Ensuring membership extension for already-processed payment", {
           operationId,
@@ -155,119 +604,19 @@ export async function GET(request: NextRequest) {
           days,
         });
 
-        const isPayPalOrStripe = !!sessionId || !!token;
+        const membershipExtended = await ensureMembershipExtended(
+          user.id,
+          days,
+          transactionId,
+          operationId
+        );
 
-        if (!isChinaRegion()) {
-          if (isPayPalOrStripe) {
-            console.log(
-              "✅✅✅ [ALREADY-PROCESSED FLOW] PayPal/Stripe payment - SKIPPING extendMembership in confirm, relying on webhook",
-              {
-                operationId,
-                userId: user.id,
-                transactionId,
-                isStripe: !!sessionId,
-                isPayPal: !!token,
-                days,
-              }
-            );
-          } else {
-            try {
-              const { data: existingSub } = await supabaseAdmin
-                .from("subscriptions")
-                .select("id")
-                .or(
-                  `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
-                )
-                .maybeSingle();
-
-              if (existingSub && existingSub.id) {
-                logInfo(
-                  "Subscription already exists for transaction - skipping extendMembership",
-                  {
-                    operationId,
-                    userId: user.id,
-                    transactionId,
-                    subscriptionId: existingSub.id,
-                  }
-                );
-              } else {
-                const membershipExtended = await extendMembership(
-                  user.id,
-                  days,
-                  transactionId
-                );
-
-                if (!membershipExtended) {
-                  logWarn(
-                    "Failed to extend membership for already-processed payment",
-                    {
-                      operationId,
-                      userId: user.id,
-                      transactionId,
-                    }
-                  );
-                }
-              }
-            } catch (err) {
-              logWarn("Error during supabase subscription idempotency check", {
-                operationId,
-                userId: user.id,
-                transactionId,
-                err,
-              });
-              const membershipExtended = await extendMembership(
-                user.id,
-                days,
-                transactionId
-              );
-
-              if (!membershipExtended) {
-                logWarn(
-                  "Failed to extend membership for already-processed payment (fallback)",
-                  {
-                    operationId,
-                    userId: user.id,
-                    transactionId,
-                  }
-                );
-              }
-            }
-          }
-        } else {
-          // 中国区域：PayPal/Stripe 和支付宝都由 webhook 处理延期，confirm 只做状态确认
-          const isPayPalOrStripe = !!sessionId || !!token;
-          const isAlipay = !!outTradeNo || !!tradeNo;
-
-          if (isPayPalOrStripe || isAlipay) {
-            console.log(
-              "✅✅✅ [ALREADY-PROCESSED FLOW] PayPal/Stripe/Alipay payment - SKIPPING extendMembership in confirm, relying on webhook",
-              {
-                operationId,
-                userId: user.id,
-                transactionId,
-                isPayPal: !!token,
-                isStripe: !!sessionId,
-                isAlipay,
-                days,
-              }
-            );
-          } else {
-            const membershipExtended = await extendMembership(
-              user.id,
-              days,
-              transactionId
-            );
-            if (!membershipExtended) {
-              logWarn(
-                "Failed to extend membership for already-processed payment",
-                {
-                  operationId,
-                  userId: user.id,
-                  transactionId,
-                }
-              );
-            }
-          }
+        if (!membershipExtended) {
+          logWarn("Failed to ensure membership extension for processed payment", {
+            operationId,
+            userId: user.id,
+            transactionId,
+          });
         }
       }
 
@@ -275,61 +624,37 @@ export async function GET(request: NextRequest) {
         success: true,
         message: "Payment already processed",
         transactionId,
+        productType: "SUBSCRIPTION",
       });
     }
 
-    // 查找 pending 支付记录并更新为 completed
-    // For Alipay: outTradeNo is our order number (stored in transaction_id), should be checked first
     const paymentIdToUpdate =
       sessionId || token || outTradeNo || wechatOutTradeNo || tradeNo;
-    let pendingPayment: any = null;
-    let findError: any = null;
+    const pendingLookupKeys = uniqueNonEmpty([
+      paymentIdToUpdate,
+      transactionId,
+      sessionId,
+      token,
+      outTradeNo,
+      wechatOutTradeNo,
+      tradeNo,
+    ]);
+    let { payment: pendingPayment, error: findError } = await findPaymentForUser(
+      user.id,
+      "pending",
+      pendingLookupKeys,
+      operationId
+    );
 
-    if (isChinaRegion()) {
-      try {
-        const db = getDatabase();
-        const paymentsCollection = db.collection("payments");
-
-        const result = await paymentsCollection
-          .where({
-            transaction_id: paymentIdToUpdate,
-            user_id: user.id,
-            status: "pending",
-          })
-          .get();
-
-        pendingPayment = result.data?.[0] || null;
-      } catch (error) {
-        logError("Error finding CloudBase pending payment", error as Error, {
-          operationId,
-          userId: user.id,
-          transactionId: paymentIdToUpdate,
-        });
-        findError = error;
-      }
-    } else {
-      const { data, error } = await supabaseAdmin
-        .from("payments")
-        .select("id, amount, currency")
-        .eq("transaction_id", paymentIdToUpdate)
-        .eq("user_id", user.id)
-        .eq("status", "pending")
-        .maybeSingle();
-
-      pendingPayment = data;
-      findError = error;
-    }
-
-    if (
-      findError &&
-      (!isChinaRegion() || (findError as any)?.code !== "PGRST116")
-    ) {
+    if (findError) {
       logError("Error finding pending payment", findError as Error, {
         operationId,
         userId: user.id,
         transactionId: paymentIdToUpdate,
       });
     }
+
+    let productTypeToProcess: ResolvedProductType = "SUBSCRIPTION";
 
     if (pendingPayment) {
       if (amount === 0 && pendingPayment.amount) {
@@ -344,7 +669,10 @@ export async function GET(request: NextRequest) {
         currency = pendingPayment.currency;
       }
 
+      productTypeToProcess = resolveProductType(pendingPayment);
+
       let updateError: any = null;
+      const nowIso = new Date().toISOString();
 
       if (isChinaRegion()) {
         try {
@@ -356,7 +684,7 @@ export async function GET(request: NextRequest) {
             transaction_id: transactionId,
             amount,
             currency,
-            updatedAt: new Date().toISOString(),
+            updated_at: nowIso,
           });
         } catch (error) {
           logError("Error updating CloudBase payment status", error as Error, {
@@ -374,7 +702,7 @@ export async function GET(request: NextRequest) {
             transaction_id: transactionId,
             amount,
             currency,
-            updated_at: new Date().toISOString(),
+            updated_at: nowIso,
           })
           .eq("id", pendingPayment.id);
 
@@ -386,6 +714,54 @@ export async function GET(request: NextRequest) {
           operationId,
           userId: user.id,
           paymentId: pendingPayment.id || pendingPayment._id,
+        });
+      }
+
+      pendingPayment = {
+        ...pendingPayment,
+        status: "completed",
+        transaction_id: transactionId,
+        amount,
+        currency,
+      };
+
+      if (productTypeToProcess === "ADDON") {
+        const addonGrantResult = await ensureAddonCreditsGranted(
+          user.id,
+          pendingPayment,
+          operationId
+        );
+
+        if (!addonGrantResult.success) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: addonGrantResult.error,
+            },
+            { status: 500 }
+          );
+        }
+
+        const duration = Date.now() - startTime;
+        logInfo("Addon payment confirmed successfully", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          amount,
+          currency,
+          imageCredits: addonGrantResult.imageCredits,
+          videoAudioCredits: addonGrantResult.videoAudioCredits,
+          duration: `${duration}ms`,
+        });
+
+        return NextResponse.json({
+          success: true,
+          transactionId,
+          amount,
+          currency,
+          productType: "ADDON",
+          imageCredits: addonGrantResult.imageCredits,
+          videoAudioCredits: addonGrantResult.videoAudioCredits,
         });
       }
     } else {
@@ -423,15 +799,17 @@ export async function GET(request: NextRequest) {
             ? "wechat"
             : "alipay",
           transaction_id: transactionId,
+          type: "SUBSCRIPTION",
           metadata: {
             days,
             paymentType: "onetime",
+            productType: "SUBSCRIPTION",
             billingCycle: days === 365 ? "yearly" : "monthly",
           },
         };
 
-        if (wechatOutTradeNo) {
-          paymentData.out_trade_no = wechatOutTradeNo;
+        if (wechatOutTradeNo || outTradeNo) {
+          paymentData.out_trade_no = wechatOutTradeNo || outTradeNo;
         }
 
         let insertError: any = null;
@@ -443,8 +821,8 @@ export async function GET(request: NextRequest) {
 
             await paymentsCollection.add({
               ...paymentData,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
             });
 
             logInfo("Payment record created successfully in CloudBase", {
@@ -514,105 +892,29 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 延长用户会员时间
-    // 重要: 所有支付方式都必须在 confirm 中扩展会员
-    // - Stripe/PayPal: 虽然有webhook，但confirm是主路径（用户体验）
-    // - Alipay: 同步返回不会触发webhook，必须在confirm处理
-    // - Webhook只是备选容错机制，不是主路径
-    let membershipExtended = false;
-    const isPayPalOrStripe = !!sessionId || !!token;
-    const isAlipay = !!outTradeNo || !!tradeNo;
-
-    if (isPayPalOrStripe) {
-      // Stripe/PayPal: 在confirm中扩展会员（主路径）+ webhook（备选）
-      console.log(
-        "✅✅✅ [MAIN FLOW] PayPal/Stripe payment confirmed - Extending membership in confirm (primary path)",
-        {
-          operationId,
-          userId: user.id,
-          transactionId,
-          isStripe: !!sessionId,
-          isPayPal: !!token,
-          days,
-          note: "Webhook is fallback idempotency mechanism",
-        }
+    if (productTypeToProcess === "SUBSCRIPTION") {
+      const membershipExtended = await ensureMembershipExtended(
+        user.id,
+        days,
+        transactionId,
+        operationId
       );
-      membershipExtended = await extendMembership(user.id, days, transactionId);
-    } else if (isAlipay) {
-      // Alipay: 在confirm中扩展会员（必须，同步返回不会触发webhook）
-      console.log(
-        "✅✅✅ [MAIN FLOW] Alipay payment confirmed - Extending membership in confirm",
-        {
+
+      if (!membershipExtended) {
+        logError("Failed to extend membership", undefined, {
           operationId,
           userId: user.id,
           transactionId,
           days,
-          paymentType: outTradeNo ? "app" : "sync_return",
-        }
-      );
-      membershipExtended = await extendMembership(user.id, days, transactionId);
-    } else if (!isChinaRegion()) {
-      try {
-        const { data: existingSub } = await supabaseAdmin
-          .from("subscriptions")
-          .select("id")
-          .or(
-            `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
-          )
-          .maybeSingle();
-
-        if (existingSub && existingSub.id) {
-          logInfo(
-            "Subscription already exists for transaction - skipping extendMembership",
-            {
-              operationId,
-              userId: user.id,
-              transactionId,
-              subscriptionId: existingSub.id,
-            }
-          );
-          membershipExtended = true;
-        } else {
-          membershipExtended = await extendMembership(
-            user.id,
-            days,
-            transactionId
-          );
-        }
-      } catch (err) {
-        logWarn(
-          "Error during supabase subscription idempotency check before extend",
+        });
+        return NextResponse.json(
           {
-            operationId,
-            userId: user.id,
-            transactionId,
-            err,
-          }
-        );
-        membershipExtended = await extendMembership(
-          user.id,
-          days,
-          transactionId
+            success: false,
+            error: "Payment confirmed but failed to extend membership",
+          },
+          { status: 500 }
         );
       }
-    } else {
-      membershipExtended = await extendMembership(user.id, days, transactionId);
-    }
-
-    if (!membershipExtended) {
-      logError("Failed to extend membership", undefined, {
-        operationId,
-        userId: user.id,
-        transactionId,
-        days,
-      });
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Payment confirmed but failed to extend membership",
-        },
-        { status: 500 }
-      );
     }
 
     const duration = Date.now() - startTime;
@@ -623,6 +925,7 @@ export async function GET(request: NextRequest) {
       amount,
       currency,
       daysAdded: days,
+      productType: productTypeToProcess,
       duration: `${duration}ms`,
     });
 
@@ -632,6 +935,7 @@ export async function GET(request: NextRequest) {
       amount,
       currency,
       daysAdded: days,
+      productType: "SUBSCRIPTION",
     });
   } catch (error) {
     const duration = Date.now() - startTime;

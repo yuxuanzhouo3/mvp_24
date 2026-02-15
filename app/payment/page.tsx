@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SubscriptionPlans } from "@/components/payment/subscription-plans";
+import { AddonPackages } from "@/components/payment/addon-packages";
 import { PaymentForm } from "@/components/payment/payment-form";
 import { BillingHistory } from "@/components/payment/billing-history";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,6 +25,20 @@ import { useTranslations } from "@/lib/i18n";
 import { getAmountByCurrency } from "@/lib/payment-config";
 import { detectPlatform } from "@/lib/platform-detection";
 import { getAppleIapProductId } from "@/lib/apple-iap";
+import { getAddonPackageById, getAddonDescription, type ProductType } from "@/constants/addon-packages";
+import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
+
+type SelectedPurchase = {
+  planId: string;
+  billingCycle: "monthly" | "yearly";
+  amount: number;
+  currency: string;
+  description: string;
+  productType: ProductType;
+  addonPackageId?: string;
+  imageCredits?: number;
+  videoAudioCredits?: number;
+};
 
 export default function PaymentPage() {
   const { user, loading } = useUser();
@@ -33,9 +48,23 @@ export default function PaymentPage() {
   const { language } = useLanguage();
   const t = useTranslations(language);
   const currentPlan = user?.subscription_plan || "free";
+  const { status: appleIapStatus } = useAppleIAPStatus(!!user);
+  const effectiveMembershipExpiresAt =
+    appleIapStatus?.success
+      ? appleIapStatus.expiresAt
+      : (user as any)?.membership_expires_at ||
+        (user as any)?.subscription_expires_at ||
+        null;
   const hasActiveSubscription = (() => {
-    const expires =
-      (user as any)?.membership_expires_at || (user as any)?.subscription_expires_at;
+    if (appleIapStatus?.success) {
+      return !appleIapStatus.isExpired;
+    }
+
+    if (typeof (user as any)?.hasActiveSubscription === "boolean") {
+      return !!(user as any)?.hasActiveSubscription;
+    }
+
+    const expires = effectiveMembershipExpiresAt;
     if (!expires) return false;
     try {
       return new Date(expires) > new Date();
@@ -95,13 +124,7 @@ export default function PaymentPage() {
     }
   }, [loading]);
 
-  const [selectedPlan, setSelectedPlan] = useState<{
-    planId: string;
-    billingCycle: "monthly" | "yearly";
-    amount: number;
-    currency: string;
-    description: string;
-  } | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<SelectedPurchase | null>(null);
   const [paymentResult, setPaymentResult] = useState<any>(null);
   const [activeTab, setActiveTab] = useState("plans");
   const [isIOSNativeApp, setIsIOSNativeApp] = useState(false);
@@ -242,7 +265,6 @@ export default function PaymentPage() {
     planId: string,
     billingCycle: "monthly" | "yearly"
   ) => {
-    // 根据货币类型确定价格（使用统一配置）
     const amount = getAmountByCurrency(currency, billingCycle);
 
     const description =
@@ -256,8 +278,39 @@ export default function PaymentPage() {
       amount,
       currency,
       description,
+      productType: "SUBSCRIPTION",
     });
     setPaymentResult(null);
+    setActiveTab("payment");
+  };
+
+  const handleSelectAddon = (packageId: string) => {
+    const addonPkg = getAddonPackageById(packageId);
+    if (!addonPkg) {
+      toast({
+        title: t.payment.messages.failed,
+        description: language === "zh" ? "无效的加油包" : "Invalid addon package",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const description = getAddonDescription(addonPkg, language === "zh");
+    const amount = currency === "CNY" ? addonPkg.priceZh : addonPkg.price;
+
+    setSelectedPlan({
+      planId: addonPkg.id,
+      billingCycle: "monthly",
+      amount,
+      currency,
+      description,
+      productType: "ADDON",
+      addonPackageId: addonPkg.id,
+      imageCredits: addonPkg.imageCredits,
+      videoAudioCredits: addonPkg.videoAudioCredits,
+    });
+    setPaymentResult(null);
+    setActiveTab("payment");
   };
 
   const handlePaymentSuccess = (result: any) => {
@@ -360,7 +413,6 @@ export default function PaymentPage() {
           result.paymentUrl.includes("weixin://"))
       ) {
         console.log("WeChat Native payment - redirect to QR code page");
-        // 微信支付：跳转到专门的二维码页面
         const qrcodeUrl = `/payment/wechat-qrcode?codeUrl=${encodeURIComponent(
           result.paymentUrl
         )}&paymentId=${encodeURIComponent(
@@ -377,8 +429,6 @@ export default function PaymentPage() {
       ) {
         console.log("Redirecting to Alipay payment page...");
 
-        // 支付宝：跳转到专门的支付重定向页面（绕过CSP限制）
-        // 将表单HTML进行base64编码后作为URL参数传递
         const encodedForm = btoa(result.paymentUrl);
         const redirectUrl = `/payment/redirect?form=${encodeURIComponent(
           encodedForm
@@ -387,7 +437,6 @@ export default function PaymentPage() {
         console.log("Redirect URL created");
         window.location.href = redirectUrl;
       } else {
-        // 其他支付方式返回的是URL，直接跳转
         console.log("Redirecting to payment URL:", result.paymentUrl);
         window.location.href = result.paymentUrl;
       }
@@ -432,7 +481,6 @@ export default function PaymentPage() {
     (window as any)[callbackName] = (payload: any) => {
       try {
         if (!payload || payload.status !== "success") {
-          // Helpful for diagnosing native StoreKit issues (e.g. Product not found)
           console.error("Apple IAP callback (fail)", payload);
 
           const msg = payload?.message || (language === "zh" ? "支付失败" : "Payment failed");
@@ -580,9 +628,12 @@ export default function PaymentPage() {
         )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
-          <TabsList className="grid w-full grid-cols-3 gap-1 sm:gap-0">
+          <TabsList className="grid w-full grid-cols-4 gap-1 sm:gap-0">
             <TabsTrigger value="plans" className="text-xs sm:text-sm">
               {t.payment.title}
+            </TabsTrigger>
+            <TabsTrigger value="addons" className="text-xs sm:text-sm">
+              {language === "zh" ? "加油包" : "Add-ons"}
             </TabsTrigger>
             <TabsTrigger value="payment" className="text-xs sm:text-sm">
               {language === "zh" ? "支付" : "Payment"}
@@ -599,6 +650,15 @@ export default function PaymentPage() {
               currentPlan={currentPlan}
               currency={currency}
               onSwitchToPayment={() => setActiveTab("payment")}
+              membershipExpiresAt={effectiveMembershipExpiresAt}
+            />
+          </TabsContent>
+
+          {/* 加油包 */}
+          <TabsContent value="addons">
+            <AddonPackages
+              onSelectPackage={handleSelectAddon}
+              currency={currency}
             />
           </TabsContent>
 
@@ -606,7 +666,7 @@ export default function PaymentPage() {
           <TabsContent value="payment">
             {selectedPlan ? (
               <div className="max-w-2xl mx-auto">
-                {isIOSNativeApp ? (
+                {isIOSNativeApp && selectedPlan.productType !== "ADDON" ? (
                   <Card>
                     <CardHeader>
                       <CardTitle>
@@ -660,6 +720,10 @@ export default function PaymentPage() {
                     description={selectedPlan.description}
                     userId={user?.id || ""}
                     region={region}
+                    productType={selectedPlan.productType}
+                    addonPackageId={selectedPlan.addonPackageId}
+                    imageCredits={selectedPlan.imageCredits}
+                    videoAudioCredits={selectedPlan.videoAudioCredits}
                     onSuccess={handlePaymentSuccess}
                     onError={handlePaymentError}
                   />
@@ -671,18 +735,11 @@ export default function PaymentPage() {
                   <div className="text-center py-8">
                     <p className="text-muted-foreground mb-4">
                       {language === "zh"
-                        ? "请先选择一个订阅计划"
-                        : "Please select a subscription plan first"}
+                        ? "请先选择一个订阅计划或加油包"
+                        : "Please select a subscription plan or addon package first"}
                     </p>
-                    <Button
-                      onClick={() => {
-                        const plansTab = document.querySelector(
-                          '[value="plans"]'
-                        ) as HTMLElement;
-                        plansTab?.click();
-                      }}
-                    >
-                      {t.payment.choosePlan}
+                    <Button onClick={() => setActiveTab("plans")}>
+                      {language === "zh" ? "去选择" : "Choose Product"}
                     </Button>
                   </div>
                 </CardContent>

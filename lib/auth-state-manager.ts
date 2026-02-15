@@ -27,15 +27,81 @@ export interface StoredAuthState {
 const AUTH_STATE_KEY = "app-auth-state";
 const SAVED_ACCOUNTS_KEY = "app-saved-accounts";
 
+function getAccountStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  // 使用 sessionStorage 降低长期暴露风险（关闭浏览器后自动失效）
+  return window.sessionStorage;
+}
+
+function decodeBase64Url(input: string): string {
+  const normalized = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+
+  if (typeof atob === "function") {
+    return atob(padded);
+  }
+
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(padded, "base64").toString("utf-8");
+  }
+
+  throw new Error("base64 decoder is not available");
+}
+
+/**
+ * 从 JWT token 中读取过期时间（毫秒）
+ * 读取失败时返回 null，由调用方回退到旧逻辑
+ */
+function getJwtExpiresAt(token: string): number | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(decodeBase64Url(parts[1]));
+    if (typeof payload?.exp !== "number") return null;
+    return payload.exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 获取存储的已登录账号列表（用于持久化登录）
  */
 export function getSavedAccounts(): StoredAuthState[] {
-  if (typeof window === "undefined") return [];
+  const storage = getAccountStorage();
+  if (!storage) return [];
   try {
-    const stored = localStorage.getItem(SAVED_ACCOUNTS_KEY);
+    const stored = storage.getItem(SAVED_ACCOUNTS_KEY);
     if (!stored) return [];
-    return JSON.parse(stored);
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+
+    const now = Date.now();
+    const validAccounts = parsed
+      .filter((account) => {
+        if (
+          !account?.accessToken ||
+          !account?.refreshToken ||
+          !account?.user?.id ||
+          !account?.tokenMeta
+        ) {
+          return false;
+        }
+
+        const refreshTokenExpiresAt =
+          getJwtExpiresAt(account.refreshToken) ??
+          (Number(account.savedAt) +
+            Number(account.tokenMeta.refreshTokenExpiresIn || 0) * 1000);
+
+        return refreshTokenExpiresAt > now + 60_000;
+      })
+      .slice(0, 5);
+
+    if (validAccounts.length !== parsed.length) {
+      storage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(validAccounts));
+    }
+
+    return validAccounts;
   } catch {
     return [];
   }
@@ -45,14 +111,15 @@ export function getSavedAccounts(): StoredAuthState[] {
  * 将账号添加到已保存列表
  */
 function addToSavedAccounts(authState: StoredAuthState) {
-  if (typeof window === "undefined") return;
+  const storage = getAccountStorage();
+  if (!storage) return;
   try {
     const accounts = getSavedAccounts();
     // 移除已存在的相同账号
     const filtered = accounts.filter((a) => a.user.id !== authState.user.id);
     // 将最新登录的放在最前面，最多保留 5 个
     const updated = [authState, ...filtered].slice(0, 5);
-    localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
+    storage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
   } catch (error) {
     console.error("❌ [Auth] 保存账号列表失败:", error);
   }
@@ -62,11 +129,12 @@ function addToSavedAccounts(authState: StoredAuthState) {
  * 从已保存列表移除账号
  */
 export function removeSavedAccount(userId: string): void {
-  if (typeof window === "undefined") return;
+  const storage = getAccountStorage();
+  if (!storage) return;
   try {
     const accounts = getSavedAccounts();
     const updated = accounts.filter((a) => a.user.id !== userId);
-    localStorage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
+    storage.setItem(SAVED_ACCOUNTS_KEY, JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent("auth-state-changed"));
   } catch (error) {
     console.error("❌ [Auth] 移除账号失败:", error);
@@ -136,6 +204,57 @@ export function saveAuthState(
 }
 
 /**
+ * 从已保存账号恢复认证状态（用于快速登录/切换账号）
+ * 关键：保留原始 savedAt，避免把旧 access token 误判为“刚签发”
+ */
+export function restoreSavedAuthState(authState: StoredAuthState): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    if (
+      !authState?.accessToken ||
+      !authState?.refreshToken ||
+      !authState?.user?.id ||
+      !authState?.tokenMeta
+    ) {
+      throw new Error("invalid saved auth state");
+    }
+
+    const normalizedAuthState: StoredAuthState = {
+      accessToken: authState.accessToken,
+      refreshToken: authState.refreshToken,
+      user: authState.user,
+      tokenMeta: {
+        accessTokenExpiresIn:
+          Number(authState.tokenMeta.accessTokenExpiresIn) || 3600,
+        refreshTokenExpiresIn:
+          Number(authState.tokenMeta.refreshTokenExpiresIn) || 2592000,
+      },
+      // 保留原时间戳；若旧数据缺失则回退当前时间
+      savedAt:
+        typeof authState.savedAt === "number" && authState.savedAt > 0
+          ? authState.savedAt
+          : Date.now(),
+    };
+
+    const refreshTokenExpiresAt =
+      getJwtExpiresAt(normalizedAuthState.refreshToken) ??
+      (normalizedAuthState.savedAt +
+        normalizedAuthState.tokenMeta.refreshTokenExpiresIn * 1000);
+    if (Date.now() >= refreshTokenExpiresAt - 60_000) {
+      throw new Error("saved refresh token expired");
+    }
+
+    localStorage.setItem(AUTH_STATE_KEY, JSON.stringify(normalizedAuthState));
+    addToSavedAccounts(normalizedAuthState);
+    window.dispatchEvent(new CustomEvent("auth-state-changed"));
+  } catch (error) {
+    console.error("❌ [Auth] 恢复已保存账号失败:", error);
+    localStorage.removeItem(AUTH_STATE_KEY);
+  }
+}
+
+/**
  * 获取存储的认证状态
  */
 export function getStoredAuthState(): StoredAuthState | null {
@@ -177,7 +296,8 @@ export async function getValidAccessToken(): Promise<string | null> {
   if (!authState) return null;
 
   const accessTokenExpiresAt =
-    authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000;
+    getJwtExpiresAt(authState.accessToken) ??
+    (authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000);
 
   // 提前 60 秒判定为过期（留出时间刷新）
   if (Date.now() <= accessTokenExpiresAt - 60000) {
@@ -229,8 +349,13 @@ export async function getValidAccessToken(): Promise<string | null> {
 
     console.log("✅ [Auth] Token 刷新成功，更新本地状态");
 
-    // 更新本地存储
-    updateAccessToken(data.accessToken, data.tokenMeta?.accessTokenExpiresIn);
+    // 更新本地存储（同时接收 refresh token 轮转结果）
+    updateAccessToken(
+      data.accessToken,
+      data.tokenMeta?.accessTokenExpiresIn,
+      data.refreshToken,
+      data.tokenMeta?.refreshTokenExpiresIn
+    );
 
     return data.accessToken;
   } catch (error) {
@@ -263,7 +388,8 @@ export function isRefreshTokenValid(): boolean {
   if (!authState) return false;
 
   const refreshTokenExpiresAt =
-    authState.savedAt + authState.tokenMeta.refreshTokenExpiresIn * 1000;
+    getJwtExpiresAt(authState.refreshToken) ??
+    (authState.savedAt + authState.tokenMeta.refreshTokenExpiresIn * 1000);
 
   return Date.now() < refreshTokenExpiresAt;
 }
@@ -273,7 +399,9 @@ export function isRefreshTokenValid(): boolean {
  */
 export function updateAccessToken(
   newAccessToken: string,
-  newExpiresIn?: number
+  newExpiresIn?: number,
+  newRefreshToken?: string,
+  newRefreshExpiresIn?: number
 ): void {
   if (typeof window === "undefined") return;
 
@@ -288,6 +416,12 @@ export function updateAccessToken(
     authState.accessToken = newAccessToken;
     if (newExpiresIn) {
       authState.tokenMeta.accessTokenExpiresIn = newExpiresIn;
+    }
+    if (newRefreshToken) {
+      authState.refreshToken = newRefreshToken;
+    }
+    if (newRefreshExpiresIn) {
+      authState.tokenMeta.refreshTokenExpiresIn = newRefreshExpiresIn;
     }
     authState.savedAt = Date.now();
 
@@ -309,7 +443,8 @@ export function getAuthHeader(): { Authorization: string } | null {
   if (!authState) return null;
 
   const accessTokenExpiresAt =
-    authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000;
+    getJwtExpiresAt(authState.accessToken) ??
+    (authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000);
 
   // 检查 token 是否仍然有效（不尝试刷新）
   if (Date.now() > accessTokenExpiresAt - 60000) {
@@ -356,7 +491,8 @@ export function isAuthenticated(): boolean {
   if (!authState || !authState.user?.id) return false;
 
   const accessTokenExpiresAt =
-    authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000;
+    getJwtExpiresAt(authState.accessToken) ??
+    (authState.savedAt + authState.tokenMeta.accessTokenExpiresIn * 1000);
 
   // 检查 token 是否仍然有效（不尝试刷新）
   return Date.now() < accessTokenExpiresAt - 60000;

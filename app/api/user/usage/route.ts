@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isChinaRegion } from "@/lib/config/region";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
+import { resolveIntlUserPlan } from "@/lib/user-plan";
+import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
+import {
+  getPlanMediaLimits,
+  getWalletStats,
+  seedWalletForPlan,
+} from "@/services/wallet";
 
 export const runtime = "nodejs";
 
@@ -70,26 +76,42 @@ export async function GET(req: NextRequest) {
     } else {
       // 国际版
       // 1. 获取订阅计划
-      const { data: profile } = await supabaseAdmin
-        .from("user_profiles")
-        .select("subscription_plan")
-        .eq("id", userId)
-        .single();
-
-      plan = profile?.subscription_plan || "free";
-      if (plan === "pro") {
+      plan = await resolveIntlUserPlan(
+        userId,
+        (authResult.user as any)?.user_metadata || {}
+      );
+      if (plan !== "free") {
         limit = 999999;
       }
 
       // 2. 统计本月使用量
-      const { data: sessions } = await supabaseAdmin
-        .from("gpt_sessions")
-        .select("messages")
-        .eq("user_id", userId);
+      used = await countIntlAssistantMessagesSince(userId, startOfMonth);
+    }
 
-      if (sessions && Array.isArray(sessions)) {
-        used = countAssistantMessagesInMonth(sessions, startOfMonth);
+    let multimodal: {
+      image: { used: number; limit: number; remaining: number };
+      videoAudio: { used: number; limit: number; remaining: number };
+    } | null = null;
+    try {
+      await seedWalletForPlan(userId, (plan || "free").toLowerCase());
+      const walletStats = await getWalletStats(userId);
+      if (walletStats) {
+        const mediaLimits = getPlanMediaLimits((plan || "free").toLowerCase());
+        multimodal = {
+          image: {
+            used: Math.max(0, mediaLimits.imageLimit - walletStats.monthly.image),
+            limit: mediaLimits.imageLimit + walletStats.addon.image,
+            remaining: walletStats.total.image,
+          },
+          videoAudio: {
+            used: Math.max(0, mediaLimits.videoLimit - walletStats.monthly.video),
+            limit: mediaLimits.videoLimit + walletStats.addon.video,
+            remaining: walletStats.total.video,
+          },
+        };
       }
+    } catch (error) {
+      console.error("Error fetching multimodal usage stats:", error);
     }
 
     return NextResponse.json({
@@ -97,6 +119,7 @@ export async function GET(req: NextRequest) {
       limit,
       plan,
       remaining: Math.max(0, limit - used),
+      multimodal,
     });
   } catch (error) {
     console.error("Error fetching user usage:", error);

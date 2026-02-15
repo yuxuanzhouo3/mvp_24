@@ -14,6 +14,8 @@ import {
   UserProfile,
 } from "@/lib/models/user";
 import { z } from "zod";
+import crypto from "crypto";
+import { setAuthCookies } from "@/lib/auth/cookies";
 
 // 微信登录请求验证schema
 const wechatAuthSchema = z.object({
@@ -163,7 +165,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 返回成功响应
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       user: {
         id: authResponse.user?.id,
@@ -181,6 +183,11 @@ export async function POST(request: NextRequest) {
         expires_at: authResponse.session?.expires_at,
       },
     });
+    const accessToken = authResponse.session?.access_token;
+    if (accessToken) {
+      setAuthCookies(response, accessToken);
+    }
+    return response;
   } catch (error) {
     console.error("CloudBase WeChat login error:", error);
     logSecurityEvent(
@@ -248,9 +255,10 @@ export async function GET(request: NextRequest) {
 
     // 构建微信 OAuth 二维码 URL
     // 这个 URL 会自动显示微信登录二维码，用户扫描后会回调到 redirectUri
+    const state = `${Date.now()}_${crypto.randomBytes(12).toString("hex")}`;
     const wechatQrcodeUrl = `https://open.weixin.qq.com/connect/qrconnect?appid=${wechatAppId}&redirect_uri=${encodeURIComponent(
       redirectUri
-    )}&response_type=code&scope=snsapi_login&state=${Date.now()}#wechat_redirect`;
+    )}&response_type=code&scope=snsapi_login&state=${state}#wechat_redirect`;
 
     return NextResponse.json({
       supported: true,
@@ -258,6 +266,7 @@ export async function GET(request: NextRequest) {
       qrcodeUrl: wechatQrcodeUrl,
       redirectUri: redirectUri,
       scope: "snsapi_login",
+      state,
     });
   } catch (error) {
     console.error("Get WeChat QR code error:", error);

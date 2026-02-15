@@ -8,6 +8,29 @@ import { AIAgent, AIProviderConfig, AIRegionConfig } from "./types";
 // ==================== AI 智能体配置 ====================
 
 export const CHINA_AI_AGENTS: AIAgent[] = [
+  {
+    id: "smart-model",
+    name: "智能模型",
+    provider: "qwen",
+    model: "smart-auto",
+    description: "系统自动选择最优模型",
+    capabilities: [
+      "analysis",
+      "conversation",
+      "coding",
+      "creative",
+      "research",
+      "translation",
+      "multimodal",
+      "image_input",
+      "audio_input",
+      "audio_output",
+    ],
+    maxTokens: 6144,
+    temperature: 0.7,
+    icon: "⭐",
+  },
+
   // ==================== 旗舰模型 ====================
   {
     id: "deepseek-v3.1",
@@ -101,6 +124,24 @@ export const CHINA_AI_AGENTS: AIAgent[] = [
     maxTokens: 4096,
     temperature: 0.8,
     icon: "⚡",
+  },
+  {
+    id: "qwen3-omni-flash",
+    name: "通义千问 Omni Flash",
+    provider: "qwen",
+    model: "qwen3-omni-flash",
+    description: "全模态模型 | 适合图片/音频/视频与文本联合理解",
+    capabilities: [
+      "conversation",
+      "analysis",
+      "multimodal",
+      "image_input",
+      "audio_input",
+      "audio_output",
+    ],
+    maxTokens: 6144,
+    temperature: 0.6,
+    icon: "🧩",
   },
 
   // ==================== 特殊场景模型 ====================

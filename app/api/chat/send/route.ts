@@ -7,6 +7,7 @@
 import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { aiRouter } from "@/lib/ai/router";
+import type { BaseAIProvider } from "@/lib/ai/providers/base-provider";
 import { calculateCost, recordUsage } from "@/lib/ai/token-counter";
 import { AIMessage } from "@/lib/ai/types";
 import { edgeChatRateLimit } from "@/lib/rate-limit";
@@ -14,13 +15,187 @@ import { captureException } from "@/lib/sentry";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import {
-  getGptMessages as getCloudBaseMessages,
   saveGptMessage as saveCloudBaseMessage,
 } from "@/lib/cloudbase-db";
 import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
+import { appendSessionMessages } from "@/lib/chat-session-store";
+import { resolveIntlUserPlan } from "@/lib/user-plan";
+import { createMessageId } from "@/lib/chat/message-id";
+import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
+import { resolveSmartModel } from "@/lib/ai/smart-model-router";
 
 // 使用Node.js Runtime以支持winston日志库
 export const runtime = "nodejs";
+
+type HistoryRole = "system" | "user" | "assistant";
+
+interface HistoryMessage {
+  role: HistoryRole;
+  content: string;
+}
+
+const MAX_SMART_MODEL_ATTEMPTS = 3;
+const CHINA_SMART_COLLAB_MODELS = [
+  "deepseek-v3.2",
+  "qwen3-max-2026-01-23",
+  "qwen-plus-2025-12-01",
+] as const;
+const CHINA_SMART_COLLAB_MODEL_SET = new Set<string>(CHINA_SMART_COLLAB_MODELS);
+
+function toHistoryRole(value: unknown): HistoryRole | null {
+  if (value === "system" || value === "user" || value === "assistant") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeHistoryContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (content && typeof content === "object") {
+    const maybeContent = (content as any).content;
+    if (typeof maybeContent === "string") {
+      return maybeContent;
+    }
+  }
+
+  return "";
+}
+
+function extractHistoryMessages(
+  sourceMessages: unknown[],
+  currentAgentId?: string
+): HistoryMessage[] {
+  if (!Array.isArray(sourceMessages) || sourceMessages.length === 0) {
+    return [];
+  }
+
+  const recentMessages = sourceMessages.slice(-20);
+
+  return recentMessages
+    .map((raw: any) => {
+      const role = toHistoryRole(raw?.role);
+      if (!role) {
+        return null;
+      }
+
+      if (raw?.isMultiAI && Array.isArray(raw?.content)) {
+        if (!currentAgentId) {
+          return null;
+        }
+
+        const pieces = raw.content
+          .filter((resp: any) => resp?.agentId === currentAgentId)
+          .map((resp: any) => normalizeHistoryContent(resp?.content))
+          .filter((text: string) => text.trim().length > 0);
+
+        if (pieces.length === 0) {
+          return null;
+        }
+
+        return {
+          role,
+          content: pieces.join("\n"),
+        } as HistoryMessage;
+      }
+
+      const plainContent = normalizeHistoryContent(raw?.content);
+      if (!plainContent.trim()) {
+        return null;
+      }
+
+      return {
+        role,
+        content: plainContent,
+      } as HistoryMessage;
+    })
+    .filter((item: HistoryMessage | null): item is HistoryMessage => item !== null);
+}
+
+function buildSmartModelAttemptList(input: {
+  requestedModel: string;
+  primaryModel: string;
+  message: string;
+  collaborationMode?: string;
+  availableModels: string[];
+  fallbackModel?: string;
+  maxAttempts?: number;
+}): string[] {
+  const {
+    requestedModel,
+    primaryModel,
+    message,
+    collaborationMode,
+    availableModels,
+    fallbackModel,
+    maxAttempts = MAX_SMART_MODEL_ATTEMPTS,
+  } = input;
+
+  const attempts: string[] = [];
+  const used = new Set<string>();
+  const boundedAttempts = Math.max(1, maxAttempts);
+
+  if (primaryModel) {
+    attempts.push(primaryModel);
+    used.add(primaryModel);
+  }
+
+  for (let idx = attempts.length; idx < boundedAttempts; idx += 1) {
+    const nextResolved = resolveSmartModel({
+      requestedModel,
+      message,
+      collaborationMode,
+      availableModels: availableModels.filter((modelId) => !used.has(modelId)),
+      fallbackModel,
+    });
+    const nextModel = (nextResolved.model || "").trim();
+    if (!nextModel || used.has(nextModel)) {
+      break;
+    }
+    attempts.push(nextModel);
+    used.add(nextModel);
+  }
+
+  if (attempts.length > 0) {
+    return attempts;
+  }
+  return [fallbackModel || primaryModel || "gpt-3.5-turbo"];
+}
+
+function buildChinaCollabFallbackAttempts(
+  requestedModel: string,
+  availableModels: string[],
+  maxAttempts = MAX_SMART_MODEL_ATTEMPTS
+): string[] {
+  const normalizedRequested = (requestedModel || "").trim();
+  const availableSet = new Set(availableModels);
+  const attempts: string[] = [];
+  const used = new Set<string>();
+  const boundedAttempts = Math.max(1, maxAttempts);
+
+  if (
+    normalizedRequested &&
+    CHINA_SMART_COLLAB_MODEL_SET.has(normalizedRequested) &&
+    availableSet.has(normalizedRequested)
+  ) {
+    attempts.push(normalizedRequested);
+    used.add(normalizedRequested);
+  }
+
+  for (const candidate of CHINA_SMART_COLLAB_MODELS) {
+    if (attempts.length >= boundedAttempts) break;
+    if (!availableSet.has(candidate) || used.has(candidate)) continue;
+    attempts.push(candidate);
+    used.add(candidate);
+  }
+
+  if (attempts.length > 0) {
+    return attempts;
+  }
+  return [normalizedRequested || CHINA_SMART_COLLAB_MODELS[0]];
+}
 
 /**
  * POST /api/chat/send
@@ -133,7 +308,7 @@ export async function POST(req: NextRequest) {
       // 国际版：从 Supabase 获取会话
       const result = await supabaseAdmin
         .from("gpt_sessions")
-        .select("*")
+        .select("id, user_id, messages, multi_ai_config")
         .eq("id", sessionId)
         .eq("user_id", userId)
         .single();
@@ -152,19 +327,31 @@ export async function POST(req: NextRequest) {
     // 3.5 验证会话配置和agentId匹配
     // ========================================
     const sessionConfig = session.multi_ai_config;
+    const lockedAgentIds = Array.isArray(sessionConfig?.selectedAgentIds)
+      ? sessionConfig.selectedAgentIds.filter(
+          (value: unknown): value is string =>
+            typeof value === "string" && value.length > 0
+        )
+      : [];
 
     // ✅ 改进：无论单AI还是多AI，都应该检查sessionConfig
     // 前端总是传递agentId，所以后端应该接受
     if (agentId && sessionConfig) {
       // 验证agentId是否在锁定的列表中
-      if (!sessionConfig.selectedAgentIds.includes(agentId)) {
+      if (lockedAgentIds.length > 0 && !lockedAgentIds.includes(agentId)) {
         return new Response(
           JSON.stringify({
             error: "Agent not in session configuration",
-            allowedAgents: sessionConfig.selectedAgentIds,
+            allowedAgents: lockedAgentIds,
             requestedAgent: agentId
           }),
           { status: 409, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (lockedAgentIds.length === 0) {
+        console.warn(
+          `[WARN] Session ${sessionId} has multi_ai_config but no selectedAgentIds; skipping strict agent validation.`
         );
       }
     } else if (agentId && !sessionConfig) {
@@ -173,16 +360,32 @@ export async function POST(req: NextRequest) {
       console.warn(
         `[WARN] Session ${sessionId} has no multi_ai_config but agentId was provided. This might be legacy data.`
       );
-    } else if (!agentId && sessionConfig && sessionConfig.isMultiAI) {
+    } else if (!agentId && sessionConfig && sessionConfig.isMultiAI && lockedAgentIds.length > 0) {
       // 多AI会话但没有提供agentId - 这是真正的错误
       return new Response(
         JSON.stringify({
           error: "This session is multi-AI configured but no agentId provided",
-          expectedAgents: sessionConfig.selectedAgentIds
+          expectedAgents: lockedAgentIds
         }),
         { status: 409, headers: { "Content-Type": "application/json" } }
       );
     }
+
+    const availableModels = aiRouter.getAllModels();
+    const routerDefaultModel = aiRouter.getDefaultModel();
+    const collaborationModeForRouting =
+      typeof sessionConfig?.collaborationMode === "string"
+        ? sessionConfig.collaborationMode
+        : undefined;
+
+    const resolvedModel = resolveSmartModel({
+      requestedModel: model,
+      message,
+      collaborationMode: collaborationModeForRouting,
+      availableModels,
+      fallbackModel: routerDefaultModel,
+    });
+    const effectiveModel = resolvedModel.model;
 
     // ========================================
     // 4. 获取用户订阅信息并检查限额
@@ -230,13 +433,10 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // 国际版：从 Supabase 获取用户订阅状态
-      const { data: profile } = await supabaseAdmin
-        .from("user_profiles")
-        .select("subscription_plan")
-        .eq("id", userId)
-        .single();
-
-      subscriptionPlan = profile?.subscription_plan || "free";
+      subscriptionPlan = await resolveIntlUserPlan(
+        userId,
+        (authResult.user as any)?.user_metadata || {}
+      );
     }
 
     // 如果是免费用户，检查月度限额
@@ -277,17 +477,7 @@ export async function POST(req: NextRequest) {
       } else {
         // 国际版：从 Supabase 的 gpt_sessions 表计数
         try {
-          const { data: sessions, error: sessionsError } = await supabaseAdmin
-            .from("gpt_sessions")
-            .select("messages")
-            .eq("user_id", userId);
-
-          if (sessionsError) {
-            countError = sessionsError;
-          } else if (sessions && Array.isArray(sessions)) {
-            // 使用统一的计数函数
-            count = countAssistantMessagesInMonth(sessions, startOfMonth);
-          }
+          count = await countIntlAssistantMessagesSince(userId, startOfMonth);
         } catch (err) {
           console.error("Error checking usage limit:", err);
           countError = err;
@@ -312,129 +502,8 @@ export async function POST(req: NextRequest) {
     // ========================================
     // 5. 获取会话历史消息（带过滤）
     // ========================================
-    let history: any[] = [];
-
-    if (isChinaRegion()) {
-      // 国内版：从 CloudBase 获取消息
-      const cloudbase = require("@cloudbase/node-sdk")
-        .init({
-          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
-          secretId: process.env.CLOUDBASE_SECRET_ID,
-          secretKey: process.env.CLOUDBASE_SECRET_KEY,
-        })
-        .database();
-
-      const sessionResult = await cloudbase
-        .collection("ai_conversations")
-        .doc(sessionId)
-        .get();
-
-      if (sessionResult.data && sessionResult.data.length > 0) {
-        const conv = sessionResult.data[0];
-        history = (conv.messages || [])
-          .slice(-20) // 最近20条消息
-          .map((msg: any) => {
-            // ========================================
-            // 核心过滤逻辑
-            // ========================================
-            // 如果是多AI消息，需要按agentId过滤
-            if (msg.isMultiAI && Array.isArray(msg.content)) {
-              if (agentId) {
-                // 多AI模式：只获取当前agentId的回复
-                const relevantResponses = msg.content.filter(
-                  (resp: any) => resp.agentId === agentId
-                );
-
-                // 如果找到该agentId的历史回复，保留
-                if (relevantResponses.length > 0) {
-                  return {
-                    role: msg.role,
-                    content: relevantResponses.map((r: any) => r.content).join('\n'),
-                    agentId: agentId,
-                  };
-                } else {
-                  // 该agentId在此多AI消息中没有回复，跳过
-                  return null;
-                }
-              } else {
-                // 单AI模式：跳过多AI消息（保持隔离）
-                return null;
-              }
-            } else if (!msg.isMultiAI) {
-              // 单AI消息或用户消息，保留
-              return {
-                role: msg.role,
-                content: msg.content,
-              };
-            }
-
-            return null;
-          })
-          .filter((msg: any) => msg !== null); // 移除null项
-      }
-    } else {
-      // 国际版：从 Supabase 获取消息（从 gpt_sessions.messages）
-      const result = await supabaseAdmin
-        .from("gpt_sessions")
-        .select("messages")
-        .eq("id", sessionId)
-        .eq("user_id", userId)
-        .single();
-
-      if (result.data && result.data.messages && Array.isArray(result.data.messages)) {
-        // 取最近20条消息
-        const allMessages = result.data.messages;
-        const recentMessages = allMessages.slice(-20);
-
-        history = recentMessages
-          .map((msg: any) => {
-            // ========================================
-            // 核心过滤逻辑
-            // ========================================
-            // 如果是多AI消息，需要按agentId过滤
-            if (msg.isMultiAI && Array.isArray(msg.content)) {
-              if (agentId) {
-                // 多AI模式：只获取当前agentId的回复
-                const relevantResponses = msg.content.filter(
-                  (resp: any) => resp.agentId === agentId
-                );
-
-                // 如果找到该agentId的历史回复，保留
-                if (relevantResponses.length > 0) {
-                  return {
-                    role: msg.role,
-                    content: relevantResponses.map((r: any) => r.content).join('\n'),
-                    agentId: agentId,
-                  };
-                } else {
-                  // 该agentId在此多AI消息中没有回复，跳过
-                  return null;
-                }
-              } else {
-                // 单AI模式：跳过多AI消息（保持隔离）
-                return null;
-              }
-            } else if (!msg.isMultiAI) {
-              // 单AI消息或用户消息
-              let contentStr = "";
-
-              if (typeof msg.content === "string") {
-                contentStr = msg.content;
-              } else if (msg.content && typeof msg.content === "object") {
-                contentStr = msg.content.content || "";
-              }
-
-              return {
-                role: msg.role,
-                content: contentStr,
-              };
-            }
-
-            return null;
-          })
-          .filter((msg: any) => msg !== null); // 移除null项
-      }
-    }
+    const sessionMessages = Array.isArray(session.messages) ? session.messages : [];
+    const history = extractHistoryMessages(sessionMessages, agentId);
 
     const messages: AIMessage[] = [
       ...history.map((msg: { role: string; content: string }) => ({
@@ -462,47 +531,68 @@ export async function POST(req: NextRequest) {
       } else {
         // 国际版：保存用户消息到 gpt_sessions.messages（和国内版相同结构）
         const userMsg = {
+          id: createMessageId("msg"),
           content: message,
           role: "user",
           timestamp: new Date().toISOString(),
           tokens_used: 0,
         };
 
-        // 获取当前会话的消息数组
-        const { data: session } = await supabaseAdmin
-          .from("gpt_sessions")
-          .select("messages")
-          .eq("id", sessionId)
-          .eq("user_id", userId)
-          .single();
-
-        if (session) {
-          const updatedMessages = [...(session.messages || []), userMsg];
-          const { error: updateError } = await supabaseAdmin
-            .from("gpt_sessions")
-            .update({ messages: updatedMessages })
-            .eq("id", sessionId)
-            .eq("user_id", userId);
-
-          if (updateError) {
-            console.error("Failed to save user message:", updateError);
-          }
+        try {
+          await appendSessionMessages({
+            sessionId,
+            userId,
+            messages: [userMsg],
+          });
+        } catch (saveError) {
+          console.error("Failed to save user message:", saveError);
         }
       }
     }
 
     // ========================================
-    // 7. 获取AI Provider并开始流式响应
+    // 7. 解析模型尝试链路并准备流式响应
     // ========================================
-    console.log(`[Chat API] Getting provider for model: ${model}`);
-    const provider = aiRouter.getProviderForModel(model);
-    console.log(`[Chat API] Provider found: ${provider.name}`);
+    const shouldUseChinaCollabFallback =
+      isChinaRegion() &&
+      typeof model === "string" &&
+      CHINA_SMART_COLLAB_MODEL_SET.has(model.trim()) &&
+      availableModels.some((m) => CHINA_SMART_COLLAB_MODEL_SET.has(m));
+
+    const smartAttemptModels = shouldUseChinaCollabFallback
+      ? buildChinaCollabFallbackAttempts(model, availableModels, MAX_SMART_MODEL_ATTEMPTS)
+      : resolvedModel.routedFromSmart
+        ? buildSmartModelAttemptList({
+            requestedModel: model,
+            primaryModel: effectiveModel,
+            message,
+            collaborationMode: collaborationModeForRouting,
+            availableModels,
+            fallbackModel: routerDefaultModel,
+          })
+        : [effectiveModel];
+
+    console.log(
+      `[Chat API] Model plan: ${smartAttemptModels.join(" -> ")}` +
+        (shouldUseChinaCollabFallback
+          ? ` (requested=${model}, reason=china_collab_fallback)`
+          : resolvedModel.routedFromSmart
+            ? ` (requested=${model}, reason=${resolvedModel.reason})`
+            : "")
+    );
 
     // 验证参数有效性
     console.log("[Chat API] Request parameters:", {
-      model,
+      requestedModel: model,
+      effectiveModel,
+      smartReason: shouldUseChinaCollabFallback
+        ? "china_collab_fallback"
+        : resolvedModel.routedFromSmart
+          ? resolvedModel.reason
+          : undefined,
       temperature: temperature,
       maxTokens: maxTokens,
+      attemptModels: smartAttemptModels,
       messagesCount: messages.length,
       firstMessage: messages[0],
     });
@@ -510,13 +600,6 @@ export async function POST(req: NextRequest) {
     // 确保参数是有效的数字
     const validMaxTokens = maxTokens && !isNaN(maxTokens) && maxTokens > 0 ? maxTokens : undefined;
     const validTemperature = temperature !== undefined && !isNaN(temperature) ? temperature : undefined;
-
-    const stream = provider.chatStream(messages, {
-      model,
-      temperature: validTemperature,
-      maxTokens: validMaxTokens,
-      user: userId,
-    });
 
     // ========================================
     // 8. 创建SSE流式响应
@@ -529,158 +612,279 @@ export async function POST(req: NextRequest) {
 
     const readableStream = new ReadableStream({
       async start(controller) {
+        let activeModelForError = smartAttemptModels[0] || effectiveModel;
+        let activeProviderForError = "unknown";
+
         try {
           // 发送开始事件
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ type: "start" })}\n\n`)
           );
 
-          // 处理流式响应
-          let isDone = false;
-          for await (const chunk of stream) {
-            if (isDone) continue; // 跳过已完成后的额外chunk
+          let responseModel = effectiveModel;
+          let streamResolved = false;
+          let lastStreamError: unknown = null;
+          const isFallbackRetryEnabled =
+            resolvedModel.routedFromSmart || shouldUseChinaCollabFallback;
 
-            fullResponse += chunk.content;
+          for (
+            let attemptIndex = 0;
+            attemptIndex < smartAttemptModels.length;
+            attemptIndex += 1
+          ) {
+            const attemptModel = smartAttemptModels[attemptIndex];
+            activeModelForError = attemptModel;
+            let attemptProvider: BaseAIProvider;
 
-            if (chunk.done) {
-              isDone = true;
-              // 流结束，计算Token
-              const calculatedTokens = provider.countTokens([
-                ...messages,
-                { role: "assistant", content: fullResponse },
-              ]);
-
-              totalTokens = chunk.tokens || calculatedTokens;
-
-              // 估算输入/输出Token比例（假设历史消息占80%输入）
-              promptTokens = Math.floor(totalTokens * 0.4);
-              completionTokens = totalTokens - promptTokens;
-
-              // 保存AI响应到数据库
-              if (!skipSave) {
-                if (isChinaRegion()) {
-                  // 国内版：保存到 CloudBase（但只在非多AI模式下直接保存）
-                  // 多AI模式由前端统一调用 save-multi-ai
-                  if (!agentName) {
-                    await saveCloudBaseMessage({
-                      session_id: sessionId,
-                      user_id: userId,
-                      role: "assistant",
-                      content: fullResponse,
-                      tokens_used: completionTokens,
-                    });
-                  }
-                } else {
-                  // 国际版：保存AI响应到 gpt_sessions.messages（和国内版相同结构）
-                  if (!agentName) {
-                    // 单AI模式：直接保存响应
-                    const aiMsg = {
-                      content: fullResponse,
-                      role: "assistant",
-                      timestamp: new Date().toISOString(),
-                      tokens_used: completionTokens,
-                    };
-
-                    // 获取当前 messages
-                    const { data: session } = await supabaseAdmin
-                      .from("gpt_sessions")
-                      .select("messages")
-                      .eq("id", sessionId)
-                      .eq("user_id", userId)
-                      .single();
-
-                    if (session) {
-                      const updatedMessages = [...(session.messages || []), aiMsg];
-                      await supabaseAdmin
-                        .from("gpt_sessions")
-                        .update({ messages: updatedMessages })
-                        .eq("id", sessionId)
-                        .eq("user_id", userId);
-                    }
-                  }
-                  // 多AI模式由前端统一调用 save-multi-ai，不在这里保存
-                }
-              }
-
-              // 记录Token使用
-              const costUsd = calculateCost(
-                model,
-                promptTokens,
-                completionTokens
-              );
-
-              await recordUsage({
-                userId,
-                sessionId,
-                model,
-                promptTokens,
-                completionTokens,
-                totalTokens,
-                costUsd,
+            try {
+              attemptProvider = aiRouter.getProviderForModel(attemptModel);
+            } catch (providerError) {
+              lastStreamError = providerError;
+              const hasMoreFallback = attemptIndex < smartAttemptModels.length - 1;
+              console.error("[Chat API] Provider resolve failed:", {
+                attemptIndex,
+                model: attemptModel,
+                error:
+                  providerError instanceof Error
+                    ? providerError.message
+                    : String(providerError),
               });
-
-              // 更新会话的最后更新时间
-              if (isChinaRegion()) {
-                // 国内版：更新 CloudBase
-                const cloudbase = require("@cloudbase/node-sdk")
-                  .init({
-                    env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
-                    secretId: process.env.CLOUDBASE_SECRET_ID,
-                    secretKey: process.env.CLOUDBASE_SECRET_KEY,
-                  })
-                  .database();
-
-                await cloudbase
-                  .collection("ai_conversations")
-                  .doc(sessionId)
-                  .update({
-                    updated_at: new Date().toISOString(),
-                  });
-              } else {
-                // 国际版：更新 Supabase
-                await supabaseAdmin
-                  .from("gpt_sessions")
-                  .update({ updated_at: new Date().toISOString() })
-                  .eq("id", sessionId);
+              if (isFallbackRetryEnabled && hasMoreFallback) {
+                continue;
               }
+              throw providerError;
+            }
 
-              // 发送完成事件
-              const endTime = Date.now();
+            activeProviderForError = attemptProvider.name;
+
+            if (attemptIndex > 0) {
+              const fromModel = smartAttemptModels[attemptIndex - 1];
               controller.enqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({
-                    type: "done",
-                    tokens: {
-                      prompt: promptTokens,
-                      completion: completionTokens,
-                      total: totalTokens,
-                    },
-                    cost: costUsd,
-                    duration: endTime - startTime,
-                  })}\n\n`
-                )
-              );
-
-              controller.close();
-            } else {
-              // 发送内容块
-              controller.enqueue(
-                encoder.encode(
-                  `data: ${JSON.stringify({
-                    type: "content",
-                    content: chunk.content,
+                    type: "model_switch",
+                    fromModel,
+                    toModel: attemptModel,
+                    reason: "empty_text_retry",
                   })}\n\n`
                 )
               );
             }
+
+            let attemptResponse = "";
+            let attemptTokens = 0;
+            let isDone = false;
+
+            try {
+              console.log(
+                `[Chat API] Streaming attempt ${attemptIndex + 1}/${smartAttemptModels.length} model=${attemptModel}`
+              );
+
+              const stream = attemptProvider.chatStream(messages, {
+                model: attemptModel,
+                temperature: validTemperature,
+                maxTokens: validMaxTokens,
+                user: userId,
+              });
+
+              for await (const chunk of stream) {
+                if (isDone) continue; // 跳过已完成后的额外chunk
+
+                const chunkContent = chunk.content || "";
+                if (chunkContent) {
+                  attemptResponse += chunkContent;
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({
+                        type: "content",
+                        content: chunkContent,
+                      })}\n\n`
+                    )
+                  );
+                }
+
+                if (chunk.done) {
+                  isDone = true;
+                  const calculatedTokens = attemptProvider.countTokens([
+                    ...messages,
+                    { role: "assistant", content: attemptResponse },
+                  ]);
+                  attemptTokens = chunk.tokens || calculatedTokens;
+                }
+              }
+            } catch (attemptError) {
+              lastStreamError = attemptError;
+              const hasMoreFallback =
+                isFallbackRetryEnabled &&
+                attemptIndex < smartAttemptModels.length - 1;
+              const hasPartialText = attemptResponse.trim().length > 0;
+              console.error("[Chat API] Stream attempt failed:", {
+                attemptIndex,
+                model: attemptModel,
+                provider: attemptProvider.name,
+                error:
+                  attemptError instanceof Error
+                    ? attemptError.message
+                    : String(attemptError),
+              });
+              if (hasMoreFallback && !hasPartialText) {
+                continue;
+              }
+              if (hasMoreFallback && hasPartialText) {
+                console.warn(
+                  `[Chat API] Retry skipped because partial text already streamed from ${attemptModel}`
+                );
+              }
+              throw attemptError;
+            }
+
+            if (!attemptTokens) {
+              attemptTokens = attemptProvider.countTokens([
+                ...messages,
+                { role: "assistant", content: attemptResponse },
+              ]);
+            }
+
+            const hasTextResponse = attemptResponse.trim().length > 0;
+            const canRetryOnEmpty =
+              isFallbackRetryEnabled &&
+              attemptIndex < smartAttemptModels.length - 1;
+
+            if (!hasTextResponse && canRetryOnEmpty) {
+              console.warn(
+                `[Chat API] Empty text response from ${attemptModel}, switching to next fallback model`
+              );
+              continue;
+            }
+
+            fullResponse = attemptResponse;
+            totalTokens = attemptTokens;
+            responseModel = attemptModel;
+            streamResolved = true;
+            break;
           }
+
+          if (!streamResolved) {
+            if (lastStreamError) {
+              throw lastStreamError instanceof Error
+                ? lastStreamError
+                : new Error(String(lastStreamError));
+            }
+            throw new Error("No response from available models");
+          }
+
+          // 估算输入/输出Token比例（假设历史消息占40%输入）
+          promptTokens = Math.floor(totalTokens * 0.4);
+          completionTokens = totalTokens - promptTokens;
+
+          // 保存AI响应到数据库
+          if (!skipSave) {
+            if (isChinaRegion()) {
+              // 国内版：保存到 CloudBase（但只在非多AI模式下直接保存）
+              // 多AI模式由前端统一调用 save-multi-ai
+              if (!agentName) {
+                await saveCloudBaseMessage({
+                  session_id: sessionId,
+                  user_id: userId,
+                  role: "assistant",
+                  content: fullResponse,
+                  tokens_used: completionTokens,
+                });
+              }
+            } else {
+              // 国际版：保存AI响应到 gpt_sessions.messages（和国内版相同结构）
+              if (!agentName) {
+                // 单AI模式：直接保存响应
+                const aiMsg = {
+                  id: createMessageId("msg"),
+                  content: fullResponse,
+                  role: "assistant",
+                  timestamp: new Date().toISOString(),
+                  tokens_used: completionTokens,
+                  model: responseModel,
+                };
+
+                await appendSessionMessages({
+                  sessionId,
+                  userId,
+                  messages: [aiMsg],
+                });
+              }
+              // 多AI模式由前端统一调用 save-multi-ai，不在这里保存
+            }
+          }
+
+          // 记录Token使用
+          const costUsd = calculateCost(
+            responseModel,
+            promptTokens,
+            completionTokens
+          );
+
+          if (!isChinaRegion()) {
+            await recordUsage({
+              userId,
+              sessionId,
+              model: responseModel,
+              promptTokens,
+              completionTokens,
+              totalTokens,
+              costUsd,
+            });
+          }
+
+          // 更新会话的最后更新时间
+          if (isChinaRegion()) {
+            // 国内版：更新 CloudBase
+            const cloudbase = require("@cloudbase/node-sdk")
+              .init({
+                env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+                secretId: process.env.CLOUDBASE_SECRET_ID,
+                secretKey: process.env.CLOUDBASE_SECRET_KEY,
+              })
+              .database();
+
+            await cloudbase
+              .collection("ai_conversations")
+              .doc(sessionId)
+              .update({
+                updated_at: new Date().toISOString(),
+              });
+          } else {
+            // 国际版：更新 Supabase
+            await supabaseAdmin
+              .from("gpt_sessions")
+              .update({ updated_at: new Date().toISOString() })
+              .eq("id", sessionId)
+              .eq("user_id", userId);
+          }
+
+          // 发送完成事件
+          const endTime = Date.now();
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                type: "done",
+                model: responseModel,
+                tokens: {
+                  prompt: promptTokens,
+                  completion: completionTokens,
+                  total: totalTokens,
+                },
+                cost: costUsd,
+                duration: endTime - startTime,
+              })}\n\n`
+            )
+          );
+
+          controller.close();
         } catch (error) {
           console.error("[Chat API] Stream error:", error);
           console.error("[Chat API] Error details:", {
             message: error instanceof Error ? error.message : "Unknown error",
             stack: error instanceof Error ? error.stack : undefined,
-            model,
-            provider: provider.name,
+            model: activeModelForError,
+            provider: activeProviderForError,
           });
 
           // 发送错误事件

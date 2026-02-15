@@ -71,6 +71,14 @@ export function generateWechatAuthUrl(config: WechatOAuthConfig): string {
  */
 export function generateState(): string {
   const timestamp = Date.now();
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const random = Array.from(bytes, (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join("");
+    return `${timestamp}_${random}`;
+  }
   const random = Math.random().toString(36).substring(2, 15);
   return `${timestamp}_${random}`;
 }

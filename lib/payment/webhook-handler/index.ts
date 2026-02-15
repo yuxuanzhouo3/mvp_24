@@ -6,8 +6,7 @@
 import { logError, logInfo, logWarn } from "../../logger";
 import {
   generateEventId,
-  getProcessedEvent,
-  recordEvent,
+  reserveEvent,
   markEventProcessed,
 } from "./event-store";
 import {
@@ -55,15 +54,22 @@ export class WebhookHandler {
         livemode: eventData.livemode,
       });
 
-      // 检查事件是否已处理（幂等性）
-      const existingEvent = await getProcessedEvent(eventId);
-      if (existingEvent) {
+      const reservation = await reserveEvent(
+        eventId,
+        provider,
+        eventType,
+        eventData
+      );
+
+      if (reservation.alreadyProcessed) {
         logInfo(`Webhook event already processed, skipping`, { eventId });
         return true;
       }
 
-      // 记录事件
-      await recordEvent(eventId, provider, eventType, eventData);
+      if (reservation.inProgress) {
+        logInfo(`Webhook event is already in progress, skipping`, { eventId });
+        return true;
+      }
 
       // 根据提供商和事件类型处理
       const success = await this.handleEvent(provider, eventType, eventData);

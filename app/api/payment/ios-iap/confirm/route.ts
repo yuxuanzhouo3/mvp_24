@@ -7,18 +7,52 @@ import { verifyAppleSubscription } from "@/lib/apple-iap-verification";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { logInfo, logError, logWarn } from "@/lib/logger";
 
-/**
- * ✅ NEW ARCHITECTURE: 
- * - 后端只验证 transactionId 有效性 & 记录交易
- * - 不存储 current_period_end（过期时间由 Apple 控制）
- * - 前端通过 GET /api/payment/ios-iap/status 查询实时过期时间
- * 
- * 优势：
- * 1. 过期时间完全由 Apple 控制 ✅
- * 2. 永远不会数据不同步 ✅
- * 3. 用户在 App Store 改订阅，立即生效 ✅
- */
+async function syncUserMembershipCache(
+  user: any,
+  expiresAtIso: string,
+  operationId: string,
+  transactionId: string
+) {
+  try {
+    let existingMetadata: Record<string, any> = {};
+    try {
+      const { data: userData } = await supabaseAdmin.auth.admin.getUserById(user.id);
+      existingMetadata = (userData?.user?.user_metadata as Record<string, any>) || {};
+    } catch (metadataReadErr) {
+      logWarn("Failed to read existing user metadata before IAP merge", {
+        operationId,
+        userId: user.id,
+        transactionId,
+        error: metadataReadErr,
+      });
+    }
 
+    await supabaseAdmin.auth.admin.updateUserById(user.id, {
+      user_metadata: {
+        ...(user.user_metadata || {}),
+        ...existingMetadata,
+        pro: true,
+        subscription_plan: "pro",
+        subscription_status: "active",
+        membership_expires_at: expiresAtIso,
+        updated_at: new Date().toISOString(),
+      },
+    });
+  } catch (metaErr) {
+    logWarn("Failed to sync IAP membership cache to auth metadata", {
+      operationId,
+      userId: user.id,
+      transactionId,
+      error: metaErr,
+    });
+  }
+}
+
+/**
+ * Apple IAP confirm:
+ * - Apple 是过期时间真值源
+ * - 本地缓存 current_period_end 与 membership_expires_at 用于降级显示
+ */
 export async function POST(request: NextRequest) {
   const operationId = `iap_confirm_${Date.now()}_${Math.random()
     .toString(36)
@@ -39,7 +73,6 @@ export async function POST(request: NextRequest) {
       billingCycle?: "monthly" | "yearly";
     };
 
-    // 参数验证
     if (!transactionId || !productId || !planId || !billingCycle) {
       return NextResponse.json(
         { success: false, error: "Missing IAP confirmation parameters" },
@@ -72,6 +105,7 @@ export async function POST(request: NextRequest) {
 
     const isZh = isChinaRegion();
     const period = billingCycle === "yearly" ? "annual" : "monthly";
+    const billedDays = billingCycle === "yearly" ? 365 : 30;
     const amount = getPlanPrice(planId, period, isZh);
     const currency = isZh ? "CNY" : "USD";
 
@@ -84,16 +118,8 @@ export async function POST(request: NextRequest) {
       billingCycle,
     });
 
-    // 🔥 Step 1: 从 Apple 验证 transactionId 有效性（可选 - 信息性）
-    // 主要目的是记录验证状态，不要求成功（允许 Apple API 暂时不可用）
-    let verificationStatus: "verified" | "pending" = "pending";
-
-    logInfo("Optional Apple verification (non-blocking)", {
-      operationId,
-      transactionId,
-      productId,
-    });
-
+    const verificationStatus = "verified";
+    let appleExpiresAtIso = "";
     try {
       const useProduction = process.env.NODE_ENV === "production";
       const verificationResult = await verifyAppleSubscription(
@@ -103,140 +129,230 @@ export async function POST(request: NextRequest) {
         useProduction
       );
 
-      if (verificationResult.isValid) {
-        verificationStatus = "verified";
-        logInfo("✅ Transact Apple verification succeeded", {
+      const hasExpiresDate =
+        typeof verificationResult.expiresDate === "number" &&
+        Number.isFinite(verificationResult.expiresDate);
+
+      if (!verificationResult.isValid || !hasExpiresDate) {
+        logWarn("Apple verification failed (blocking)", {
           operationId,
           userId: user.id,
           transactionId,
+          verificationError: verificationResult.errorMessage,
+          isValid: verificationResult.isValid,
+          hasExpiresDate,
         });
-      } else {
-        // Apple 验证失败，但我们不拒绝支付（Apple 验证是异步的）
-        logWarn("⚠️  Apple verification failed, but continuing (will query on status call)", {
-          operationId,
-          userId: user.id,
-          transactionId,
-          error: verificationResult.errorMessage,
-        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: verificationResult.errorMessage || "IAP verification failed",
+          },
+          { status: 400 }
+        );
       }
-    } catch (verifyErr) {
-      logWarn("Apple verification error (non-blocking)", {
+
+      appleExpiresAtIso = new Date(verificationResult.expiresDate!).toISOString();
+
+      logInfo("IAP verification completed", {
         operationId,
+        userId: user.id,
+        transactionId,
+        verificationStatus,
+        appleExpiresAt: appleExpiresAtIso,
+      });
+    } catch (verifyErr) {
+      logWarn("Apple verification request failed (blocking)", {
+        operationId,
+        userId: user.id,
         transactionId,
         error: verifyErr,
       });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Unable to verify IAP receipt with Apple",
+        },
+        { status: 502 }
+      );
     }
 
-    // 🔥 Step 2: 检查用户是否已有有效的订阅
-    try {
-      const { data: existingSubscriptions } = await supabaseAdmin
+    const nowIso = new Date().toISOString();
+
+    const { data: latestSubscriptions } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id, current_period_end, provider_subscription_id, provider")
+      .eq("user_id", user.id)
+      .eq("plan_id", "pro")
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    const latestSubscription =
+      latestSubscriptions && latestSubscriptions.length > 0
+        ? latestSubscriptions[0]
+        : null;
+
+    // 幂等：同 transaction 已处理，保证缓存字段同步后直接返回
+    const { data: existingByTransaction } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id")
+      .eq("user_id", user.id)
+      .or(
+        `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
+      )
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingByTransaction?.id) {
+      const finalExpiresAtIso = appleExpiresAtIso;
+
+      await supabaseAdmin
         .from("subscriptions")
-        .select("current_period_end, provider_subscription_id")
-        .eq("user_id", user.id)
-        .eq("plan_id", "pro")
-        .limit(1);
+        .update({
+          status: "active",
+          provider: "apple",
+          provider_subscription_id: transactionId,
+          transaction_id: transactionId,
+          current_period_end: finalExpiresAtIso,
+          verification_status: "verified",
+          updated_at: nowIso,
+        })
+        .eq("id", existingByTransaction.id);
 
-      if (existingSubscriptions && existingSubscriptions.length > 0) {
-        const existingRecord = existingSubscriptions[0];
-        const currentExpiresAt = new Date(existingRecord.current_period_end);
-
-        // 如果现有订阅未过期
-        if (currentExpiresAt > new Date()) {
-          const existingProviderId = existingRecord.provider_subscription_id;
-
-          // 来自同一个 Apple transaction，允许续订
-          if (existingProviderId === transactionId) {
-            logInfo("Same Apple transaction detected, allowing renewal", {
-              operationId,
-              userId: user.id,
-              transactionId,
-            });
-          } else {
-            // 不同交易，阻止
-            logInfo("IAP blocked: active subscription exists from other payment", {
-              operationId,
-              userId: user.id,
-              currentExpiresAt: currentExpiresAt.toISOString(),
-              existingProviderId,
-            });
-            return NextResponse.json(
-              {
-                success: false,
-                error: "Active subscription exists from another payment method",
-              },
-              { status: 409 }
-            );
-          }
-        }
-      }
-    } catch (checkErr) {
-      logWarn("Error checking existing subscription", {
+      await syncUserMembershipCache(
+        user,
+        finalExpiresAtIso,
         operationId,
-        userId: user.id,
-        error: checkErr,
+        transactionId
+      );
+
+      return NextResponse.json({
+        success: true,
+        transactionId,
+        amount,
+        currency,
+        daysAdded: billedDays,
+        verificationStatus,
+        expiresAt: finalExpiresAtIso,
+        source: "apple",
+        alreadyProcessed: true,
       });
     }
 
-    // 🔥 Step 3: 记录 IAP 交易
-    // ✅ 不存储 current_period_end（过期时间由 Apple 控制）
-    // ✅ 只记录 transactionId 和用户激活状态
-    try {
-      const { error: upsertErr } = await supabaseAdmin
-        .from("subscriptions")
-        .upsert(
-          {
-            user_id: user.id,
-            plan_id: "pro",
-            status: "active",
-            provider_subscription_id: transactionId, // 记录 Apple transaction ID
-            provider: "apple", // 标记支付方式
-            // 🚫 NOT storing current_period_end - Apple is source of truth
-          },
-          {
-            onConflict: "user_id",
-          }
-        );
+    // 阻止“其他支付方式的有效订阅”被 Apple 覆盖
+    if (latestSubscription?.current_period_end) {
+      const latestExpiresAt = new Date(latestSubscription.current_period_end);
+      const latestProvider = String(latestSubscription.provider || "").toLowerCase();
+      const isActive = latestExpiresAt.getTime() > Date.now();
+      const sameTransaction =
+        latestSubscription.provider_subscription_id === transactionId;
+      const sameProvider = latestProvider === "apple";
 
-      if (upsertErr) {
-        logError("Failed to record IAP transaction", new Error(upsertErr.message), {
+      if (isActive && !sameProvider && !sameTransaction) {
+        logInfo("IAP blocked: active subscription exists from other payment", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          currentExpiresAt: latestExpiresAt.toISOString(),
+          existingProvider: latestSubscription.provider,
+          existingProviderId: latestSubscription.provider_subscription_id,
+        });
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Active subscription exists from another payment method",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const finalExpiresAtIso = appleExpiresAtIso;
+
+    if (latestSubscription?.id) {
+      const { error: updateErr } = await supabaseAdmin
+        .from("subscriptions")
+        .update({
+          status: "active",
+          provider: "apple",
+          provider_subscription_id: transactionId,
+          transaction_id: transactionId,
+          current_period_end: finalExpiresAtIso,
+          verification_status: "verified",
+          updated_at: nowIso,
+        })
+        .eq("id", latestSubscription.id);
+
+      if (updateErr) {
+        logError("Failed to update IAP subscription", new Error(updateErr.message), {
+          operationId,
+          userId: user.id,
+          transactionId,
+          subscriptionId: latestSubscription.id,
+        });
+        return NextResponse.json(
+          { success: false, error: "Failed to activate subscription" },
+          { status: 500 }
+        );
+      }
+    } else {
+      const { error: insertErr } = await supabaseAdmin
+        .from("subscriptions")
+        .insert({
+          user_id: user.id,
+          plan_id: "pro",
+          status: "active",
+          current_period_start: nowIso,
+          current_period_end: finalExpiresAtIso,
+          cancel_at_period_end: false,
+          transaction_id: transactionId,
+          provider_subscription_id: transactionId,
+          provider: "apple",
+          verification_status: "verified",
+          created_at: nowIso,
+          updated_at: nowIso,
+        });
+
+      if (insertErr) {
+        logError("Failed to create IAP subscription", new Error(insertErr.message), {
           operationId,
           userId: user.id,
           transactionId,
         });
         return NextResponse.json(
-          { success: false, error: "Failed to record transaction" },
+          { success: false, error: "Failed to activate subscription" },
           { status: 500 }
         );
       }
-    } catch (recordErr) {
-      logError("Error recording subscription", recordErr as Error, {
-        operationId,
-        userId: user.id,
-        transactionId,
-      });
-      return NextResponse.json(
-        { success: false, error: "Failed to record subscription" },
-        { status: 500 }
-      );
     }
 
-    logInfo("✅ IAP transaction recorded successfully", {
+    await syncUserMembershipCache(user, finalExpiresAtIso, operationId, transactionId);
+
+    logInfo("IAP subscription activated", {
       operationId,
       userId: user.id,
       transactionId,
       verificationStatus,
+      expiresAt: finalExpiresAtIso,
+      source: "apple",
     });
 
     return NextResponse.json({
       success: true,
       transactionId,
-      verificationStatus,
-      message: "Transaction recorded. Call GET /api/payment/ios-iap/status to get current expiration from Apple.",
       amount,
       currency,
+      daysAdded: billedDays,
+      verificationStatus,
+      expiresAt: finalExpiresAtIso,
+      source: "apple",
+      message: "Subscription activated",
     });
   } catch (error) {
-    logError("IAP confirmation error", error as Error, { operationId });
+    logError(
+      "IAP confirmation error",
+      error instanceof Error ? error : new Error(String(error)),
+      { operationId }
+    );
     return NextResponse.json(
       { success: false, error: "IAP confirmation failed" },
       { status: 500 }

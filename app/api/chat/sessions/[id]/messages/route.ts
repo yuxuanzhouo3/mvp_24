@@ -12,6 +12,17 @@ import {
   deleteGptMessages as deleteCloudBaseMessages,
 } from "@/lib/cloudbase-db";
 
+const GET_MESSAGES_PAGE_RPC = "get_gpt_session_messages_page";
+
+function isRpcMissing(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return (
+    error?.code === "PGRST202" ||
+    text.includes("could not find the function") ||
+    text.includes("does not exist")
+  );
+}
+
 /**
  * GET /api/chat/sessions/[id]/messages
  * 获取指定会话的所有消息
@@ -89,8 +100,10 @@ export async function GET(
 
     // 获取查询参数
     const { searchParams } = new URL(req.url);
-    const limit = parseInt(searchParams.get("limit") || "100");
-    const offset = parseInt(searchParams.get("offset") || "0");
+    const parsedLimit = Number.parseInt(searchParams.get("limit") || "100", 10);
+    const parsedOffset = Number.parseInt(searchParams.get("offset") || "0", 10);
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 100;
+    const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : 0;
 
     // 获取消息
     if (isChinaRegion()) {
@@ -130,7 +143,55 @@ export async function GET(
         sessionConfig: multiAiConfig,
       });
     } else {
-      // 国际版：从 Supabase 的 gpt_sessions.messages 和 multi_ai_config 获取
+      const { data: pageData, error: rpcError } = await supabaseAdmin.rpc(
+        GET_MESSAGES_PAGE_RPC,
+        {
+          p_session_id: sessionId,
+          p_user_id: userId,
+          p_limit: limit,
+          p_offset: offset,
+        }
+      );
+
+      if (rpcError && !isRpcMissing(rpcError)) {
+        console.error("Failed to fetch paged messages via RPC:", rpcError);
+        return Response.json(
+          { error: "Failed to fetch messages" },
+          { status: 500 }
+        );
+      }
+
+      if (!rpcError) {
+        const row = Array.isArray(pageData) ? pageData[0] : null;
+        if (!row) {
+          return Response.json(
+            { error: "Session not found or access denied" },
+            { status: 404 }
+          );
+        }
+
+        const paginatedMessages = Array.isArray(row.messages) ? row.messages : [];
+        const totalMessages =
+          typeof row.total === "number" ? row.total : Number(row.total || 0);
+        const totalTokens =
+          typeof row.total_tokens === "number"
+            ? row.total_tokens
+            : Number(row.total_tokens || 0);
+
+        return Response.json({
+          messages: paginatedMessages,
+          total: totalMessages,
+          limit,
+          offset,
+          sessionConfig: row.session_config || null,
+          stats: {
+            totalMessages,
+            totalTokens,
+          },
+        });
+      }
+
+      // RPC 不存在时回退到旧逻辑
       const { data: session, error: sessionError } = await supabaseAdmin
         .from("gpt_sessions")
         .select("messages, multi_ai_config")
@@ -146,17 +207,13 @@ export async function GET(
         );
       }
 
-      const allMessages = session.messages || [];
+      const allMessages = Array.isArray(session.messages) ? session.messages : [];
       const totalMessages = allMessages.length;
-
-      // 应用分页
       const paginatedMessages = allMessages.slice(offset, offset + limit);
-
-      // 计算总Token使用量
-      const totalTokens = allMessages.reduce((sum: number, msg: any) => sum + (msg.tokens_used || 0), 0);
-
-      // 注意：与CloudBase一致，history API返回完整消息（不按agentId过滤）
-      // 按agentId过滤只在/api/chat/send中进行，用于实现上下文隔离
+      const totalTokens = allMessages.reduce(
+        (sum: number, msg: any) => sum + (typeof msg?.tokens_used === "number" ? msg.tokens_used : 0),
+        0
+      );
 
       return Response.json({
         messages: paginatedMessages,
@@ -263,7 +320,7 @@ export async function DELETE(
       // 删除所有消息（清空 messages 数组）
       const { error } = await supabaseAdmin
         .from("gpt_sessions")
-        .update({ messages: [] })
+        .update({ messages: [], updated_at: new Date().toISOString() })
         .eq("id", sessionId)
         .eq("user_id", userId);
 

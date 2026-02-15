@@ -156,7 +156,12 @@ export type AICapability =
   | "creative"
   | "research"
   | "translation"
-  | "conversation";
+  | "conversation"
+  | "vision"
+  | "image_input"
+  | "audio_input"
+  | "audio_output"
+  | "multimodal";
 
 /**
  * AI 智能体配置

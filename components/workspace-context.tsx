@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Clock,
   CheckCircle2,
+  Sparkles,
 } from "lucide-react";
 import { getAuthClient } from "@/lib/auth/client";
 import { toast } from "sonner";
@@ -60,6 +61,11 @@ export function GPTWorkspace({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { language } = useLanguage();
   const t = useTranslations(language);
+  const isSmartModel = (ai?: { id?: string; model?: string }) => {
+    const id = (ai?.id || "").trim().toLowerCase();
+    const model = (ai?.model || "").trim().toLowerCase();
+    return id === "smart-model" || model === "smart-auto" || id.includes("smart-model");
+  };
 
   // 从localStorage恢复消息状态
   useEffect(() => {
@@ -576,7 +582,9 @@ export function GPTWorkspace({
                   key={gpt.id} 
                   className="flex items-center gap-2 px-4 py-1.5 bg-white text-gray-700 border border-gray-200 rounded-full text-sm font-medium shadow-sm transition-all hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/50 group"
                 >
-                  {gpt.icon ? (
+                  {isSmartModel(gpt) ? (
+                    <Sparkles className="w-4 h-4 text-fuchsia-500 drop-shadow-[0_0_6px_rgba(217,70,239,0.45)]" />
+                  ) : gpt.icon ? (
                     <span className="text-base group-hover:scale-110 transition-transform">{gpt.icon}</span>
                   ) : (
                     <Bot className="w-4 h-4 text-blue-500" />
@@ -775,8 +783,19 @@ export function GPTWorkspace({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder={t.workspace.placeholder}
-            className="flex-1 min-h-[80px] max-h-[200px] resize-none"
+            className="flex-1 min-h-[80px] max-h-[200px] resize-none border-0 focus:border-0 focus-visible:border-0 focus:ring-0 focus-visible:ring-0 focus:ring-offset-0 focus-visible:ring-offset-0 ring-0 ring-offset-0 shadow-none focus:shadow-none focus-visible:shadow-none rounded-none bg-transparent outline-none focus:outline-none focus-visible:outline-none appearance-none"
+            style={{
+              border: "none",
+              outline: "none",
+              boxShadow: "none",
+              WebkitAppearance: "none",
+              appearance: "none",
+              borderRadius: 0,
+              background: "transparent",
+            }}
             onKeyDown={(e) => {
+              const isComposing = (e.nativeEvent as KeyboardEvent).isComposing || e.keyCode === 229;
+              if (isComposing) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();

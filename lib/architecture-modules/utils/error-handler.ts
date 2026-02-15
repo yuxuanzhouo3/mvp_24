@@ -106,10 +106,13 @@ export class FallbackHandler {
         return await fallback();
       } catch (error) {
         lastError = error as Error;
-        console.warn("Fallback failed, trying next one:", error);
+        const classifiedError = classifyError(error);
+        console.warn(
+          "Fallback failed, trying next one:",
+          classifiedError.message
+        );
 
         // Record error for each failed fallback attempt
-        const classifiedError = classifyError(error);
         errorRecovery.recordError("geo-detection", classifiedError);
       }
     }

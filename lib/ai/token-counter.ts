@@ -6,6 +6,19 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { TokenUsage } from "./types";
 
+let tokenUsageTableMissing = false;
+let tokenUsageTableMissingWarned = false;
+
+function isTokenUsageTableMissingError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const maybe = error as { code?: string; message?: string };
+  return (
+    maybe.code === "PGRST205" &&
+    typeof maybe.message === "string" &&
+    maybe.message.includes("public.token_usage")
+  );
+}
+
 /**
  * 模型定价配置（每1000 tokens的价格，单位：美元）
  */
@@ -29,6 +42,16 @@ export const MODEL_PRICING = {
   // DeepSeek 系列（可选）
   "deepseek-chat": { prompt: 0.00014, completion: 0.00028 },
   "deepseek-coder": { prompt: 0.00014, completion: 0.00028 },
+
+  // DashScope / Qwen
+  "qwen3-omni-flash": { prompt: 0.000008, completion: 0.000008 },
+  "qwen3-max-2026-01-23": { prompt: 0.00004, completion: 0.00012 },
+  "qwen-plus-2025-12-01": { prompt: 0.000008, completion: 0.000008 },
+  "deepseek-v3.2": { prompt: 0.000001, completion: 0.000002 },
+  "qwen-plus": { prompt: 0.000008, completion: 0.000008 },
+  "qwen-flash": { prompt: 0.000001, completion: 0.000001 },
+  "qwen-max": { prompt: 0.00004, completion: 0.00012 },
+  "qwen-turbo": { prompt: 0.000002, completion: 0.000006 },
 } as const;
 
 /**
@@ -90,6 +113,10 @@ export function getModelPricing(model: string) {
  * @returns 是否成功
  */
 export async function recordUsage(usage: TokenUsage): Promise<boolean> {
+  if (tokenUsageTableMissing) {
+    return false;
+  }
+
   try {
     const { error } = await supabaseAdmin.from("token_usage").insert({
       user_id: usage.userId,
@@ -103,6 +130,16 @@ export async function recordUsage(usage: TokenUsage): Promise<boolean> {
     });
 
     if (error) {
+      if (isTokenUsageTableMissingError(error)) {
+        tokenUsageTableMissing = true;
+        if (!tokenUsageTableMissingWarned) {
+          tokenUsageTableMissingWarned = true;
+          console.warn(
+            "[token-counter] token_usage table is missing; usage recording disabled. Please apply migration 20250126000000_add_token_usage.sql."
+          );
+        }
+        return false;
+      }
       console.error("Failed to record token usage:", error);
       return false;
     }
@@ -126,6 +163,15 @@ export async function getUserUsageStats(
   startDate?: Date,
   endDate?: Date
 ) {
+  if (tokenUsageTableMissing) {
+    return {
+      totalTokens: 0,
+      totalCost: 0,
+      totalRequests: 0,
+      byModel: {} as Record<string, { tokens: number; cost: number; requests: number }>,
+    };
+  }
+
   try {
     let query = supabaseAdmin
       .from("token_usage")
@@ -145,6 +191,21 @@ export async function getUserUsageStats(
     });
 
     if (error) {
+      if (isTokenUsageTableMissingError(error)) {
+        tokenUsageTableMissing = true;
+        if (!tokenUsageTableMissingWarned) {
+          tokenUsageTableMissingWarned = true;
+          console.warn(
+            "[token-counter] token_usage table is missing; usage stats disabled. Please apply migration 20250126000000_add_token_usage.sql."
+          );
+        }
+        return {
+          totalTokens: 0,
+          totalCost: 0,
+          totalRequests: 0,
+          byModel: {} as Record<string, { tokens: number; cost: number; requests: number }>,
+        };
+      }
       console.error("Failed to get usage stats:", error);
       return null;
     }
@@ -209,6 +270,10 @@ export async function getUserMonthlyUsage(userId: string): Promise<number> {
  * @returns 使用详情列表
  */
 export async function getSessionUsage(sessionId: string) {
+  if (tokenUsageTableMissing) {
+    return [];
+  }
+
   try {
     const { data, error } = await supabaseAdmin
       .from("token_usage")
@@ -217,6 +282,16 @@ export async function getSessionUsage(sessionId: string) {
       .order("created_at", { ascending: true });
 
     if (error) {
+      if (isTokenUsageTableMissingError(error)) {
+        tokenUsageTableMissing = true;
+        if (!tokenUsageTableMissingWarned) {
+          tokenUsageTableMissingWarned = true;
+          console.warn(
+            "[token-counter] token_usage table is missing; session usage disabled. Please apply migration 20250126000000_add_token_usage.sql."
+          );
+        }
+        return [];
+      }
       console.error("Failed to get session usage:", error);
       return null;
     }

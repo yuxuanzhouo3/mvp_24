@@ -4,7 +4,7 @@
  */
 
 import { supabaseAdmin } from "../../supabase-admin";
-import { getDatabase } from "../../auth-utils";
+import { getDatabase } from "../../cloudbase-service";
 import { isChinaRegion } from "../../config/region";
 import {
   logError,
@@ -15,6 +15,21 @@ import {
 } from "../../logger";
 import { updateCloudbaseSubscription } from "../../../app/api/payment/lib/update-cloudbase-subscription";
 import type { SubscriptionUser } from "./types";
+
+function normalizeDays(days: number | string | undefined): number {
+  const parsed =
+    typeof days === "number"
+      ? days
+      : typeof days === "string"
+      ? parseInt(days, 10)
+      : NaN;
+
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+
+  return 30;
+}
 
 /**
  * 根据订阅ID查找用户
@@ -127,38 +142,6 @@ async function findUserBySubscriptionIdSupabase(
       userId: subscription.user_id,
     });
     return { userId: subscription.user_id, subscriptionId: subscription.id };
-  }
-
-  // 尝试从最近的 pending 支付中查找
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-  const { data: recentPayments, error: recentError } = await supabaseAdmin
-    .from("payments")
-    .select("user_id, transaction_id, created_at")
-    .eq("payment_method", "paypal")
-    .eq("status", "pending")
-    .gte("created_at", fiveMinutesAgo)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  if (recentError) {
-    logError("Error querying recent payments", recentError, { subscriptionId });
-  }
-
-  if (recentPayments && recentPayments.length > 0) {
-    logInfo("Found recent pending PayPal payments", {
-      subscriptionId,
-      count: recentPayments.length,
-    });
-    const mostRecent = recentPayments[0];
-    logWarn(
-      "Could not find exact subscription match, using most recent pending PayPal payment",
-      {
-        subscriptionId,
-        foundTransactionId: mostRecent.transaction_id,
-        userId: mostRecent.user_id,
-      }
-    );
-    return { userId: mostRecent.user_id };
   }
 
   logError("User not found for subscription ID", undefined, {
@@ -297,6 +280,35 @@ async function updateSubscriptionStatusCloudBase(
       return false;
     }
 
+    // 支付成功回调幂等保护：同一 transaction_id 已完成则跳过续期
+    if (status === "active" && amount && currency && subscriptionId) {
+      const existingCompletedPayment = await db
+        .collection("payments")
+        .where({
+          transaction_id: subscriptionId,
+          status: "completed",
+        })
+        .limit(1)
+        .get();
+
+      if (
+        existingCompletedPayment.data &&
+        existingCompletedPayment.data.length > 0
+      ) {
+        logInfo(
+          "CloudBase payment already completed, skip duplicate subscription extension",
+          {
+            operationId,
+            userId,
+            subscriptionId,
+            provider,
+            existingPaymentId: existingCompletedPayment.data[0]?._id,
+          }
+        );
+        return true;
+      }
+    }
+
     // 更新用户 pro 状态
     const updateData: any = {
       pro: status === "active",
@@ -331,8 +343,12 @@ async function updateSubscriptionStatusCloudBase(
     });
 
     // 创建或更新订阅记录
+    let subscriptionUpdateResult:
+      | { success: boolean; expiresAt?: Date }
+      | null = null;
+
     if (status === "active") {
-      await createOrUpdateSubscriptionCloudBase(
+      subscriptionUpdateResult = await createOrUpdateSubscriptionCloudBase(
         db,
         userId,
         subscriptionId,
@@ -342,6 +358,15 @@ async function updateSubscriptionStatusCloudBase(
         operationId,
         now
       );
+    }
+
+    // 同步派生字段，避免 web_users 显示滞后
+    if (subscriptionUpdateResult?.success && subscriptionUpdateResult.expiresAt) {
+      await db.collection("web_users").doc(userId).update({
+        membership_expires_at: subscriptionUpdateResult.expiresAt.toISOString(),
+        pro: true,
+        updated_at: now.toISOString(),
+      });
     }
 
     // 记录支付
@@ -386,14 +411,14 @@ async function createOrUpdateSubscriptionCloudBase(
   days: number | undefined,
   operationId: string,
   now: Date
-): Promise<void> {
+): Promise<{ success: boolean; expiresAt?: Date } | null> {
   try {
     // 使用统一的订阅更新函数，避免重复代码
     const result = await updateCloudbaseSubscription({
       userId,
-      days: days || 30,
+      days: normalizeDays(days),
       transactionId: subscriptionId,
-      subscriptionId: undefined, // 从 provider_subscription_id 字段中获取
+      subscriptionId,
       provider,
       currentDate: now,
     });
@@ -404,6 +429,7 @@ async function createOrUpdateSubscriptionCloudBase(
         new Error(result.error),
         { operationId, userId, subscriptionId, provider }
       );
+      return { success: false };
     } else {
       logInfo("Subscription updated via unified function", {
         operationId,
@@ -412,6 +438,7 @@ async function createOrUpdateSubscriptionCloudBase(
         expiresAt: result.expiresAt?.toISOString(),
         provider,
       });
+      return { success: true, expiresAt: result.expiresAt };
     }
   } catch (error) {
     logError(
@@ -419,6 +446,7 @@ async function createOrUpdateSubscriptionCloudBase(
       error as Error,
       { operationId, userId, subscriptionId, provider }
     );
+    return { success: false };
   }
 }
 
@@ -535,13 +563,51 @@ async function updateSubscriptionStatusSupabase(
       days,
     });
 
-    // 检查是否已有活跃订阅
+    // 支付成功回调幂等保护：同一 transaction_id 已完成则直接跳过
+    if (status === "active" && amount && currency && subscriptionId) {
+      const { data: completedPayment, error: completedPaymentError } =
+        await supabaseAdmin
+          .from("payments")
+          .select("id, created_at")
+          .eq("transaction_id", subscriptionId)
+          .eq("status", "completed")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+      if (completedPaymentError) {
+        logWarn("Failed to check completed payment idempotency", {
+          operationId,
+          userId,
+          subscriptionId,
+          provider,
+          error: completedPaymentError,
+        });
+      } else if (completedPayment?.id) {
+        logInfo(
+          "Payment already completed, skip duplicate subscription extension",
+          {
+            operationId,
+            userId,
+            subscriptionId,
+            provider,
+            paymentId: completedPayment.id,
+          }
+        );
+        return true;
+      }
+    }
+
+    // 检查是否已有活跃订阅（取最新一条，避免 maybeSingle 多行错误）
     const { data: existingSubscriptionData, error: checkError } =
       await supabaseAdmin
         .from("subscriptions")
         .select("*")
         .eq("user_id", userId)
         .eq("status", "active")
+        .order("current_period_end", { ascending: false })
+        .order("updated_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
     if (checkError) {
@@ -554,42 +620,38 @@ async function updateSubscriptionStatusSupabase(
     }
 
     let subscription;
-    const daysNum = typeof days === "string" ? parseInt(days, 10) : days || 30;
+    const daysNum = normalizeDays(days);
 
     if (existingSubscriptionData) {
-      // 更新现有订阅
-      const existingEnd = new Date(existingSubscriptionData.current_period_end);
-      let newPeriodEnd: string;
+      const updatePayload: Record<string, any> = {
+        status,
+        provider_subscription_id: subscriptionId,
+        updated_at: now.toISOString(),
+      };
 
-      if (provider === "paypal" && existingEnd > now) {
-        newPeriodEnd = new Date(
-          existingEnd.getTime() + daysNum * 24 * 60 * 60 * 1000
+      if (status === "active") {
+        const existingEnd = existingSubscriptionData.current_period_end
+          ? new Date(existingSubscriptionData.current_period_end)
+          : null;
+        const baseTime =
+          existingEnd && Number.isFinite(existingEnd.getTime()) && existingEnd > now
+            ? existingEnd.getTime()
+            : now.getTime();
+        const newPeriodEnd = new Date(
+          baseTime + daysNum * 24 * 60 * 60 * 1000
         ).toISOString();
-      } else if (provider === "paypal") {
-        newPeriodEnd = new Date(
-          now.getTime() + daysNum * 24 * 60 * 60 * 1000
-        ).toISOString();
-      } else {
-        if (existingEnd > now) {
-          newPeriodEnd = new Date(
-            existingEnd.getTime() + daysNum * 24 * 60 * 60 * 1000
-          ).toISOString();
-        } else {
-          newPeriodEnd = new Date(
-            now.getTime() + daysNum * 24 * 60 * 60 * 1000
-          ).toISOString();
-        }
+
+        updatePayload.current_period_end = newPeriodEnd;
+        updatePayload.expires_at = newPeriodEnd;
+        updatePayload.plan_id = existingSubscriptionData.plan_id || "pro";
+        updatePayload.plan = existingSubscriptionData.plan || "pro";
+        updatePayload.transaction_id = subscriptionId;
       }
 
       const { data: updatedSubscription, error: updateError } =
         await supabaseAdmin
           .from("subscriptions")
-          .update({
-            status,
-            provider_subscription_id: subscriptionId,
-            current_period_end: newPeriodEnd,
-            updated_at: now.toISOString(),
-          })
+          .update(updatePayload)
           .eq("id", existingSubscriptionData.id)
           .select()
           .single();
@@ -610,11 +672,10 @@ async function updateSubscriptionStatusSupabase(
         subscriptionId: updatedSubscription.id,
         status,
         provider,
-        currentPeriodEnd: newPeriodEnd,
-        daysAdded: daysNum,
+        currentPeriodEnd: updatedSubscription.current_period_end,
+        daysAdded: status === "active" ? daysNum : 0,
       });
     } else if (status === "active") {
-      // 创建新订阅
       const currentPeriodEnd = new Date(
         now.getTime() + daysNum * 24 * 60 * 60 * 1000
       ).toISOString();
@@ -624,10 +685,13 @@ async function updateSubscriptionStatusSupabase(
         .insert({
           user_id: userId,
           plan_id: "pro",
+          plan: "pro",
           status,
           provider_subscription_id: subscriptionId,
           current_period_start: now.toISOString(),
           current_period_end: currentPeriodEnd,
+          expires_at: currentPeriodEnd,
+          transaction_id: subscriptionId,
         })
         .select()
         .single();
@@ -706,12 +770,26 @@ async function recordPaymentSupabase(
   });
 
   // 检查是否已存在完成状态的支付记录
-  const { data: existingCompletedPayment } = await supabaseAdmin
+  const {
+    data: existingCompletedPayment,
+    error: existingCompletedPaymentError,
+  } = await supabaseAdmin
     .from("payments")
     .select("id, status")
     .eq("transaction_id", transactionId)
     .eq("status", "completed")
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
+
+  if (existingCompletedPaymentError) {
+    logWarn("Failed to check existing completed payment", {
+      operationId,
+      userId,
+      transactionId,
+      error: existingCompletedPaymentError,
+    });
+  }
 
   if (existingCompletedPayment) {
     logInfo("Payment already exists with completed status, skipping", {
@@ -726,12 +804,24 @@ async function recordPaymentSupabase(
   let existingPayment = null;
 
   // 通过 transaction_id 查找
-  const { data: paymentByTransaction } = await supabaseAdmin
+  const { data: paymentByTransaction, error: paymentByTransactionError } =
+    await supabaseAdmin
     .from("payments")
     .select("id, status, created_at")
     .eq("transaction_id", transactionId)
     .eq("status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
+
+  if (paymentByTransactionError) {
+    logWarn("Failed to query pending payment by transaction", {
+      operationId,
+      userId,
+      transactionId,
+      error: paymentByTransactionError,
+    });
+  }
 
   if (paymentByTransaction) {
     existingPayment = paymentByTransaction;
@@ -744,6 +834,8 @@ async function recordPaymentSupabase(
       .select("id, status, created_at")
       .eq("transaction_id", paypalOrderId)
       .in("status", ["pending", "completed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (paymentByOrderId) {

@@ -22,6 +22,10 @@ export class DashScopeProvider extends BaseAIProvider {
   readonly name = "dashscope";
   readonly models = [
     "deepseek-v3.1",
+    "deepseek-v3.2",
+    "qwen3-omni-flash",
+    "qwen3-max-2026-01-23",
+    "qwen-plus-2025-12-01",
     "qwen-plus",
     "qwen-flash",
     "qwen-max",
@@ -85,8 +89,38 @@ export class DashScopeProvider extends BaseAIProvider {
         vision: false,
       },
     });
+    this.modelInfoCache.set("deepseek-v3.2", {
+      id: "deepseek-v3.2",
+      name: "DeepSeek V3.2",
+      provider: "dashscope",
+      contextWindow: 65536,
+      pricing: {
+        prompt: 0.000001,
+        completion: 0.000002,
+      },
+      capabilities: {
+        streaming: true,
+        functionCalling: true,
+        vision: false,
+      },
+    });
 
     // 旗舰模型
+    this.modelInfoCache.set("qwen3-max-2026-01-23", {
+      id: "qwen3-max-2026-01-23",
+      name: "Qwen3 Max 2026-01-23",
+      provider: "dashscope",
+      contextWindow: 32768,
+      pricing: {
+        prompt: 0.00004,
+        completion: 0.00012,
+      },
+      capabilities: {
+        streaming: true,
+        functionCalling: true,
+        vision: false,
+      },
+    });
     this.modelInfoCache.set("qwen-max", {
       id: "qwen-max",
       name: "通义千问 Max",
@@ -104,6 +138,21 @@ export class DashScopeProvider extends BaseAIProvider {
     });
 
     // 平衡模型
+    this.modelInfoCache.set("qwen-plus-2025-12-01", {
+      id: "qwen-plus-2025-12-01",
+      name: "Qwen Plus 2025-12-01",
+      provider: "dashscope",
+      contextWindow: 32768,
+      pricing: {
+        prompt: 0.000008,
+        completion: 0.000008,
+      },
+      capabilities: {
+        streaming: true,
+        functionCalling: true,
+        vision: false,
+      },
+    });
     this.modelInfoCache.set("qwen-plus", {
       id: "qwen-plus",
       name: "通义千问 Plus",
@@ -138,6 +187,22 @@ export class DashScopeProvider extends BaseAIProvider {
     });
 
     // 快速模型
+    this.modelInfoCache.set("qwen3-omni-flash", {
+      id: "qwen3-omni-flash",
+      name: "通义千问 Omni Flash",
+      provider: "dashscope",
+      contextWindow: 32768,
+      pricing: {
+        prompt: 0.000008,
+        completion: 0.000008,
+      },
+      capabilities: {
+        streaming: true,
+        functionCalling: true,
+        vision: true,
+      },
+    });
+
     this.modelInfoCache.set("qwen-flash", {
       id: "qwen-flash",
       name: "通义千问 Flash",

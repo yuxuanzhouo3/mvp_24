@@ -4,10 +4,31 @@
  */
 
 import { supabaseAdmin } from "../../supabase-admin";
-import { getDatabase } from "../../auth-utils";
+import { getDatabase } from "../../cloudbase-service";
 import { isChinaRegion } from "../../config/region";
-import { logError, logInfo } from "../../logger";
-import type { WebhookEvent, WebhookProvider } from "./types";
+import { logError } from "../../logger";
+import type { WebhookEvent } from "./types";
+
+const IN_FLIGHT_WINDOW_MS = 2 * 60 * 1000;
+
+export interface EventReservation {
+  shouldProcess: boolean;
+  alreadyProcessed: boolean;
+  inProgress: boolean;
+}
+
+function isInFlight(createdAt: unknown): boolean {
+  if (typeof createdAt !== "string") {
+    return false;
+  }
+
+  const createdAtMs = new Date(createdAt).getTime();
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+
+  return Date.now() - createdAtMs < IN_FLIGHT_WINDOW_MS;
+}
 
 /**
  * 生成事件唯一ID
@@ -48,6 +69,159 @@ export function generateEventId(provider: string, eventData: any): string {
   }
 
   return `${provider}_${uniqueKey}`;
+}
+
+/**
+ * 预占事件处理权（幂等 + 并发保护）
+ */
+export async function reserveEvent(
+  eventId: string,
+  provider: string,
+  eventType: string,
+  eventData: any
+): Promise<EventReservation> {
+  if (isChinaRegion()) {
+    return reserveEventCloudBase(eventId, provider, eventType, eventData);
+  }
+  return reserveEventSupabase(eventId, provider, eventType, eventData);
+}
+
+async function reserveEventCloudBase(
+  eventId: string,
+  provider: string,
+  eventType: string,
+  eventData: any
+): Promise<EventReservation> {
+  const nowIso = new Date().toISOString();
+  const db = getDatabase();
+
+  const existing = await db
+    .collection("webhook_events")
+    .where({ id: eventId })
+    .limit(1)
+    .get();
+
+  const existingEvent = existing.data?.[0];
+  if (!existingEvent) {
+    await db.collection("webhook_events").add({
+      id: eventId,
+      provider,
+      event_type: eventType,
+      event_data: eventData,
+      processed: false,
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    return { shouldProcess: true, alreadyProcessed: false, inProgress: false };
+  }
+
+  if (existingEvent.processed === true) {
+    return { shouldProcess: false, alreadyProcessed: true, inProgress: false };
+  }
+
+  const createdAt = existingEvent.created_at || existingEvent.updated_at;
+  if (isInFlight(createdAt)) {
+    return { shouldProcess: false, alreadyProcessed: false, inProgress: true };
+  }
+
+  await db.collection("webhook_events").doc(existingEvent._id).update({
+    provider,
+    event_type: eventType,
+    event_data: eventData,
+    processed: false,
+    created_at: nowIso,
+    updated_at: nowIso,
+  });
+
+  return { shouldProcess: true, alreadyProcessed: false, inProgress: false };
+}
+
+async function reserveEventSupabase(
+  eventId: string,
+  provider: string,
+  eventType: string,
+  eventData: any
+): Promise<EventReservation> {
+  const nowIso = new Date().toISOString();
+  const insertPayload = {
+    id: eventId,
+    provider,
+    event_type: eventType,
+    event_data: eventData,
+    processed: false,
+    created_at: nowIso,
+  };
+
+  const { error: insertError } = await supabaseAdmin
+    .from("webhook_events")
+    .insert(insertPayload);
+
+  if (!insertError) {
+    return { shouldProcess: true, alreadyProcessed: false, inProgress: false };
+  }
+
+  if (insertError.code !== "23505") {
+    logError("Error reserving webhook event", insertError, {
+      eventId,
+      provider,
+      eventType,
+    });
+    throw insertError;
+  }
+
+  const { data: existingEvent, error: existingError } = await supabaseAdmin
+    .from("webhook_events")
+    .select("processed, created_at")
+    .eq("id", eventId)
+    .maybeSingle();
+
+  if (existingError && existingError.code !== "PGRST116") {
+    logError("Error reading existing webhook event", existingError, {
+      eventId,
+      provider,
+      eventType,
+    });
+    throw existingError;
+  }
+
+  if (!existingEvent) {
+    return { shouldProcess: true, alreadyProcessed: false, inProgress: false };
+  }
+
+  if (existingEvent.processed === true) {
+    return { shouldProcess: false, alreadyProcessed: true, inProgress: false };
+  }
+
+  const staleBeforeIso = new Date(Date.now() - IN_FLIGHT_WINDOW_MS).toISOString();
+  const { data: claimedEvent, error: claimError } = await supabaseAdmin
+    .from("webhook_events")
+    .update({
+      provider,
+      event_type: eventType,
+      event_data: eventData,
+      processed: false,
+      created_at: nowIso,
+    })
+    .eq("id", eventId)
+    .eq("processed", false)
+    .lte("created_at", staleBeforeIso)
+    .select("id")
+    .maybeSingle();
+
+  if (claimError && claimError.code !== "PGRST116") {
+    logError("Error claiming stale webhook event", claimError, {
+      eventId,
+      provider,
+      eventType,
+    });
+    throw claimError;
+  }
+
+  if (claimedEvent?.id) {
+    return { shouldProcess: true, alreadyProcessed: false, inProgress: false };
+  }
+
+  return { shouldProcess: false, alreadyProcessed: false, inProgress: true };
 }
 
 /**
@@ -107,6 +281,7 @@ export async function recordEvent(
     if (isChinaRegion()) {
       // CloudBase 用户
       const db = getDatabase();
+      const nowIso = new Date().toISOString();
 
       // 先检查是否存在
       const existing = await db
@@ -116,15 +291,17 @@ export async function recordEvent(
 
       if (existing.data && existing.data.length > 0) {
         // 更新现有记录
+        const existingEvent = existing.data[0];
         await db
           .collection("webhook_events")
-          .doc(existing.data[0]._id)
+          .doc(existingEvent._id)
           .update({
             provider,
             event_type: eventType,
             event_data: eventData,
-            processed: false,
-            updated_at: new Date().toISOString(),
+            // 不要把 processed=true 的事件重置为 false
+            processed: existingEvent.processed === true ? true : false,
+            updated_at: nowIso,
           });
       } else {
         // 创建新记录
@@ -134,19 +311,26 @@ export async function recordEvent(
           event_type: eventType,
           event_data: eventData,
           processed: false,
-          created_at: new Date().toISOString(),
+          created_at: nowIso,
+          updated_at: nowIso,
         });
       }
     } else {
       // Supabase 用户
-      const { error } = await supabaseAdmin.from("webhook_events").upsert({
-        id: eventId,
-        provider,
-        event_type: eventType,
-        event_data: eventData,
-        processed: false,
-        created_at: new Date().toISOString(),
-      });
+      const { error } = await supabaseAdmin.from("webhook_events").upsert(
+        {
+          id: eventId,
+          provider,
+          event_type: eventType,
+          event_data: eventData,
+          processed: false,
+          created_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "id",
+          ignoreDuplicates: true,
+        }
+      );
 
       if (error) {
         logError("Error recording webhook event", error, {

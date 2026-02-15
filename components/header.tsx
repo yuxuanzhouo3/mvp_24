@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Globe, 
+  Check,
   WorkflowIcon as Workspace, 
   Library, 
   Download, 
@@ -14,7 +15,9 @@ import {
   Plus, 
   MessageSquare, 
   Trash2, 
-  Star 
+  Star,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { UserMenu } from "./user-menu";
@@ -22,11 +25,27 @@ import { QuotaDisplay } from "./quota-display";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { toast } from "sonner";
@@ -58,13 +77,21 @@ export function Header({
   onSessionSelect,
   onNewChat,
 }: HeaderProps) {
+  const FAVORITES_INITIAL_VISIBLE = 8;
   const router = useRouter();
-  const { language, toggleLanguage } = useLanguage();
+  const { language, setLanguage } = useLanguage();
   const t = useTranslations(language);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showAllFavoritesMobile, setShowAllFavoritesMobile] = useState(false);
+  const [favoritesExpandedMobile, setFavoritesExpandedMobile] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleteTargetSessionId, setDeleteTargetSessionId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const favorites = useMessageFavorites();
+  const visibleFavoritesMobile = showAllFavoritesMobile
+    ? favorites.items
+    : favorites.items.slice(0, FAVORITES_INITIAL_VISIBLE);
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -115,24 +142,68 @@ export function Header({
     }
   }, [mobileMenuOpen]);
 
+  useEffect(() => {
+    if (
+      favorites.items.length <= FAVORITES_INITIAL_VISIBLE &&
+      showAllFavoritesMobile
+    ) {
+      setShowAllFavoritesMobile(false);
+    }
+  }, [favorites.items.length, showAllFavoritesMobile]);
+
   // 删除会话
-  const handleDelete = async (sessionId: string, e: React.MouseEvent) => {
+  const requestDelete = (sessionId: string, e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    if (!confirm("确定要删除这个对话吗?")) return;
+    setDeleteTargetSessionId(sessionId);
+  };
 
+  const handleDeleteConfirm = async () => {
+    if (!deleteTargetSessionId) return;
     try {
+      setIsDeleting(true);
       const { token, error: authError } = await getClientAuthToken();
-      if (authError || !token) return;
+      if (authError || !token) {
+        toast.error(language === "zh" ? "请先登录" : "Please sign in first");
+        return;
+      }
 
-      await fetch(`/api/chat/sessions/${sessionId}`, {
+      const res = await fetch(`/api/chat/sessions/${deleteTargetSessionId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
 
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        const message =
+          payload?.error ||
+          (res.status === 404
+            ? language === "zh"
+              ? "对话不存在或无权限"
+              : "Chat not found or no permission"
+            : res.status === 401
+              ? language === "zh"
+                ? "登录状态已过期，请重新登录"
+                : "Session expired, please sign in again"
+              : language === "zh"
+                ? "删除失败"
+                : "Delete failed");
+        throw new Error(message);
+      }
+
+      toast.success(language === "zh" ? "删除成功" : "Deleted");
+      setDeleteTargetSessionId(null);
       loadSessions();
     } catch (error) {
       console.error("删除失败:", error);
-      toast.error("删除失败");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : language === "zh"
+            ? "删除失败"
+            : "Delete failed"
+      );
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -233,20 +304,35 @@ export function Header({
       </nav>
 
       <div className="flex items-center gap-1 sm:gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            toggleLanguage();
-          }}
-          className="hidden sm:flex items-center gap-1 text-xs sm:text-sm"
-          title={language === "zh" ? "English" : "中文"}
-        >
-          <Globe className="w-4 h-4 flex-shrink-0" />
-          <span className="hidden sm:inline">
-            {language === "zh" ? "EN" : "中文"}
-          </span>
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden sm:inline-flex"
+              title={language === "zh" ? "切换语言" : "Switch language"}
+              aria-label={language === "zh" ? "切换语言" : "Switch language"}
+            >
+              <Globe className="w-4 h-4 flex-shrink-0" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-32">
+            <DropdownMenuItem
+              onClick={() => setLanguage("zh")}
+              className="flex items-center justify-between"
+            >
+              <span>中文</span>
+              {language === "zh" && <Check className="h-4 w-4 text-blue-600" />}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => setLanguage("en")}
+              className="flex items-center justify-between"
+            >
+              <span>English</span>
+              {language === "en" && <Check className="h-4 w-4 text-blue-600" />}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {detectPlatform().type !== 'ios-app' && (
           <Button
@@ -294,45 +380,80 @@ export function Header({
                 {language === "zh" ? "暂无对话历史" : "No chat history"}
               </div>
             ) : (
-              <div className="space-y-1 py-2">
+              <div className="space-y-1 py-2 pr-2">
                 {/* 收藏对话（单条消息收藏） */}
                 <div className="px-1 pb-1">
-                  <div className="flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500">
-                    <span>{language === "zh" ? "收藏对话" : "Favorites"}</span>
-                    <span className="text-xs text-gray-400">{favorites.items.length}</span>
-                  </div>
+                  <button
+                    onClick={() => setFavoritesExpandedMobile((v) => !v)}
+                    className="w-full grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-2 pr-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors text-left"
+                  >
+                    <span className="truncate">
+                      {language === "zh" ? "收藏对话" : "Favorites"}
+                    </span>
+                    <span className="text-xs text-gray-400 tabular-nums justify-self-end">
+                      {favorites.items.length}
+                    </span>
+                    <span className="inline-flex h-5 w-5 items-center justify-center justify-self-end">
+                      {favoritesExpandedMobile ? (
+                        <ChevronUp className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                      )}
+                    </span>
+                  </button>
 
-                  {favorites.items.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-gray-400">
-                      {language === "zh" ? "暂无收藏" : "No favorites"}
-                    </div>
-                  ) : (
-                    <div className="space-y-1 mb-2">
-                      {favorites.items.map((fav) => {
-                        const sessionTitle =
-                          sessions.find((s) => s.id === fav.sessionId)?.title ||
-                          (language === "zh" ? "新对话" : "New Chat");
-                        return (
-                          <div
-                            key={fav.id}
-                            className="group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-blue-50 transition-colors"
-                            onClick={() => {
-                              if (!fav.sessionId) return;
-                              setPendingFavoriteScroll(fav.sessionId, fav.anchorId);
-                              handleSessionClick(fav.sessionId);
-                            }}
-                            title={fav.preview}
-                          >
-                            <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm truncate">{fav.preview || "(空)"}</div>
-                              <div className="text-[11px] truncate text-gray-500">{sessionTitle}</div>
+                  {favoritesExpandedMobile &&
+                    (favorites.items.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-gray-400">
+                        {language === "zh" ? "暂无收藏" : "No favorites"}
+                      </div>
+                    ) : (
+                      <div className="space-y-1 mb-2">
+                        {visibleFavoritesMobile.map((fav) => {
+                          const sessionTitle =
+                            sessions.find((s) => s.id === fav.sessionId)?.title ||
+                            (language === "zh" ? "新对话" : "New Chat");
+                          return (
+                            <div
+                              key={fav.id}
+                              className="group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-blue-50 transition-colors"
+                              onClick={() => {
+                                if (!fav.sessionId) return;
+                                setPendingFavoriteScroll(
+                                  fav.sessionId,
+                                  fav.anchorId,
+                                  fav.preview
+                                );
+                                handleSessionClick(fav.sessionId);
+                              }}
+                              title={fav.preview}
+                            >
+                              <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm truncate">{fav.preview || "(空)"}</div>
+                                <div className="text-[11px] truncate text-gray-500">{sessionTitle}</div>
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                          );
+                        })}
+                        {favorites.items.length > FAVORITES_INITIAL_VISIBLE && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full h-7 text-xs text-gray-600 hover:text-gray-900"
+                            onClick={() => setShowAllFavoritesMobile((v) => !v)}
+                          >
+                            {showAllFavoritesMobile
+                              ? language === "zh"
+                                ? "收起收藏"
+                                : "Collapse"
+                              : language === "zh"
+                                ? `显示更多（+${favorites.items.length - FAVORITES_INITIAL_VISIBLE}）`
+                                : `Show more (+${favorites.items.length - FAVORITES_INITIAL_VISIBLE})`}
+                          </Button>
+                        )}
+                      </div>
+                    ))}
                 </div>
 
                 {sessions.map((session) => (
@@ -350,7 +471,7 @@ export function Header({
                     </span>
                     <button
                       className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
-                      onClick={(e) => handleDelete(session.id, e)}
+                      onClick={(e) => requestDelete(session.id, e)}
                       title={language === "zh" ? "删除对话" : "Delete"}
                     >
                       <Trash2 className="h-3 w-3 text-gray-400" />
@@ -362,6 +483,42 @@ export function Header({
           </ScrollArea>
         </SheetContent>
       </Sheet>
+
+      <AlertDialog
+        open={Boolean(deleteTargetSessionId)}
+        onOpenChange={(open) => {
+          if (!open && !isDeleting) {
+            setDeleteTargetSessionId(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {language === "zh" ? "删除对话" : "Delete chat"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {language === "zh"
+                ? "删除后无法恢复，是否确认删除这个对话？"
+                : "This action cannot be undone. Delete this chat?"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>
+              {language === "zh" ? "取消" : "Cancel"}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm} disabled={isDeleting}>
+              {isDeleting
+                ? language === "zh"
+                  ? "删除中..."
+                  : "Deleting..."
+                : language === "zh"
+                  ? "确认删除"
+                  : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </header>
   );
 }

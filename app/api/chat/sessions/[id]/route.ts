@@ -70,12 +70,13 @@ export async function GET(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      return Response.json({ session });
+      const { messages: _messages, ...sessionWithoutMessages } = session;
+      return Response.json({ session: sessionWithoutMessages });
     } else {
       // 国际版：从 Supabase 获取
       const { data: session, error } = await supabaseAdmin
         .from("gpt_sessions")
-        .select("*")
+        .select("id, user_id, title, model, created_at, updated_at, multi_ai_config")
         .eq("id", sessionId)
         .eq("user_id", userId)
         .single();
@@ -123,7 +124,7 @@ export async function DELETE(
     // 删除会话（数据库的ON DELETE CASCADE会自动删除关联的消息）
     if (isChinaRegion()) {
       // 国内版：从 CloudBase 删除
-      const error = await deleteCloudBaseSession(sessionId, userId);
+      const { error } = await deleteCloudBaseSession(sessionId, userId);
       if (error) {
         console.error("Failed to delete session:", error);
         return Response.json(
@@ -157,7 +158,7 @@ export async function DELETE(
 
 /**
  * PATCH /api/chat/sessions/[id]
- * 更新会话（例如修改标题）
+ * 更新会话（例如修改标题、切换协作模式）
  */
 export async function PATCH(
   req: NextRequest,
@@ -185,7 +186,10 @@ export async function PATCH(
 
     // 解析请求体
     const body = await req.json();
-    const { title } = body;
+    const { title, collaborationMode } = body as {
+      title?: string;
+      collaborationMode?: "parallel" | "sequential" | "deep" | "graph";
+    };
 
     // 验证参数
     if (title !== undefined) {
@@ -204,11 +208,68 @@ export async function PATCH(
       }
     }
 
+    if (collaborationMode !== undefined) {
+      if (
+        collaborationMode !== "parallel" &&
+        collaborationMode !== "sequential" &&
+        collaborationMode !== "deep" &&
+        collaborationMode !== "graph"
+      ) {
+        return Response.json(
+          { error: "Invalid collaborationMode" },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (title === undefined && collaborationMode === undefined) {
+      return Response.json(
+        { error: "No updatable fields provided" },
+        { status: 400 }
+      );
+    }
+
     // 更新会话
     if (isChinaRegion()) {
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
+
+      const existingResult = await cloudbase
+        .collection("ai_conversations")
+        .doc(sessionId)
+        .get();
+
+      if (!existingResult.data || existingResult.data.length === 0) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      const existingSession = existingResult.data[0];
+      if (existingSession.user_id !== userId) {
+        return Response.json(
+          { error: "Session not found or access denied" },
+          { status: 404 }
+        );
+      }
+
+      const nextMultiAiConfig =
+        collaborationMode === undefined
+          ? undefined
+          : {
+              ...(existingSession.multi_ai_config || {}),
+              collaborationMode,
+              lockedAt: new Date().toISOString(),
+              lockedBy: userId,
+            };
+
       // 国内版：更新 CloudBase
-      const error = await updateCloudBaseSession(sessionId, userId, {
-        title: title?.trim(),
+      const { error } = await updateCloudBaseSession(sessionId, userId, {
+        ...(title !== undefined ? { title: title.trim() } : {}),
+        ...(nextMultiAiConfig ? { multi_ai_config: nextMultiAiConfig } : {}),
       });
 
       if (error) {
@@ -220,14 +281,6 @@ export async function PATCH(
       }
 
       // 返回更新后的会话
-      const cloudbase = require("@cloudbase/node-sdk")
-        .init({
-          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
-          secretId: process.env.CLOUDBASE_SECRET_ID,
-          secretKey: process.env.CLOUDBASE_SECRET_KEY,
-        })
-        .database();
-
       const result = await cloudbase
         .collection("ai_conversations")
         .doc(sessionId)
@@ -239,13 +292,40 @@ export async function PATCH(
 
       return Response.json({ session: result.data[0] });
     } else {
-      // 国际版：更新 Supabase
+      // 国际版：先读配置用于merge，然后更新 Supabase
+      const { data: existingSession, error: fetchError } = await supabaseAdmin
+        .from("gpt_sessions")
+        .select("multi_ai_config")
+        .eq("id", sessionId)
+        .eq("user_id", userId)
+        .single();
+
+      if (fetchError || !existingSession) {
+        console.error("Failed to fetch session before update:", fetchError);
+        return Response.json(
+          { error: "Session not found or access denied" },
+          { status: 404 }
+        );
+      }
+
+      const updatePayload: Record<string, unknown> = {
+        updated_at: new Date().toISOString(),
+      };
+      if (title !== undefined) {
+        updatePayload.title = title.trim();
+      }
+      if (collaborationMode !== undefined) {
+        updatePayload.multi_ai_config = {
+          ...(existingSession.multi_ai_config || {}),
+          collaborationMode,
+          lockedAt: new Date().toISOString(),
+          lockedBy: userId,
+        };
+      }
+
       const { data: session, error } = await supabaseAdmin
         .from("gpt_sessions")
-        .update({
-          title: title?.trim(),
-          updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", sessionId)
         .eq("user_id", userId)
         .select()

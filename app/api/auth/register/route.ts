@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getAuth, isAuthFeatureSupported } from "@/lib/auth/adapter";
 import { getDatabase } from "@/lib/database/adapter";
 import { passwordSecurity } from "@/lib/password-security";
 import { logSecurityEvent } from "@/lib/logger";
 import { createProfileFromEmailUser } from "@/lib/models/user";
 import { isChinaRegion } from "@/lib/config/region";
 import { z } from "zod";
+import { verifyEmailOtp } from "@/lib/email-otp";
+import { signupUser } from "@/lib/cloudbase-service";
+import { getOrCreateUserProfile } from "@/lib/cloudbase-user-profile";
 
 // 注册请求验证schema
 const registerSchema = z
@@ -18,6 +20,7 @@ const registerSchema = z
       .min(1, "Full name is required")
       .max(100, "Full name too long"),
     confirmPassword: z.string(),
+    signupOtp: z.string().optional(),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords do not match",
@@ -54,7 +57,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { email, password, fullName } = validationResult.data;
+    const { email, password, fullName, signupOtp } = validationResult.data;
+
+    if (isChinaRegion()) {
+      if (!signupOtp) {
+        return NextResponse.json(
+          {
+            error: "Signup OTP is required",
+            code: "OTP_REQUIRED",
+          },
+          { status: 400 }
+        );
+      }
+
+      const otpResult = await verifyEmailOtp(email, "signup", signupOtp);
+      if (!otpResult.success) {
+        return NextResponse.json(
+          {
+            error: otpResult.error || "Invalid OTP",
+            code: "OTP_INVALID",
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     // 验证密码强度（仅国际区域）
     // CN 区域由用户自己选择密码强度，不强制要求
@@ -94,32 +120,30 @@ export async function POST(request: NextRequest) {
     let authResponse;
 
     if (isChinaRegion()) {
-      // 中国区域：直接调用统一的 /api/auth 端点
-      const response = await fetch(
-        `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/auth`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "signup", email, password }),
-        }
-      );
+      const userAgent = request.headers.get("user-agent") || undefined;
+      const ipAddress = clientIP !== "unknown" ? clientIP : undefined;
+      const data = await signupUser(email, password, {
+        deviceInfo: userAgent || "web-signup",
+        ipAddress,
+        userAgent,
+      });
 
-      const data = await response.json();
-      if (data.success && data.user) {
+      if (data.success && data.userId) {
+        const profile = await getOrCreateUserProfile(data.userId, {
+          email,
+          name: fullName,
+        });
         authResponse = {
           user: {
-            id: data.user.id || data.user.userId,
-            email: data.user.email,
-            name: data.user.name,
-            avatar: data.user.avatar,
+            id: data.userId,
+            email,
+            name: profile?.name || fullName,
+            avatar: profile?.avatar || "",
           },
         };
       } else {
         // 处理特定错误
-        if (
-          data.message &&
-          (data.message.includes("已存在") || data.message.includes("exists"))
-        ) {
+        if (data.error && (data.error.includes("已存在") || data.error.includes("exists"))) {
           return NextResponse.json(
             {
               error: "Email already registered",
@@ -133,7 +157,7 @@ export async function POST(request: NextRequest) {
           {
             error: "Registration failed",
             code: "REGISTRATION_ERROR",
-            details: data.message || "注册失败",
+            details: data.error || "注册失败",
           },
           { status: 400 }
         );
@@ -190,7 +214,7 @@ export async function POST(request: NextRequest) {
     const userId = authResponse.user?.id;
 
     // 保存用户资料到数据库
-    if (userId) {
+    if (userId && !isChinaRegion()) {
       try {
         const db = getDatabase();
         const userProfile = createProfileFromEmailUser(userId, email, fullName);
@@ -213,7 +237,7 @@ export async function POST(request: NextRequest) {
           error: dbError instanceof Error ? dbError.message : "Unknown error",
         });
       }
-    } else {
+    } else if (userId) {
       logSecurityEvent("register_successful", userId, clientIP, {
         email,
         userId,
@@ -274,7 +298,6 @@ export async function GET(request: NextRequest) {
     const validation = passwordSecurity.validatePassword(password);
 
     return NextResponse.json({
-      password,
       strength: {
         score: validation.score,
         isValid: validation.isValid,

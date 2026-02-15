@@ -14,6 +14,7 @@ import { Separator } from "@/components/ui/separator";
 import { CreditCard, Smartphone, Loader2, AlertCircle } from "lucide-react";
 import { paymentRouter } from "@/lib/architecture-modules/layers/third-party/payment/router";
 import { getAuthClient } from "@/lib/auth/client";
+import { tokenManager } from "@/lib/frontend-token-manager";
 import { RegionType } from "@/lib/architecture-modules/core/types";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/components/language-provider";
@@ -27,6 +28,10 @@ interface PaymentFormProps {
   description: string;
   userId: string;
   region: RegionType;
+  productType?: "SUBSCRIPTION" | "ADDON" | "ONETIME";
+  addonPackageId?: string;
+  imageCredits?: number;
+  videoAudioCredits?: number;
   onSuccess: (result: any) => void;
   onError: (error: string) => void;
   currentSubscription?: {
@@ -43,6 +48,10 @@ export function PaymentForm({
   description,
   userId,
   region,
+  productType = "SUBSCRIPTION",
+  addonPackageId,
+  imageCredits,
+  videoAudioCredits,
   onSuccess,
   onError,
   currentSubscription,
@@ -96,16 +105,13 @@ export function PaymentForm({
       return;
     }
 
-    // 防止重复点击
     if (isProcessing) {
       console.warn("Payment already in progress, ignoring duplicate click");
       return;
     }
 
-    // 生成幂等性键（基于用户、计划、金额和时间戳）
-    const idempotencyKey = `${userId}-${planId}-${billingCycle}-${amount}-${Date.now()}`;
+    const idempotencyKey = `${userId}-${productType}-${planId}-${addonPackageId || ""}-${billingCycle}-${amount}-${Date.now()}`;
 
-    // 检查是否已有相同的支付请求正在处理
     if (paymentRequestRef.current === idempotencyKey) {
       console.warn(
         "Duplicate payment request with same idempotency key, ignoring"
@@ -113,7 +119,6 @@ export function PaymentForm({
       return;
     }
 
-    // 如果有正在进行的请求，先取消它
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -122,7 +127,6 @@ export function PaymentForm({
     setIsProcessing(true);
 
     try {
-      // 存储支付信息到本地存储，用于后续确认
       try {
         localStorage.setItem(
           "pending_payment",
@@ -133,46 +137,71 @@ export function PaymentForm({
             amount,
             currency,
             description,
+            productType,
+            addonPackageId,
+            imageCredits,
+            videoAudioCredits,
             idempotencyKey,
           })
         );
       } catch (e) {
-        // 忽略本地存储写入错误，不影响支付流程
         console.warn("pending_payment localStorage write failed", e);
       }
 
-      // 调用服务端API来创建支付
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      const TIMEOUT_MS = 20000; // 20s 超时，避免无限加载
+      const TIMEOUT_MS = 20000;
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
       console.time("create-payment");
-      // Attach authorization header if session exists
-      const sessionResult = await getAuthClient().getSession();
-      const token = sessionResult.data.session?.access_token;
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
+
+      const authHeaders = await tokenManager.getAuthHeaderAsync();
+      if (authHeaders?.Authorization) {
+        headers["Authorization"] = authHeaders.Authorization;
+      } else {
+        const sessionResult = await getAuthClient().getSession();
+        const rawToken = sessionResult.data.session?.access_token;
+        const token =
+          rawToken &&
+          rawToken !== "cached-session" &&
+          rawToken !== "cloudbase-session"
+            ? rawToken
+            : null;
+
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
       }
 
-      // 调用统一的支付创建API
+      if (!headers["Authorization"]) {
+        throw new Error(
+          language === "zh"
+            ? "登录状态已过期，请重新登录后支付"
+            : "Authentication expired. Please sign in again before payment"
+        );
+      }
+
       const response = await fetch("/api/payment/create", {
         method: "POST",
         headers,
         body: JSON.stringify({
           method: selectedMethod,
-          // 在 GoNative/Median 套壳内：仅微信可走 App 通道（拉起原生支付）。
-          // 支付宝强制走手机网站支付（H5/WAP）以避免 deeplink/原生通道。
           ...(selectedMethod === "wechat" && isGoNativeShell()
             ? { channel: "app" }
             : {}),
+          productType,
+          planId,
           billingCycle,
+          addonPackageId,
+          imageCredits,
+          videoAudioCredits,
         }),
         signal: controller.signal,
       });
+
       console.timeEnd("create-payment");
       clearTimeout(timeoutId);
       abortControllerRef.current = null;
@@ -180,12 +209,10 @@ export function PaymentForm({
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
 
-        // 处理特定的错误代码
         if (errorData.code === "DUPLICATE_SUBSCRIPTION") {
           throw new Error(t.payment.messages.failed);
         }
 
-        // 处理重复支付请求
         if (errorData.code === "DUPLICATE_PAYMENT_REQUEST") {
           throw new Error(
             language === "zh"
@@ -200,7 +227,6 @@ export function PaymentForm({
       const result = await response.json();
 
       if (result.success) {
-        // 记录 provider 返回的 paymentId，便于 App 场景下“从支付宝返回后”轮询确认
         try {
           const raw = localStorage.getItem("pending_payment");
           const existing = raw ? JSON.parse(raw) : {};
@@ -210,7 +236,6 @@ export function PaymentForm({
               ...existing,
               paymentId: result.paymentId,
               paymentMethod: selectedMethod,
-              // 仅在套壳环境下我们才会附加 channel=app
               channel:
                 selectedMethod === "wechat" && isGoNativeShell()
                   ? "app"
@@ -249,7 +274,6 @@ export function PaymentForm({
       });
     } finally {
       setIsProcessing(false);
-      // 清理幂等性键（延迟清理，确保快速重复点击被阻止）
       setTimeout(() => {
         paymentRequestRef.current = null;
       }, 3000);
@@ -286,7 +310,6 @@ export function PaymentForm({
       </CardHeader>
 
       <CardContent className="space-y-6">
-        {/* 当前订阅状态 */}
         {currentSubscription && currentSubscription.status === "active" && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <div className="flex items-center gap-2">
@@ -303,7 +326,6 @@ export function PaymentForm({
           </div>
         )}
 
-        {/* 订单摘要 */}
         <div className="bg-muted/50 p-4 rounded-lg">
           <h3 className="font-medium mb-2">{t.payment.orderSummary}</h3>
           <div className="space-y-1 text-sm">
@@ -319,7 +341,6 @@ export function PaymentForm({
           </div>
         </div>
 
-        {/* 支付方式选择 */}
         <div className="space-y-3">
           <h3 className="font-medium">
             {t.payment.methods ? "Payment Methods" : "Payment Methods"}
@@ -362,7 +383,6 @@ export function PaymentForm({
           </div>
         </div>
 
-        {/* 支付按钮 */}
         <Button
           className="w-full"
           size="lg"
@@ -381,7 +401,6 @@ export function PaymentForm({
           )}
         </Button>
 
-        {/* 安全提示 */}
         <div className="text-center text-sm text-muted-foreground">
           <div className="flex items-center justify-center gap-1">
             <CreditCard className="h-4 w-4" />

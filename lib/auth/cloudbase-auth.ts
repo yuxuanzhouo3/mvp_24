@@ -7,7 +7,7 @@
 
 import cloudbase from '@cloudbase/node-sdk'
 import bcrypt from 'bcryptjs'
-import * as jwt from 'jsonwebtoken'
+import { signAccessToken } from "@/lib/security/jwt";
 
 interface CloudBaseUser {
   _id?: string
@@ -59,12 +59,12 @@ export async function cloudbaseSignInWithEmail(
       return { success: false, message: '用户不存在或密码错误' }
     }
 
-    // 生成 JWT Token
-    const token = jwt.sign(
-      { userId: user._id, email: user.email, region: 'china' },
-      process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-      { expiresIn: user.pro ? '90d' : '30d' }
-    )
+    const token = signAccessToken({
+      userId: user._id,
+      email: user.email,
+      region: "CN",
+      source: "legacy-cloudbase-auth",
+    });
 
     return {
       success: true,
@@ -118,19 +118,23 @@ export async function cloudbaseSignUpWithEmail(
     }
 
     const result = await usersCollection.add(newUser)
+    const newUserId = result.id
+    if (!newUserId) {
+      throw new Error("Failed to get created user id");
+    }
 
-    // 生成 JWT Token
-    const token = jwt.sign(
-      { userId: result.id, email, region: 'china' },
-      process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-      { expiresIn: '30d' }
-    )
+    const token = signAccessToken({
+      userId: newUserId,
+      email,
+      region: "CN",
+      source: "legacy-cloudbase-auth",
+    });
 
     return {
       success: true,
       message: '注册成功',
       user: {
-        _id: result.id,
+        _id: newUserId,
         email,
         name: newUser.name,
         pro: false,
@@ -164,12 +168,12 @@ export async function cloudbaseRefreshToken(
 
     const user = userResult.data[0]
 
-    // 生成新的 JWT Token
-    const token = jwt.sign(
-      { userId: user._id, email: user.email, region: 'china' },
-      process.env.JWT_SECRET || 'fallback-secret-key-for-development-only',
-      { expiresIn: user.pro ? '90d' : '30d' }
-    )
+    const token = signAccessToken({
+      userId: user._id,
+      email: user.email,
+      region: "CN",
+      source: "legacy-cloudbase-auth",
+    });
 
     return { success: true, token, message: 'Token已刷新' }
   } catch (error) {

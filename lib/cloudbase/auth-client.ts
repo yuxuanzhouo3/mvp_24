@@ -45,28 +45,10 @@ export async function signupWithEmailCN(
   email: string,
   password: string
 ): Promise<SignupResponse> {
-  try {
-    const response = await fetch("/api/auth", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "signup",
-        email,
-        password,
-      }),
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("注册失败:", error);
-    return {
-      success: false,
-      message: "网络错误，请稍后重试",
-    };
-  }
+  return {
+    success: false,
+    message: "Sign up requires OTP. Please use /api/auth/register with signupOtp.",
+  };
 }
 
 /**
@@ -80,20 +62,24 @@ export async function loginWithEmailCN(
   password: string
 ): Promise<LoginResponse> {
   try {
-    const response = await fetch("/api/auth", {
+    const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        action: "login",
         email,
         password,
       }),
     });
 
     const data = await response.json();
-    return data;
+    return {
+      success: response.ok,
+      message: data.error || data.message || (response.ok ? "登录成功" : "登录失败"),
+      token: data.accessToken || data.token,
+      user: data.user,
+    };
   } catch (error) {
     console.error("登录失败:", error);
     return {

@@ -10,8 +10,9 @@ import { getWechatUserByCode } from "@/lib/wechat/token-exchange";
 import { isAuthFeatureSupported } from "@/lib/config";
 import { createRefreshToken } from "@/lib/refresh-token-manager";
 import { getCloudBaseApp } from "@/lib/cloudbase/init";
-import * as jwt from "jsonwebtoken";
 import { z } from "zod";
+import { signAccessToken } from "@/lib/security/jwt";
+import { setAuthCookies } from "@/lib/auth/cookies";
 
 // 微信登录请求验证schema
 const wechatLoginSchema = z.object({
@@ -70,7 +71,9 @@ export async function POST(request: NextRequest) {
     }
 
     // ✅ 第2步：用 code 换 access_token
-    logInfo("WeChat OAuth: exchanging code for access_token", { code });
+    logInfo("WeChat OAuth: exchanging code for access_token", {
+      codeLength: code.length,
+    });
 
     const appId = process.env.NEXT_PUBLIC_WECHAT_APP_ID;
     const appSecret = process.env.WECHAT_APP_SECRET;
@@ -151,9 +154,9 @@ export async function POST(request: NextRequest) {
       };
 
       const insertResult = await usersCollection.add(newUser);
-      userId = insertResult._id;
+      userId = insertResult.id || insertResult._id;
 
-      logSecurityEvent("wechat_user_created", userId, clientIP, {
+      logSecurityEvent("wechat_user_created", userId || undefined, clientIP, {
         openid,
         nickname: wechatUser.nickname,
       });
@@ -183,19 +186,12 @@ export async function POST(request: NextRequest) {
 
     // ✅ 第8步：生成 JWT tokens
     // 生成 access token (1 小时有效期)
-    const accessPayload = {
+    const accessToken = signAccessToken({
       userId,
       email: `wechat_${openid}@local.wechat`,
       region: "CN",
-    };
-
-    const accessToken = jwt.sign(
-      accessPayload,
-      process.env.JWT_SECRET || "fallback-secret-key-for-development-only",
-      {
-        expiresIn: "1h",
-      }
-    );
+      source: "wechat-oauth",
+    });
 
     logInfo("Generated access token for WeChat user", { userId });
 
@@ -217,7 +213,7 @@ export async function POST(request: NextRequest) {
     logInfo("Generated refresh token for WeChat user", { userId });
 
     // ✅ 第9步：返回登录成功 + tokens
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       accessToken,
       refreshToken,
@@ -233,6 +229,8 @@ export async function POST(request: NextRequest) {
         refreshTokenExpiresIn: 604800, // 7 days
       },
     });
+    setAuthCookies(response, accessToken, refreshToken);
+    return response;
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";

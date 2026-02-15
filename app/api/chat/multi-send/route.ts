@@ -17,6 +17,10 @@ import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { saveGptMessage as saveCloudBaseMessage } from "@/lib/cloudbase-db";
 import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
+import { resolveIntlUserPlan } from "@/lib/user-plan";
+import { appendSessionMessages } from "@/lib/chat-session-store";
+import { createMessageId } from "@/lib/chat/message-id";
+import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
 
 export const runtime = "nodejs";
 
@@ -91,12 +95,12 @@ export async function POST(req: NextRequest) {
       try {
         // 查询用户的订阅记录
         const subscriptionResult = await cloudbase
-          .collection("web_subscriptions")
+          .collection("subscriptions")
           .where({
             user_id: userId,
             status: "active",
           })
-          .orderBy("expire_time", "desc")
+          .orderBy("current_period_end", "desc")
           .limit(1)
           .get();
 
@@ -106,9 +110,9 @@ export async function POST(req: NextRequest) {
           subscriptionResult.data.length > 0
         ) {
           const subscription = subscriptionResult.data[0];
-          const expireTime = new Date(subscription.expire_time);
+          const expireTime = new Date(subscription.current_period_end);
           if (expireTime > new Date()) {
-            userPlan = subscription.plan_type || "free"; // "pro" 或其他类型
+            userPlan = "pro";
           }
         }
       } catch (err) {
@@ -117,13 +121,10 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // 国际版：从 Supabase 获取用户订阅状态
-      const { data: profile } = await supabaseAdmin
-        .from("user_profiles")
-        .select("subscription_plan")
-        .eq("id", userId)
-        .single();
-
-      userPlan = profile?.subscription_plan || "free";
+      userPlan = await resolveIntlUserPlan(
+        userId,
+        (authResult.user as any)?.user_metadata || {}
+      );
     }
 
     // 验证AI可用性
@@ -186,15 +187,7 @@ export async function POST(req: NextRequest) {
       } else {
         // 国际版：从 Supabase 的 gpt_sessions 表计数
         try {
-          const { data: sessions, error: sessionsError } = await supabaseAdmin
-            .from("gpt_sessions")
-            .select("messages")
-            .eq("user_id", userId);
-
-          if (sessions && !sessionsError && Array.isArray(sessions)) {
-            // 使用统一的计数函数
-            assistantMessageCount = countAssistantMessagesInMonth(sessions, startOfMonth);
-          }
+          assistantMessageCount = await countIntlAssistantMessagesSince(userId, startOfMonth);
         } catch (err) {
           console.error("Error checking usage limit:", err);
         }
@@ -246,7 +239,7 @@ export async function POST(req: NextRequest) {
       // 国际版：从 Supabase 获取
       const result = await supabaseAdmin
         .from("gpt_sessions")
-        .select("*")
+        .select("id, user_id")
         .eq("id", sessionId)
         .eq("user_id", userId)
         .single();
@@ -269,27 +262,18 @@ export async function POST(req: NextRequest) {
     } else {
       // 国际版：保存到 gpt_sessions.messages
       const userMsg = {
+        id: createMessageId("msg"),
         content: message,
         role: "user",
         timestamp: new Date().toISOString(),
         tokens_used: 0,
       };
 
-      const { data: sessionData } = await supabaseAdmin
-        .from("gpt_sessions")
-        .select("messages")
-        .eq("id", sessionId)
-        .eq("user_id", userId)
-        .single();
-
-      if (sessionData) {
-        const updatedMessages = [...(sessionData.messages || []), userMsg];
-        await supabaseAdmin
-          .from("gpt_sessions")
-          .update({ messages: updatedMessages })
-          .eq("id", sessionId)
-          .eq("user_id", userId);
-      }
+      await appendSessionMessages({
+        sessionId,
+        userId,
+        messages: [userMsg],
+      });
     }
 
     // 执行多AI协作
@@ -346,44 +330,37 @@ export async function POST(req: NextRequest) {
         } else {
           // 国际版：保存到 gpt_sessions.messages
           const aiMsg = {
+            id: createMessageId("msg"),
             content: response.content,
             role: "assistant",
             timestamp: new Date().toISOString(),
             tokens_used: response.tokens,
             agentName: response.agentName,
             agentId: response.agentId,
-            model: response.model,
+            model: response.model || getAgentById(response.agentId)?.model,
           };
 
-          const { data: sessionData } = await supabaseAdmin
-            .from("gpt_sessions")
-            .select("messages")
-            .eq("id", sessionId)
-            .eq("user_id", userId)
-            .single();
-
-          if (sessionData) {
-            const updatedMessages = [...(sessionData.messages || []), aiMsg];
-            await supabaseAdmin
-              .from("gpt_sessions")
-              .update({ messages: updatedMessages })
-              .eq("id", sessionId)
-              .eq("user_id", userId);
-          }
+          await appendSessionMessages({
+            sessionId,
+            userId,
+            messages: [aiMsg],
+          });
         }
 
         // 记录Token使用
-        const agent = getAgentById(response.agentId);
-        if (agent) {
-          await recordUsage({
-            userId,
-            sessionId,
-            model: agent.model,
-            promptTokens: Math.floor(response.tokens * 0.4),
-            completionTokens: Math.floor(response.tokens * 0.6),
-            totalTokens: response.tokens,
-            costUsd: response.cost,
-          });
+        if (!isChinaRegion()) {
+          const agent = getAgentById(response.agentId);
+          if (agent) {
+            await recordUsage({
+              userId,
+              sessionId,
+              model: response.model || agent.model,
+              promptTokens: Math.floor(response.tokens * 0.4),
+              completionTokens: Math.floor(response.tokens * 0.6),
+              totalTokens: response.tokens,
+              costUsd: response.cost,
+            });
+          }
         }
       }
     }
@@ -400,6 +377,7 @@ export async function POST(req: NextRequest) {
       } else {
         // 国际版：保存到 gpt_sessions.messages
         const synthesisMsg = {
+          id: createMessageId("msg"),
           content: result.synthesis,
           role: "assistant",
           timestamp: new Date().toISOString(),
@@ -407,21 +385,11 @@ export async function POST(req: NextRequest) {
           isMultiAI: true,
         };
 
-        const { data: sessionData } = await supabaseAdmin
-          .from("gpt_sessions")
-          .select("messages")
-          .eq("id", sessionId)
-          .eq("user_id", userId)
-          .single();
-
-        if (sessionData) {
-          const updatedMessages = [...(sessionData.messages || []), synthesisMsg];
-          await supabaseAdmin
-            .from("gpt_sessions")
-            .update({ messages: updatedMessages })
-            .eq("id", sessionId)
-            .eq("user_id", userId);
-        }
+        await appendSessionMessages({
+          sessionId,
+          userId,
+          messages: [synthesisMsg],
+        });
       }
     }
 
@@ -442,7 +410,8 @@ export async function POST(req: NextRequest) {
       await supabaseAdmin
         .from("gpt_sessions")
         .update({ updated_at: new Date().toISOString() })
-        .eq("id", sessionId);
+        .eq("id", sessionId)
+        .eq("user_id", userId);
     }
 
     // 返回结果
@@ -452,6 +421,7 @@ export async function POST(req: NextRequest) {
       responses: result.responses.map((r) => ({
         agentId: r.agentId,
         agentName: r.agentName,
+        model: r.model,
         content: r.content,
         tokens: r.tokens,
         cost: r.cost,
@@ -503,13 +473,38 @@ export async function GET(req: NextRequest) {
     const userId = authResult.userId;
 
     // 获取用户订阅
-    const { data: profile } = await supabaseAdmin
-      .from("user_profiles")
-      .select("subscription_plan")
-      .eq("id", userId)
-      .single();
+    let userPlan = "free";
+    if (isChinaRegion()) {
+      const cloudbase = require("@cloudbase/node-sdk")
+        .init({
+          env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
+          secretId: process.env.CLOUDBASE_SECRET_ID,
+          secretKey: process.env.CLOUDBASE_SECRET_KEY,
+        })
+        .database();
 
-    const userPlan = profile?.subscription_plan || "free";
+      const subscriptionResult = await cloudbase
+        .collection("subscriptions")
+        .where({
+          user_id: userId,
+          status: "active",
+        })
+        .orderBy("current_period_end", "desc")
+        .limit(1)
+        .get();
+
+      if (subscriptionResult.data && subscriptionResult.data.length > 0) {
+        const subscription = subscriptionResult.data[0];
+        if (new Date(subscription.current_period_end) > new Date()) {
+          userPlan = "pro";
+        }
+      }
+    } else {
+      userPlan = await resolveIntlUserPlan(
+        userId,
+        (authResult.user as any)?.user_metadata || {}
+      );
+    }
 
     // 导入AI配置
     const { getEnabledAgents, COLLABORATION_MODES } = await import(

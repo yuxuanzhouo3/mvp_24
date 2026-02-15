@@ -21,6 +21,7 @@ interface SubscriptionPlansProps {
   currentPlan?: string;
   currency?: string;
   onSwitchToPayment?: () => void;
+  membershipExpiresAt?: string | null;
 }
 
 // 订阅计划层级定义（从低到高）
@@ -36,6 +37,7 @@ export function SubscriptionPlans({
   currentPlan,
   currency = "USD",
   onSwitchToPayment,
+  membershipExpiresAt,
 }: SubscriptionPlansProps) {
   const { user } = useUser();
   const { language } = useLanguage();
@@ -45,12 +47,15 @@ export function SubscriptionPlans({
   // 获取用户当前订阅计划
   const userCurrentPlan = (user?.subscription_plan || "free").toLowerCase();
   const userCurrentLevel = PLAN_HIERARCHY[userCurrentPlan] ?? 0;
+  const hasActiveSubscription =
+    user?.hasActiveSubscription ?? user?.subscription_status === "active";
+  const displayMembershipExpiresAt = membershipExpiresAt || user?.membership_expires_at;
 
   // 检查计划是否可以选择
   const canSelectPlan = (planId: string): boolean => {
     if (planId === "free") return true;
     const planLevel = PLAN_HIERARCHY[planId.toLowerCase()] ?? 0;
-    if (user?.subscription_status === "active" && userCurrentPlan !== "free") {
+    if (hasActiveSubscription && userCurrentPlan !== "free") {
       return planLevel >= userCurrentLevel;
     }
     return true;
@@ -114,7 +119,7 @@ export function SubscriptionPlans({
   return (
     <div className="space-y-6">
       {/* 当前会员到期时间显示 */}
-      {user && user.membership_expires_at && (
+      {user && displayMembershipExpiresAt && (
         <Card className="border-blue-200 bg-blue-50">
           <CardContent className="pt-4">
             <div className="flex items-center gap-3">
@@ -122,7 +127,7 @@ export function SubscriptionPlans({
               <div>
                 <p className="font-medium text-blue-800">
                   {isZh ? "会员到期时间" : "Membership expires"}:{" "}
-                  {new Date(user.membership_expires_at).toLocaleDateString(
+                  {new Date(displayMembershipExpiresAt).toLocaleDateString(
                     isZh ? "zh-CN" : "en-US",
                     { year: "numeric", month: "long", day: "numeric" }
                   )}

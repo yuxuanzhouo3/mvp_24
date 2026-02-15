@@ -5,6 +5,7 @@ import { logSecurityEvent } from "@/lib/logger";
 import { z } from "zod";
 import { getOrCreateUserProfile } from "@/lib/cloudbase-user-profile";
 import { loginUser } from "@/lib/cloudbase-service";
+import { setAuthCookies } from "@/lib/auth/cookies";
 
 const loginSchema = z.object({
   email: z.string().email("Invalid email format"),
@@ -14,7 +15,10 @@ const loginSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const clientIP = request.headers.get("x-forwarded-for") || "unknown";
+    const clientIP =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown";
     const validationResult = loginSchema.safeParse(body);
     if (!validationResult.success) {
       logSecurityEvent("login_validation_failed", undefined, clientIP, {
@@ -34,8 +38,6 @@ export async function POST(request: NextRequest) {
       );
     }
     if (isChinaRegion()) {
-      console.log(" [/api/auth/login] China region login:", email);
-
       // ✅ 获取客户端信息（用于 refresh token 追踪）
       const userAgent = request.headers.get("user-agent") || undefined;
       const ipAddress = clientIP !== "unknown" ? clientIP : undefined;
@@ -69,7 +71,7 @@ export async function POST(request: NextRequest) {
       logSecurityEvent("login_success", userId, clientIP, { email });
 
       // ✅ 返回统一格式（包含正确的 access token 和 refresh token）
-      return NextResponse.json({
+      const response = NextResponse.json({
         accessToken: result.accessToken, // ✅ 短期 token (1小时)
         refreshToken: result.refreshToken, // ✅ 长期 token (7天，保存在腾讯云)
         user: {
@@ -84,6 +86,11 @@ export async function POST(request: NextRequest) {
         },
         tokenMeta: result.tokenMeta, // ✅ 直接使用返回的 token 元数据
       });
+
+      if (result.accessToken) {
+        setAuthCookies(response, result.accessToken, result.refreshToken);
+      }
+      return response;
     } else {
       return NextResponse.json(
         { error: "Not implemented for international region" },

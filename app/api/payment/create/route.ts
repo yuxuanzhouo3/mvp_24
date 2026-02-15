@@ -1,4 +1,4 @@
-// app/api/payment/create/route.ts - 统一支付创建API（支持订阅+一次性）
+// app/api/payment/create/route.ts - 统一支付创建API（支持订阅+加油包）
 import { NextRequest, NextResponse } from "next/server";
 import { PayPalProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/paypal-provider";
 import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/stripe-provider";
@@ -6,7 +6,7 @@ import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/pa
 import { WechatProviderV3 } from "@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
-import { getDatabase } from "@/lib/auth-utils";
+import { getDatabase } from "@/lib/cloudbase-service";
 import { isChinaRegion } from "@/lib/config/region";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
@@ -15,9 +15,23 @@ import {
   getPricingByMethod,
   getDaysByBillingCycle,
 } from "@/lib/payment-config";
+import { getAddonPackageById, getAddonDescription } from "@/constants/addon-packages";
 import type { PaymentMethod, BillingCycle } from "@/lib/payment-config";
 
 const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
+
+type ProductType = "SUBSCRIPTION" | "ADDON" | "ONETIME";
+
+interface CreatePaymentBody {
+  method: PaymentMethod;
+  billingCycle?: BillingCycle;
+  channel?: string;
+  productType?: ProductType;
+  planId?: string;
+  addonPackageId?: string;
+  imageCredits?: number;
+  videoAudioCredits?: number;
+}
 
 function detectAlipayProductMode(request: NextRequest): "wap" | "page" {
   const userAgent = request.headers.get("user-agent") || "";
@@ -25,7 +39,6 @@ function detectAlipayProductMode(request: NextRequest): "wap" | "page" {
 }
 
 export async function POST(request: NextRequest) {
-  // 应用速率限制
   return new Promise<NextResponse>((resolve) => {
     const mockRes = {
       status: (code: number) => ({
@@ -48,43 +61,54 @@ async function handlePaymentCreate(request: NextRequest) {
     .substr(2, 9)}`;
 
   try {
-    // 验证用户认证
     const authResult = await requireAuth(request);
     if (!authResult) {
       return createAuthErrorResponse();
     }
 
     const { user } = authResult;
-    const body = await request.json();
-    const { method, billingCycle, channel } = body as {
-      method: PaymentMethod;
-      billingCycle: BillingCycle;
-      channel?: string; // 可选："app" 触发原生支付
-    };
+    const body = (await request.json()) as CreatePaymentBody;
+
+    const {
+      method,
+      billingCycle,
+      channel,
+      productType = "SUBSCRIPTION",
+      addonPackageId,
+    } = body;
+
+    const normalizedProductType: "SUBSCRIPTION" | "ADDON" =
+      String(productType).toUpperCase() === "ADDON" ? "ADDON" : "SUBSCRIPTION";
+    const isAddon = normalizedProductType === "ADDON";
 
     logInfo("Creating payment", {
       operationId,
       userId: user.id,
       method,
       billingCycle,
+      productType: normalizedProductType,
+      addonPackageId,
     });
 
-    // 验证必需参数
-    if (!method || !billingCycle) {
-      logWarn("Missing required parameters", {
+    if (!method) {
+      logWarn("Missing payment method", {
         operationId,
         userId: user.id,
-        method,
-        billingCycle,
       });
       return NextResponse.json(
-        { success: false, error: "Missing payment method or billing cycle" },
+        { success: false, error: "Missing payment method" },
         { status: 400 }
       );
     }
 
-    // 验证 billingCycle
-    if (!["monthly", "yearly"].includes(billingCycle)) {
+    const pricing = getPricingByMethod(method);
+    const currency = pricing.currency;
+
+    const effectiveBillingCycle: BillingCycle = isAddon
+      ? "monthly"
+      : (billingCycle as BillingCycle);
+
+    if (!isAddon && !["monthly", "yearly"].includes(effectiveBillingCycle)) {
       return NextResponse.json(
         {
           success: false,
@@ -94,32 +118,65 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 使用统一的支付配置获取货币和金额
-    const pricing = getPricingByMethod(method);
-    const currency = pricing.currency;
-    const amount = pricing[billingCycle];
-    const days = getDaysByBillingCycle(billingCycle);
+    let amount = 0;
+    let days = 0;
+    let description = "";
+    let addonPackage:
+      | ReturnType<typeof getAddonPackageById>
+      | undefined;
 
-    // 检查最近1分钟内是否有相同的pending或completed支付(防止重复点击)
+    if (isAddon) {
+      if (!addonPackageId) {
+        return NextResponse.json(
+          { success: false, error: "Missing addonPackageId for addon purchase" },
+          { status: 400 }
+        );
+      }
+
+      addonPackage = getAddonPackageById(addonPackageId);
+      if (!addonPackage) {
+        return NextResponse.json(
+          { success: false, error: `Invalid addon package: ${addonPackageId}` },
+          { status: 400 }
+        );
+      }
+
+      amount = currency === "CNY" ? addonPackage.priceZh : addonPackage.price;
+      description = getAddonDescription(addonPackage, currency === "CNY");
+      days = 0;
+    } else {
+      amount = pricing[effectiveBillingCycle];
+      days = getDaysByBillingCycle(effectiveBillingCycle);
+      description = `${
+        effectiveBillingCycle === "monthly" ? "1 Month" : "1 Year"
+      } Premium Membership`;
+    }
+
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
     let recentPayments: any[] = [];
     let checkError: any = null;
 
     if (isChinaRegion()) {
-      // CloudBase 查询
       try {
         const db = getDatabase();
         const _ = db.command;
+        const wherePayload: any = {
+          user_id: user.id,
+          amount,
+          currency,
+          payment_method: method,
+          created_at: _.gte(oneMinuteAgo),
+          status: _.in(["pending", "completed"]),
+        };
+
+        if (isAddon && addonPackage) {
+          wherePayload.type = "ADDON";
+          wherePayload.addon_package_id = addonPackage.id;
+        }
+
         const result = await db
           .collection("payments")
-          .where({
-            user_id: user.id,
-            amount: amount,
-            currency: currency,
-            payment_method: method,
-            created_at: _.gte(oneMinuteAgo),
-            status: _.in(["pending", "completed"]),
-          })
+          .where(wherePayload)
           .orderBy("created_at", "desc")
           .limit(1)
           .get();
@@ -129,8 +186,7 @@ async function handlePaymentCreate(request: NextRequest) {
         checkError = error;
       }
     } else {
-      // Supabase 查询
-      const result = await supabaseAdmin
+      let query = supabaseAdmin
         .from("payments")
         .select("id, status, created_at")
         .eq("user_id", user.id)
@@ -141,6 +197,7 @@ async function handlePaymentCreate(request: NextRequest) {
         .in("status", ["pending", "completed"])
         .order("created_at", { ascending: false })
         .limit(1);
+      const result = await query;
 
       recentPayments = result.data || [];
       checkError = result.error;
@@ -160,7 +217,6 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 如果存在最近的支付,拒绝创建新订单
     if (recentPayments && recentPayments.length > 0) {
       const latestPayment = recentPayments[0];
       const paymentAge =
@@ -186,25 +242,34 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 创建支付订单数据
+    const metadata = isAddon
+      ? {
+          userId: user.id,
+          paymentType: "onetime",
+          productType: "ADDON",
+          productId: addonPackage!.id,
+          addonPackageId: addonPackage!.id,
+          imageCredits: addonPackage!.imageCredits,
+          videoAudioCredits: addonPackage!.videoAudioCredits,
+        }
+      : {
+          userId: user.id,
+          days,
+          paymentType: "onetime",
+          productType: "SUBSCRIPTION",
+          billingCycle: effectiveBillingCycle,
+        };
+
     const order = {
       amount,
       currency,
-      description: `${
-        billingCycle === "monthly" ? "1 Month" : "1 Year"
-      } Premium Membership`,
+      description,
       userId: user.id,
-      planType: "onetime",
-      billingCycle,
-      metadata: {
-        userId: user.id,
-        days,
-        paymentType: "onetime",
-        billingCycle,
-      },
+      planType: isAddon ? "addon" : "onetime",
+      billingCycle: effectiveBillingCycle,
+      metadata,
     };
 
-    // 根据支付方式创建支付
     let result;
 
     try {
@@ -213,6 +278,7 @@ async function handlePaymentCreate(request: NextRequest) {
           operationId,
           userId: user.id,
           amount,
+          productType: normalizedProductType,
         });
         const stripeProvider = new StripeProvider(process.env);
         result = await stripeProvider.createOnetimePayment(order);
@@ -221,6 +287,7 @@ async function handlePaymentCreate(request: NextRequest) {
           operationId,
           userId: user.id,
           amount,
+          productType: normalizedProductType,
         });
         const paypalProvider = new PayPalProvider(process.env);
         result = await paypalProvider.createOnetimePayment(order);
@@ -234,10 +301,9 @@ async function handlePaymentCreate(request: NextRequest) {
           amount,
           channel,
           productMode: alipayProductMode,
+          productType: normalizedProductType,
         });
         const alipayProvider = new AlipayProvider(process.env);
-        // 强制走手机网站支付（H5/WAP）。
-        // 说明：套壳 WebView 场景下，原生 deeplink (alipays://) 往往会被拦截/双弹，且你明确不走原生支付。
         if (channel === "app") {
           logWarn("Alipay channel=app ignored; forcing H5/WAP", {
             operationId,
@@ -254,6 +320,7 @@ async function handlePaymentCreate(request: NextRequest) {
           userId: user.id,
           amount,
           channel,
+          productType: normalizedProductType,
         });
 
         if (!isChinaRegion()) {
@@ -347,8 +414,8 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    // 记录到数据库
     if (result && result.success && result.paymentId) {
+      const nowIso = new Date().toISOString();
       const paymentData: any = {
         user_id: user.id,
         amount,
@@ -356,60 +423,56 @@ async function handlePaymentCreate(request: NextRequest) {
         status: "pending",
         payment_method: method,
         transaction_id: result.paymentId,
-        metadata: {
-          days,
-          paymentType: "onetime",
-          billingCycle,
-        },
+        type: isAddon ? "ADDON" : "SUBSCRIPTION",
+        description,
+        created_at: nowIso,
+        updated_at: nowIso,
+        metadata,
       };
 
-      if (method === "wechat") {
+      if (isAddon && addonPackage) {
+        paymentData.addon_package_id = addonPackage.id;
+        paymentData.image_credits = addonPackage.imageCredits;
+        paymentData.video_audio_credits = addonPackage.videoAudioCredits;
+      }
+
+      if (method === "wechat" || method === "alipay") {
         paymentData.out_trade_no = result.paymentId;
+      }
+
+      if (method === "wechat") {
         paymentData.client_type = channel === "app" ? "app" : "native";
-        if (result.codeUrl) {
-          paymentData.code_url = result.codeUrl;
+        const codeUrl = (result as any)?.codeUrl;
+        if (typeof codeUrl === "string" && codeUrl) {
+          paymentData.code_url = codeUrl;
         }
       }
 
       try {
         if (isChinaRegion()) {
           const db = getDatabase();
+          paymentData._id = result.paymentId;
           await db.collection("payments").add(paymentData);
         } else {
-          console.log("💾 Inserting payment data to Supabase:", {
-            transactionId: result.paymentId,
-            metadata: paymentData.metadata,
-          });
-
-          const { data: insertedPayment, error: paymentRecordError } =
-            await supabaseAdmin
-              .from("payments")
-              .insert([paymentData])
-              .select("id, metadata");
+          const { error: paymentRecordError } = await supabaseAdmin
+            .from("payments")
+            .insert([paymentData]);
 
           if (paymentRecordError) {
-            console.error("❌ Supabase insert error:", paymentRecordError);
             throw paymentRecordError;
           }
 
-          if (insertedPayment && insertedPayment.length > 0) {
-            const payment = insertedPayment[0];
-            console.log("✅ Payment record created with metadata:", {
-              paymentId: payment.id,
-              metadata: payment.metadata,
-            });
-            logInfo("Payment record created", {
-              operationId,
-              userId: user.id,
-              paymentId: payment.id,
-              transactionId: result.paymentId,
-              amount,
-              days,
-            });
-          }
+          logInfo("Payment record created", {
+            operationId,
+            userId: user.id,
+            transactionId: result.paymentId,
+            amount,
+            days,
+            productType: normalizedProductType,
+            addonPackageId: addonPackage?.id,
+          });
         }
       } catch (paymentRecordError) {
-        console.error("❌ Error recording payment:", paymentRecordError);
         logError(
           "Error recording payment",
           paymentRecordError instanceof Error
@@ -422,7 +485,17 @@ async function handlePaymentCreate(request: NextRequest) {
             amount,
             currency,
             method,
+            productType: normalizedProductType,
           }
+        );
+
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Failed to persist payment record",
+            code: "PAYMENT_RECORD_PERSIST_FAILED",
+          },
+          { status: 500 }
         );
       }
     }
@@ -441,10 +514,16 @@ async function handlePaymentCreate(request: NextRequest) {
       method,
       amount,
       days,
+      productType: normalizedProductType,
+      addonPackageId: addonPackage?.id,
       duration: `${duration}ms`,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      productType: normalizedProductType,
+      addonPackageId: addonPackage?.id,
+    });
   } catch (error) {
     const duration = Date.now() - startTime;
     logError("Payment creation error", error as Error, {

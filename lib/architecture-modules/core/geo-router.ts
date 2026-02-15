@@ -20,8 +20,13 @@ export class GeoRouter {
   private cache = new Map<string, { result: GeoResult; timestamp: number }>();
   private pendingRequests = new Map<string, Promise<GeoResult>>();
   private readonly CACHE_TTL = 1000 * 60 * 60; // 1小时缓存
-  private readonly REQUEST_TIMEOUT = 5000; // 5秒超时
-  private readonly MAX_RETRIES = 2;
+  private readonly REQUEST_TIMEOUT = 2000; // 2秒超时，避免前端长时间等待
+  private readonly MAX_RETRIES = 1;
+
+  private isRetryableHttpStatus(status: number): boolean {
+    // 5xx 和 429 可重试；其余4xx通常是参数/权限问题，无需重试
+    return status >= 500 || status === 429;
+  }
 
   /**
    * 检测IP并返回完整的地理路由配置
@@ -124,11 +129,12 @@ export class GeoRouter {
       );
 
       if (!response.ok) {
+        const retryable = this.isRetryableHttpStatus(response.status);
         throw new ArchitectureError(
           `HTTP ${response.status}: ${response.statusText}`,
           ErrorType.API_ERROR,
           "HTTP_ERROR",
-          true
+          retryable
         );
       }
 
@@ -183,11 +189,12 @@ export class GeoRouter {
       );
 
       if (!response.ok) {
+        const retryable = this.isRetryableHttpStatus(response.status);
         throw new ArchitectureError(
           `Fallback service HTTP ${response.status}`,
           ErrorType.API_ERROR,
           "FALLBACK_HTTP_ERROR",
-          true
+          retryable
         );
       }
 
@@ -239,11 +246,12 @@ export class GeoRouter {
       );
 
       if (!response.ok) {
+        const retryable = this.isRetryableHttpStatus(response.status);
         throw new ArchitectureError(
           `Third fallback service HTTP ${response.status}`,
           ErrorType.API_ERROR,
           "THIRD_FALLBACK_HTTP_ERROR",
-          true
+          retryable
         );
       }
 

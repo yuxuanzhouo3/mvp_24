@@ -11,7 +11,7 @@ import { isChinaRegion } from "@/lib/config/region";
 import { supabase } from "@/lib/supabase";
 import { normalizeTokenPayload, isTokenExpired } from "@/lib/token-normalizer";
 import cloudbase from "@cloudbase/node-sdk";
-import * as jwt from "jsonwebtoken";
+import { verifyAccessToken } from "@/lib/security/jwt";
 
 let cachedApp: any = null;
 
@@ -51,13 +51,9 @@ export async function verifyAuthToken(token: string): Promise<{
 
     if (region === "CN") {
       // 中国区域：CloudBase JWT 验证
-      // ✅ 使用 jwt.verify() 进行完整验证（不仅仅是解码）
       let payload: any;
       try {
-        payload = jwt.verify(
-          token,
-          process.env.JWT_SECRET || "fallback-secret-key-for-development-only"
-        );
+        payload = verifyAccessToken(token);
       } catch (error) {
         console.error("[Auth Utils] JWT verification failed:", error);
         return {
@@ -89,8 +85,11 @@ export async function verifyAuthToken(token: string): Promise<{
       // 验证用户是否存在
       const db = getCloudBaseApp().database();
       const res = await db.collection("web_users").doc(userId).get();
+      const userData = Array.isArray(res?.data)
+        ? res.data[0]
+        : (res?.data as any);
 
-      if (!res.data || res.data.length === 0) {
+      if (!userData) {
         return { success: false, error: "User not found", region };
       }
 
@@ -99,7 +98,7 @@ export async function verifyAuthToken(token: string): Promise<{
         userId,
         user: {
           id: userId,
-          ...res.data[0],
+          ...userData,
         },
         region,
       };

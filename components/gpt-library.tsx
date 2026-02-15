@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import { interpolate, useTranslations } from "@/lib/i18n";
-import { AVAILABLE_TEMPLATES, findTemplateById } from "@/lib/templates";
+import { AVAILABLE_TEMPLATES, type Template, type TemplateStep } from "@/lib/templates";
 
 // 使用新的 AI 配置 API 接口
 interface AIAgent {
@@ -150,11 +150,60 @@ export function GPTLibrary({
     return colors[provider] || "bg-gray-500";
   }
 
+  function mapStepToCapabilities(step: TemplateStep): string[] {
+    const text = `${step.role} ${step.task} ${step.requiredTags.join(" ")}`.toLowerCase();
+    const capabilities = new Set<string>();
+
+    if (/代码|开发|程序|架构|审查|coding|code/.test(text)) capabilities.add("coding");
+    if (/分析|逻辑|推理|策略|战略|市场|analysis/.test(text)) capabilities.add("analysis");
+    if (/创意|文案|写作|润色|creative|content/.test(text)) capabilities.add("creative");
+    if (/研究|调研|资料|research/.test(text)) capabilities.add("research");
+    if (/翻译|translation/.test(text)) capabilities.add("translation");
+    if (/对话|助手|conversation/.test(text)) capabilities.add("conversation");
+
+    return Array.from(capabilities);
+  }
+
+  function resolveTemplateAgentIds(template: Template): string[] {
+    const pickedIds: string[] = [];
+
+    for (const step of template.aiSequence) {
+      const exact = gptLibrary.find((agent) => agent.id === step.id);
+      if (exact && !pickedIds.includes(exact.id)) {
+        pickedIds.push(exact.id);
+        continue;
+      }
+
+      const needCaps = mapStepToCapabilities(step);
+      const ranked = gptLibrary
+        .filter((agent) => !pickedIds.includes(agent.id))
+        .map((agent) => {
+          const score = needCaps.reduce(
+            (acc, cap) => acc + (agent.capabilities?.includes(cap) ? 1 : 0),
+            0
+          );
+          return { agent, score };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      if (ranked[0] && ranked[0].score > 0) {
+        pickedIds.push(ranked[0].agent.id);
+      }
+    }
+
+    // 兜底：若模板步骤都无法匹配，至少给一个可用 AI，避免按钮无效
+    if (pickedIds.length === 0 && gptLibrary.length > 0) {
+      pickedIds.push(gptLibrary[0].id);
+    }
+
+    return pickedIds;
+  }
+
   const recommendedCombos = AVAILABLE_TEMPLATES.map((template) => ({
     id: template.id,
     name: template.name,
     description: template.description,
-    agentIds: [] as string[], // 模板功能暂时禁用
+    agentIds: resolveTemplateAgentIds(template),
   }));
 
   const filteredGPTs = gptLibrary.filter((gpt: any) => {
@@ -238,6 +287,10 @@ export function GPTLibrary({
       .filter(
         (gpt: any) => !selectedGPTs.find((selected) => selected.id === gpt.id)
       );
+
+    if (newGPTs.length === 0) {
+      return;
+    }
 
     if (selectedGPTs.length + newGPTs.length <= 4) {
       setSelectedGPTs([...selectedGPTs, ...newGPTs]);

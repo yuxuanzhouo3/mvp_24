@@ -19,16 +19,16 @@ export class CloudBaseAuthAdapter {
     password: string
   ): Promise<AuthResponse> {
     try {
-      const response = await fetch("/api/auth", {
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "login", email, password }),
+        body: JSON.stringify({ email, password }),
       });
 
       const data = await response.json();
-      return data.success
-        ? { user: data.user }
-        : { user: null, error: new Error(data.message) };
+      return response.ok && data.user
+        ? { user: data.user, session: { access_token: data.accessToken } }
+        : { user: null, error: new Error(data.error || data.message) };
     } catch (error) {
       return { user: null, error: error as Error };
     }
@@ -38,20 +38,12 @@ export class CloudBaseAuthAdapter {
     email: string,
     password: string
   ): Promise<AuthResponse> {
-    try {
-      const response = await fetch("/api/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "signup", email, password }),
-      });
-
-      const data = await response.json();
-      return data.success
-        ? { user: data.user }
-        : { user: null, error: new Error(data.message) };
-    } catch (error) {
-      return { user: null, error: error as Error };
-    }
+    return {
+      user: null,
+      error: new Error(
+        "Sign up requires OTP. Please use /api/auth/register with signupOtp."
+      ),
+    };
   }
 
   async signOut(): Promise<void> {

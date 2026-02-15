@@ -22,6 +22,26 @@ export interface SubscriptionUpdateResult {
   error?: string;
 }
 
+function getLatestSubscription(records: any[] | undefined): any | null {
+  if (!records || records.length === 0) {
+    return null;
+  }
+
+  const sorted = [...records].sort((a, b) => {
+    const aPeriodEnd = new Date(a?.current_period_end || 0).getTime();
+    const bPeriodEnd = new Date(b?.current_period_end || 0).getTime();
+    if (aPeriodEnd !== bPeriodEnd) {
+      return bPeriodEnd - aPeriodEnd;
+    }
+
+    const aUpdated = new Date(a?.updated_at || a?.created_at || 0).getTime();
+    const bUpdated = new Date(b?.updated_at || b?.created_at || 0).getTime();
+    return bUpdated - aUpdated;
+  });
+
+  return sorted[0] || null;
+}
+
 /**
  * 更新 CloudBase 订阅表（源数据）和 web_users（派生数据）
  * 支持订阅续期和新创建
@@ -55,14 +75,18 @@ export async function updateCloudbaseSubscription(
         .get();
 
       if (existingSubscription.data && existingSubscription.data.length > 0) {
-        const subscription = existingSubscription.data[0];
-        currentExpiresAt = new Date(subscription.current_period_end);
-        subscriptionId = subscription._id;
-        logInfo("Found existing subscription", {
-          userId,
-          subscriptionId,
-          currentExpiresAt: currentExpiresAt.toISOString(),
-        });
+        const subscription = getLatestSubscription(existingSubscription.data as any[]);
+        if (subscription) {
+          subscriptionId = subscription._id;
+          if (subscription.current_period_end) {
+            currentExpiresAt = new Date(subscription.current_period_end);
+          }
+          logInfo("Found existing subscription", {
+            userId,
+            subscriptionId,
+            currentExpiresAt: currentExpiresAt?.toISOString(),
+          });
+        }
       }
     } catch (error) {
       logError("Error fetching existing subscription", error as Error, {
@@ -106,8 +130,10 @@ export async function updateCloudbaseSubscription(
         };
 
         // 添加第三方平台的订阅ID和提供商信息
-        if (provider) {
+        if (thirdPartySubscriptionId) {
           updatePayload.provider_subscription_id = thirdPartySubscriptionId;
+        }
+        if (provider) {
           updatePayload.provider = provider;
         }
 
@@ -194,7 +220,7 @@ export async function updateCloudbaseSubscription(
 
     return {
       success: true,
-      subscriptionId,
+      subscriptionId: subscriptionId || undefined,
       expiresAt: newExpiresAt,
     };
   } catch (error) {

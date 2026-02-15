@@ -6,8 +6,9 @@ import { StripeProvider } from "@/lib/architecture-modules/layers/third-party/pa
 import { AlipayProvider } from "@/lib/architecture-modules/layers/third-party/payment/providers/alipay-provider";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { logBusinessEvent, logError, logSecurityEvent } from "@/lib/logger";
-import { getDatabase } from "@/lib/auth-utils";
+import { getDatabase } from "@/lib/cloudbase-service";
 import { isChinaRegion } from "@/lib/config/region";
+import { requireAuth, createAuthErrorResponse } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   // Apply payment rate limiting
@@ -33,6 +34,12 @@ async function handlePaymentContinue(request: NextRequest) {
     .substr(2, 9)}`;
 
   try {
+    const authResult = await requireAuth(request);
+    if (!authResult) {
+      return createAuthErrorResponse();
+    }
+
+    const { user } = authResult;
     const body = await request.json();
     const { paymentId } = body;
 
@@ -43,25 +50,7 @@ async function handlePaymentContinue(request: NextRequest) {
       );
     }
 
-    // 验证用户身份
-    const authHeader = request.headers.get("authorization");
-    if (!authHeader) {
-      logSecurityEvent(
-        "payment_continue_unauthorized",
-        undefined,
-        request.headers.get("x-forwarded-for") || "unknown",
-        {
-          operationId,
-          reason: "missing_authorization_header",
-        }
-      );
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
-
-    logBusinessEvent("payment_continue_requested", undefined, {
+    logBusinessEvent("payment_continue_requested", user.id, {
       operationId,
       paymentId,
     });
@@ -75,8 +64,20 @@ async function handlePaymentContinue(request: NextRequest) {
       try {
         const db = getDatabase();
         const result = await db.collection("payments").doc(paymentId).get();
-        if (result.data && result.data.length > 0) {
-          payment = result.data[0];
+        const row = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (row && row.user_id === user.id) {
+          payment = row;
+        } else if (row && row.user_id !== user.id) {
+          logSecurityEvent(
+            "payment_continue_forbidden",
+            user.id,
+            request.headers.get("x-forwarded-for") || "unknown",
+            {
+              operationId,
+              paymentId,
+              ownerUserId: row.user_id,
+            }
+          );
         }
       } catch (error) {
         fetchError = error;
@@ -87,6 +88,7 @@ async function handlePaymentContinue(request: NextRequest) {
         .from("payments")
         .select("*")
         .eq("id", paymentId)
+        .eq("user_id", user.id)
         .single();
 
       payment = data;

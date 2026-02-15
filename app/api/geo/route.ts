@@ -1,6 +1,45 @@
 import { NextResponse } from "next/server";
 import { geoRouter } from "@/lib/architecture-modules/core/geo-router";
 import { RegionType } from "@/lib/architecture-modules/core/types";
+import { getRegionFromCountryCode } from "@/lib/architecture-modules/utils/ip-detection";
+
+function mapRegionToRegionType(region: string): RegionType {
+  switch (region) {
+    case "china":
+      return RegionType.CHINA;
+    case "usa":
+      return RegionType.USA;
+    case "europe":
+      return RegionType.EUROPE;
+    case "india":
+      return RegionType.INDIA;
+    case "singapore":
+      return RegionType.SINGAPORE;
+    default:
+      return RegionType.OTHER;
+  }
+}
+
+function getCountryCodeFromHeaders(headers: Headers): string | null {
+  const candidates = [
+    headers.get("x-vercel-ip-country"),
+    headers.get("cf-ipcountry"),
+    headers.get("cloudfront-viewer-country"),
+    headers.get("x-country-code"),
+  ];
+
+  for (const code of candidates) {
+    if (!code) {
+      continue;
+    }
+    const normalized = code.trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(normalized)) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
 
 /**
  * 简单的Geo检测API
@@ -51,6 +90,17 @@ export async function GET(request: Request) {
 
     // 参考 middleware 中的获取逻辑，从请求头中读取可能的真实IP
     const headers = request.headers;
+
+    // 优先使用边缘平台注入的国家头，避免额外外部HTTP探测延迟
+    const countryCodeFromHeader = getCountryCodeFromHeaders(headers);
+    if (countryCodeFromHeader) {
+      return NextResponse.json({
+        region: mapRegionToRegionType(
+          getRegionFromCountryCode(countryCodeFromHeader)
+        ),
+        countryCode: countryCodeFromHeader,
+      });
+    }
 
     const realIP = headers.get("x-real-ip");
     const forwardedFor = headers.get("x-forwarded-for");

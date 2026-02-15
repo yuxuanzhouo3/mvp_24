@@ -350,9 +350,10 @@ export async function seedWalletForPlan(
     getUserWallet(userId),
     supabaseAdmin
       .from("subscriptions")
-      .select("*")
+      .select("plan, plan_id, expires_at, current_period_end, created_at")
       .eq("user_id", userId)
       .eq("status", "active")
+      .order("current_period_end", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
@@ -365,18 +366,21 @@ export async function seedWalletForPlan(
   let effectivePlan = (planLowerInput || "free").toLowerCase();
   let effectivePlanExp: string | null = null;
   if (activeSub) {
-    const subExpiresAt = activeSub.expires_at
-      ? new Date(activeSub.expires_at)
-      : null;
-    if (!subExpiresAt || subExpiresAt > now) {
-      effectivePlan = (activeSub.plan || "free").toLowerCase();
-      effectivePlanExp = activeSub.expires_at || null;
+    const subExpiresAtRaw =
+      activeSub.expires_at || activeSub.current_period_end || null;
+    const subExpiresAt = subExpiresAtRaw ? new Date(subExpiresAtRaw) : null;
+    const hasValidDate =
+      !!subExpiresAt && Number.isFinite(subExpiresAt.getTime());
+    if (!hasValidDate || (subExpiresAt && subExpiresAt > now)) {
+      effectivePlan = (activeSub.plan || activeSub.plan_id || "pro").toLowerCase();
+      effectivePlanExp = subExpiresAtRaw;
     } else {
       console.warn(`[wallet] active subscription expired for user ${userId}`);
     }
   }
   if (options?.expired) {
     effectivePlan = "free";
+    effectivePlanExp = null;
   }
 
   const isFreePlan = effectivePlan === "free";

@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Download,
@@ -11,9 +10,6 @@ import {
   FileText,
   Mail,
   MessageCircle,
-  Webhook,
-  Settings,
-  CheckCircle,
   History,
   Calendar,
   MessageSquare,
@@ -1451,49 +1447,6 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
           </Button>
         </Card>
 
-        {/* API Integration */}
-        <Card className="p-6">
-          <h3 className="font-semibold text-lg mb-4">
-            {t.export.apiIntegration}
-          </h3>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center space-x-3">
-                <Webhook className="w-5 h-5 text-gray-600" />
-                <div>
-                  <div className="font-medium">
-                    {t.export.shareChannels.webhook}
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    {t.export.webhookDesc}
-                  </div>
-                </div>
-              </div>
-              <Button variant="outline" size="sm">
-                <Settings className="w-4 h-4 mr-2" />
-                {t.export.configure}
-              </Button>
-            </div>
-
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center space-x-3">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-                <div>
-                  <div className="font-medium">{t.export.autoSave}</div>
-                  <div className="text-sm text-gray-500">
-                    {t.export.autoSaveDesc}
-                  </div>
-                </div>
-              </div>
-              <Badge
-                variant="secondary"
-                className="bg-green-100 text-green-800"
-              >
-                {t.export.enabled}
-              </Badge>
-            </div>
-          </div>
-        </Card>
       </div>
     </div>
   );

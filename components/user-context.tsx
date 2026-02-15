@@ -30,6 +30,11 @@ export interface UserProfile {
   subscription_status?: string;
   subscription_expires_at?: string;
   membership_expires_at?: string;
+  subscription_tier?: string;
+  plan_exp?: string | null;
+  isPaid?: boolean;
+  hasActiveSubscription?: boolean;
+  hide_ads?: boolean;
 }
 
 interface UserContextType {
@@ -46,6 +51,31 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAuthInitialized, setIsAuthInitialized] = useState(false);
+
+  const mapSupabaseUserToProfile = useCallback((supabaseUser: any): UserProfile => {
+    return {
+      id: supabaseUser.id,
+      email: supabaseUser.email || "",
+      name:
+        supabaseUser.user_metadata?.displayName ||
+        supabaseUser.user_metadata?.full_name ||
+        "",
+      avatar: supabaseUser.user_metadata?.avatar || "",
+    };
+  }, []);
+
+  const readSupabaseSessionUser = useCallback(async (): Promise<UserProfile | null | undefined> => {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      // undefined 表示“临时读取失败”，调用方应保留当前用户，避免误登出
+      console.warn("⚠️ [Auth INTL] Supabase getSession 临时失败:", error);
+      return undefined;
+    }
+    if (!data?.session?.user) {
+      return null;
+    }
+    return mapSupabaseUserToProfile(data.session.user);
+  }, [mapSupabaseUserToProfile]);
 
   const signOut = useCallback(async () => {
     try {
@@ -133,25 +163,14 @@ export function UserProvider({ children }: { children: ReactNode }) {
           } else {
             // 缓存miss，从 Supabase 读取
             console.log("🔍 [Auth] 缓存未命中，从 Supabase 读取 session...");
-            const { data, error } = await supabase.auth.getSession();
-            if (error) {
-              console.error("❌ [Auth] Supabase getSession 失败:", error);
-            } else if (data?.session?.user) {
+            const sessionUser = await readSupabaseSessionUser();
+            if (sessionUser === undefined) {
+              console.warn("⚠️ [Auth] 初始化阶段读取会话失败，保留当前状态");
+            } else if (sessionUser) {
               console.log(
-                `✅ [Auth] 从 Supabase 恢复用户: ${data.session.user.email}`
+                `✅ [Auth] 从 Supabase 恢复用户: ${sessionUser.email}`
               );
-              // 转换 Supabase 用户为 UserProfile 格式
-              authState = {
-                user: {
-                  id: data.session.user.id,
-                  email: data.session.user.email || "",
-                  name:
-                    data.session.user.user_metadata?.displayName ||
-                    data.session.user.user_metadata?.full_name ||
-                    "",
-                  avatar: data.session.user.user_metadata?.avatar || "",
-                },
-              };
+              authState = { user: sessionUser };
             }
           }
         }
@@ -183,10 +202,19 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     // 异步执行初始化
     initializeAuth();
-  }, []);
+  }, [readSupabaseSessionUser]);
 
   // P1：多标签页同步（监听 storage 事件）
   useEffect(() => {
+    const syncFromSupabaseSession = async (source: string) => {
+      const sessionUser = await readSupabaseSessionUser();
+      if (sessionUser === undefined) {
+        console.warn(`⚠️ [Auth INTL] ${source} 会话校验失败，保留当前登录状态`);
+        return;
+      }
+      setUser(sessionUser);
+    };
+
     const handleStorageChange = (event: StorageEvent) => {
       if (isChinaRegion()) {
         // 国内版：监听 app-auth-state
@@ -211,17 +239,19 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (event.key === "supabase-user-cache") {
           console.log("📡 [Auth INTL] 检测到其他标签页的用户信息变化");
           if (!event.newValue) {
-            setUser(null);
+            void syncFromSupabaseSession("storage:cache-cleared");
           } else {
             try {
               const cache = JSON.parse(event.newValue);
               if (cache.user) {
                 setUser(cache.user as UserProfile);
                 console.log("✅ [Auth INTL] 从其他标签页同步用户信息");
+              } else {
+                void syncFromSupabaseSession("storage:cache-missing-user");
               }
             } catch (error) {
               console.error("❌ [Auth INTL] 解析跨标签页数据失败:", error);
-              setUser(null);
+              void syncFromSupabaseSession("storage:cache-parse-error");
             }
           }
         }
@@ -230,10 +260,19 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener("storage", handleStorageChange);
     return () => window.removeEventListener("storage", handleStorageChange);
-  }, []);
+  }, [readSupabaseSessionUser]);
 
   // P1：自定义事件监听（同标签页内 auth 状态变化）
   useEffect(() => {
+    const syncFromSupabaseSession = async (source: string) => {
+      const sessionUser = await readSupabaseSessionUser();
+      if (sessionUser === undefined) {
+        console.warn(`⚠️ [Auth INTL] ${source} 会话校验失败，保留当前登录状态`);
+        return;
+      }
+      setUser(sessionUser);
+    };
+
     const handleAuthStateChanged = async () => {
       console.log("🔔 [Auth] 检测到认证状态变化");
 
@@ -246,24 +285,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           setUser(null);
         }
       } else {
-        // INTL：从 Supabase 读取
-        const { data, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error("❌ [Auth] Supabase getSession 失败:", error);
-          setUser(null);
-        } else if (data?.session?.user) {
-          setUser({
-            id: data.session.user.id,
-            email: data.session.user.email || "",
-            name:
-              data.session.user.user_metadata?.displayName ||
-              data.session.user.user_metadata?.full_name ||
-              "",
-            avatar: data.session.user.user_metadata?.avatar || "",
-          });
-        } else {
-          setUser(null);
-        }
+        await syncFromSupabaseSession("auth-state-changed");
       }
     };
 
@@ -273,7 +295,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
       if (event.detail) {
         setUser(event.detail as UserProfile);
       } else {
-        setUser(null);
+        void syncFromSupabaseSession("supabase-user-changed");
       }
     };
 
@@ -295,7 +317,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         );
       }
     };
-  }, []);
+  }, [readSupabaseSessionUser]);
 
   // INTL：Supabase 认证状态变化监听器
   useEffect(() => {
@@ -304,31 +326,34 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
       const {
         data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
+      } = supabase.auth.onAuthStateChange(async (event: string, session: { user?: any } | null) => {
         console.log(`🔔 [Auth] Supabase 认证事件: ${event}`);
 
         if (session?.user) {
           console.log(`✅ [Auth] Supabase 用户登录: ${session.user.email}`);
-          setUser({
-            id: session.user.id,
-            email: session.user.email || "",
-            name:
-              session.user.user_metadata?.displayName ||
-              session.user.user_metadata?.full_name ||
-              "",
-            avatar: session.user.user_metadata?.avatar || "",
-          });
-        } else {
+          setUser(mapSupabaseUserToProfile(session.user));
+          return;
+        }
+
+        if (event === "SIGNED_OUT" || event === "USER_DELETED") {
           console.log("❌ [Auth] Supabase 用户登出");
           setUser(null);
+          return;
         }
+
+        const sessionUser = await readSupabaseSessionUser();
+        if (sessionUser === undefined) {
+          console.warn(`⚠️ [Auth INTL] 事件 ${event} 会话读取失败，保留当前登录状态`);
+          return;
+        }
+        setUser(sessionUser);
       });
 
       return () => {
         subscription?.unsubscribe();
       };
     }
-  }, []);
+  }, [mapSupabaseUserToProfile, readSupabaseSessionUser]);
 
   const contextValue = useMemo(
     () => ({ user, loading, isAuthInitialized, signOut, refreshUser }),
