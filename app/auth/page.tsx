@@ -226,7 +226,7 @@ function AuthPageContent() {
         setLoading(false);
       }
     },
-    [hasChinaPrivacyConsent, loading, refreshUser, router, userRegion]
+    [hasChinaPrivacyConsent, loading, refreshUser, userRegion]
   );
 
   // 监听 URL 中的 mpCode (小程序回传)
@@ -586,6 +586,26 @@ function AuthPageContent() {
     }
   };
 
+  const startWechatOAuthLogin = useCallback(() => {
+    if (!wechatAppId) {
+      setError("微信应用 ID 未配置");
+      setLoading(false);
+      return false;
+    }
+
+    if (!appUrl) {
+      setError("应用 URL 未配置");
+      setLoading(false);
+      return false;
+    }
+
+    // 使用 NEXT_PUBLIC_APP_URL 确保与微信开放平台配置的域名一致
+    const redirectUri = `${appUrl}/auth/callback`;
+    const wechatLoginUrl = getWechatLoginUrl(wechatAppId, redirectUri);
+    window.location.href = wechatLoginUrl;
+    return true;
+  }, [appUrl, wechatAppId]);
+
   const handleWechatSignIn = async () => {
     if (loading) return;
     if (!hasChinaPrivacyConsent()) {
@@ -604,10 +624,26 @@ function AuthPageContent() {
 
       const callbackName = "__wechatNativeAuthCallback";
       nativeWechatCallbackRef.current = callbackName;
+      let fallbackTimer: ReturnType<typeof window.setTimeout> | null = null;
+      let callbackHandled = false;
+
+      const clearNativeCallback = () => {
+        if (fallbackTimer !== null) {
+          window.clearTimeout(fallbackTimer);
+          fallbackTimer = null;
+        }
+        if ((window as any)[callbackName]) {
+          delete (window as any)[callbackName];
+        }
+        if (nativeWechatCallbackRef.current === callbackName) {
+          nativeWechatCallbackRef.current = null;
+        }
+      };
 
       (window as any)[callbackName] = async (payload: any) => {
+        callbackHandled = true;
+        clearNativeCallback();
         console.log("[login] 收到原生微信登录回调:", payload);
-        nativeWechatCallbackRef.current = null;
 
         if (!payload || typeof payload !== "object") {
           setError("微信登录失败：无效回调");
@@ -629,6 +665,17 @@ function AuthPageContent() {
       const scheme = `wechat-login://start?callback=${encodeURIComponent(callbackName)}`;
       console.log("[login] 发起原生微信登录, scheme:", scheme);
       window.location.href = scheme;
+
+      // 某些网页环境会被误判为 android-app，scheme 调用会静默失败，此时自动回退 OAuth。
+      fallbackTimer = window.setTimeout(() => {
+        const stillWaiting = nativeWechatCallbackRef.current === callbackName;
+        const pageVisible = document.visibilityState === "visible";
+        if (!callbackHandled && stillWaiting && pageVisible) {
+          console.warn("[login] 原生微信登录未接管，回退到网页 OAuth 登录");
+          clearNativeCallback();
+          startWechatOAuthLogin();
+        }
+      }, 1200);
       return;
     }
 
@@ -668,28 +715,9 @@ function AuthPageContent() {
     setError("");
 
     try {
-      // 直接使用环境变量中的配置
-
-      if (!wechatAppId) {
-        setError("微信应用 ID 未配置");
-        setLoading(false);
-        return;
-      }
-
-      if (!appUrl) {
-        setError("应用 URL 未配置");
-        setLoading(false);
-        return;
-      }
-
-      // 获取微信登录 URL
-      // 使用 NEXT_PUBLIC_APP_URL 确保与微信开放平台配置的域名一致
-      const redirectUri = `${appUrl}/auth/callback`;
-      const wechatLoginUrl = getWechatLoginUrl(wechatAppId, redirectUri);
-
       // ✅ 直接跳转到微信登录页面（标准 OAuth2 流程）
       // 用户看到二维码，扫码授权后自动回调到 /auth/callback
-      window.location.href = wechatLoginUrl;
+      startWechatOAuthLogin();
     } catch (err) {
       if (err instanceof Error) {
         setError(err.message);

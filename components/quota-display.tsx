@@ -7,7 +7,6 @@ import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { Zap } from "lucide-react";
-import { detectPlatform } from "@/lib/platform-detection";
 
 type UsagePayload = {
   used: number;
@@ -82,13 +81,14 @@ export function QuotaDisplay() {
     );
   }
 
-  const showTextQuota = usage.limit > 0 && usage.limit < 999999;
+  const showConversationQuota = usage.limit > 0;
   const multimodal = usage.multimodal || null;
-  const showMultimodalQuota =
-    !!multimodal &&
-    (multimodal.image.limit > 0 || multimodal.videoAudio.limit > 0);
+  const showImageQuota = !!multimodal && multimodal.image.limit > 0;
+  const showVideoAudioQuota =
+    !!multimodal && multimodal.videoAudio.limit > 0;
+  const showMultimodalQuota = showImageQuota || showVideoAudioQuota;
 
-  if (!showTextQuota && !showMultimodalQuota) {
+  if (!showConversationQuota && !showImageQuota && !showVideoAudioQuota) {
     return (
       <div className="text-xs text-muted-foreground">
         {language === "zh"
@@ -98,78 +98,119 @@ export function QuotaDisplay() {
     );
   }
 
-  const percentage =
-    usage.limit > 0 ? Math.min(100, (usage.used / usage.limit) * 100) : 0;
-  const isLow = usage.limit - usage.used <= 10;
+  const isConversationUnlimited = usage.limit >= 999999;
+  const conversationPercentage = isConversationUnlimited
+    ? 100
+    : usage.limit > 0
+      ? Math.min(100, (usage.used / usage.limit) * 100)
+      : 0;
+  const isConversationLow =
+    !isConversationUnlimited && usage.limit - usage.used <= 10;
   const imagePercentage =
-    multimodal && multimodal.image.limit > 0
+    multimodal && showImageQuota
       ? Math.min(100, (multimodal.image.used / multimodal.image.limit) * 100)
       : 0;
   const videoPercentage =
-    multimodal && multimodal.videoAudio.limit > 0
+    multimodal && showVideoAudioQuota
       ? Math.min(
           100,
           (multimodal.videoAudio.used / multimodal.videoAudio.limit) * 100
         )
       : 0;
+  const isImageLow = !!multimodal && showImageQuota && multimodal.image.remaining <= 3;
+  const isVideoAudioLow =
+    !!multimodal &&
+    showVideoAudioQuota &&
+    multimodal.videoAudio.remaining <= 1;
+  const isMultimodalLow = isImageLow || isVideoAudioLow;
+
+  const multimodalRiskHint = (() => {
+    if (!multimodal || !isMultimodalLow) return "";
+    const items: string[] = [];
+    if (isImageLow && showImageQuota) {
+      items.push(
+        language === "zh"
+          ? `图片剩余 ${multimodal.image.remaining}`
+          : `images remaining ${multimodal.image.remaining}`
+      );
+    }
+    if (isVideoAudioLow && showVideoAudioQuota) {
+      items.push(
+        language === "zh"
+          ? `视频/音频剩余 ${multimodal.videoAudio.remaining}`
+          : `video/audio remaining ${multimodal.videoAudio.remaining}`
+      );
+    }
+    if (language === "zh") {
+      return `风险提示：${items.join("，")}，请及时补充额度。`;
+    }
+    return `Risk alert: ${items.join(", ")}. Please top up in time.`;
+  })();
 
   return (
     <div className="space-y-3">
-      {showTextQuota && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5">
-              <Zap
-                className={`w-3.5 h-3.5 ${
-                  isLow ? "text-orange-500 animate-pulse" : "text-blue-500"
-                }`}
-              />
-              <span className="font-medium text-muted-foreground uppercase tracking-wider">
-                {t.workspace.quotaUsage}
-              </span>
-            </div>
-            <span className={`font-bold ${isLow ? "text-orange-600" : "text-foreground"}`}>
-              {usage.used}/{usage.limit}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5">
+            <Zap
+              className={`w-3.5 h-3.5 ${
+                isConversationLow ? "text-orange-500 animate-pulse" : "text-blue-500"
+              }`}
+            />
+            <span className="font-medium text-muted-foreground uppercase tracking-wider">
+              {t.workspace.quotaUsage}
             </span>
           </div>
-          <Progress value={percentage} className="h-1.5 w-full" />
-          {detectPlatform().type !== "ios-app" && (
-            <p className="text-[10px] text-muted-foreground leading-tight">
-              {language === "zh"
-                ? "免费版每月限额 50 条。升级 Pro 解锁无限额度。"
-                : "Free tier limited to 50/mo. Upgrade to Pro for unlimited."}
-            </p>
-          )}
         </div>
-      )}
 
-      {showMultimodalQuota && multimodal && (
-        <div className="space-y-2 border-t border-border/60 pt-2">
-          <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-            {language === "zh" ? "多模态额度" : "Multimodal Quota"}
+        {showConversationQuota && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11px]">
+              <span>{language === "zh" ? "对话" : "Conversation"}</span>
+              <span
+                className={`font-semibold ${
+                  isConversationLow ? "text-orange-600" : "text-foreground"
+                }`}
+              >
+                {usage.used}/{isConversationUnlimited ? "∞" : usage.limit}
+              </span>
+            </div>
+            <Progress value={conversationPercentage} className="h-1.5 w-full" />
           </div>
+        )}
 
+        {showImageQuota && multimodal && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px]">
               <span>{language === "zh" ? "图片" : "Images"}</span>
-              <span>
+              <span className={isImageLow ? "font-semibold text-orange-600" : "font-semibold"}>
                 {multimodal.image.used}/{multimodal.image.limit}
               </span>
             </div>
             <Progress value={imagePercentage} className="h-1.5 w-full" />
           </div>
+        )}
 
+        {showVideoAudioQuota && multimodal && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px]">
               <span>{language === "zh" ? "视频/音频" : "Video/Audio"}</span>
-              <span>
+              <span
+                className={isVideoAudioLow ? "font-semibold text-orange-600" : "font-semibold"}
+              >
                 {multimodal.videoAudio.used}/{multimodal.videoAudio.limit}
               </span>
             </div>
             <Progress value={videoPercentage} className="h-1.5 w-full" />
           </div>
-        </div>
-      )}
+        )}
+
+        {showMultimodalQuota && multimodalRiskHint && (
+          <p className="text-[10px] text-orange-600 leading-tight font-medium">
+            {multimodalRiskHint}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

@@ -145,7 +145,8 @@ export function ChatHistorySidebar({
 
       const { token, error: authError } = await getClientAuthToken();
       if (authError || !token) {
-        console.error("未登录:", authError);
+        // 未登录/令牌过期属于预期状态，不应作为错误上报到控制台
+        setSessions([]);
         return;
       }
 

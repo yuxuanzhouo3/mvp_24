@@ -7,7 +7,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -15,15 +20,17 @@ import { Badge } from "@/components/ui/badge";
 import {
   User,
   Settings,
-  CreditCard,
   LogOut,
   LogIn,
   UserPlus,
   Crown,
+  Monitor,
+  Moon,
+  Sun,
   Trash2,
   RefreshCw,
 } from "lucide-react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useUser } from "./user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
@@ -35,10 +42,10 @@ import {
   restoreSavedAuthState,
   removeSavedAccount,
 } from "@/lib/auth-state-manager";
+import { useTheme } from "next-themes";
 
 export function UserMenu() {
   const router = useRouter();
-  const pathname = usePathname();
   const { user, loading, refreshUser, signOut } = useUser();
   const iapFeatureEnabled = isAppleIAPEnabled();
   const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus(
@@ -46,9 +53,18 @@ export function UserMenu() {
   );
   const [isLoading, setIsLoading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const { theme, setTheme } = useTheme();
   const { language } = useLanguage();
   const t = useTranslations(language);
   const [savedAccounts, setSavedAccounts] = useState<any[]>([]);
+  const selectedTheme: "light" | "dark" | "system" =
+    theme === "light" || theme === "dark" ? theme : "system";
+  const themeLabels = {
+    light: (t.settings as any)?.themeLight || (language === "zh" ? "浅色" : "Light"),
+    dark: (t.settings as any)?.themeDark || (language === "zh" ? "深色" : "Dark"),
+    system:
+      (t.settings as any)?.themeSystem || (language === "zh" ? "跟随系统" : "System"),
+  };
 
   // 监听认证状态变化，同步更新已保存账号列表
   useEffect(() => {
@@ -250,6 +266,33 @@ export function UserMenu() {
             <LogIn className="w-4 h-4" />
             <span>{t.user.login}</span>
           </DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger className="flex items-center space-x-2">
+              <Monitor className="w-4 h-4" />
+              <span>{t.settings.theme}</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup
+                value={selectedTheme}
+                onValueChange={(value) =>
+                  setTheme(value as "light" | "dark" | "system")
+                }
+              >
+                <DropdownMenuRadioItem value="light" className="flex items-center space-x-2">
+                  <Sun className="w-4 h-4" />
+                  <span>{themeLabels.light}</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="dark" className="flex items-center space-x-2">
+                  <Moon className="w-4 h-4" />
+                  <span>{themeLabels.dark}</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="system" className="flex items-center space-x-2">
+                  <Monitor className="w-4 h-4" />
+                  <span>{themeLabels.system}</span>
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           <DropdownMenuItem
             onSelect={handleSignUp}
             className="flex items-center space-x-2"
@@ -341,13 +384,6 @@ export function UserMenu() {
         >
           <Settings className="w-4 h-4" />
           <span>{t.user.settings}</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          onSelect={() => router.push(buildUrl("/payment"))}
-          className="flex items-center space-x-2"
-        >
-          <CreditCard className="w-4 h-4" />
-          <span>{t.user.billing}</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {/* 快速切换账号 */}

@@ -318,7 +318,6 @@ export function Header({
     if (onSessionSelect) {
       onSessionSelect(sessionId);
     }
-    setActiveView("workspace");
     setMobileMenuOpen(false);
   };
 
@@ -335,8 +334,8 @@ export function Header({
   };
 
   return (
-    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-2 sm:px-4 lg:px-6">
-      <div className="flex items-center gap-2 sm:gap-4">
+    <header className="relative h-16 bg-white border-b border-gray-200 flex items-center justify-between px-2 sm:px-4 lg:px-6">
+      <div className="relative z-10 flex items-center gap-2 sm:gap-4 shrink-0">
         {/* 移动端历史记录按钮 */}
         <Button
           variant="ghost"
@@ -366,12 +365,12 @@ export function Header({
         </Badge>
       </div>
 
-      <nav className="flex items-center gap-1">
+      <nav className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 sm:static sm:z-auto sm:translate-x-0 sm:translate-y-0">
         <Button
           variant={activeView === "workspace" ? "default" : "ghost"}
           size="sm"
           onClick={() => setActiveView("workspace")}
-          className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
+          className="h-9 w-9 justify-center p-0 text-xs sm:h-8 sm:w-auto sm:p-2 sm:px-3 sm:text-sm"
           title={t.header.workspace}
         >
           <Workspace className="w-4 h-4 flex-shrink-0" />
@@ -382,7 +381,7 @@ export function Header({
           variant={activeView === "library" ? "default" : "ghost"}
           size="sm"
           onClick={() => setActiveView("library")}
-          className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
+          className="h-9 w-9 justify-center p-0 text-xs sm:h-8 sm:w-auto sm:p-2 sm:px-3 sm:text-sm"
           title={t.header.library}
         >
           <Library className="w-4 h-4 flex-shrink-0" />
@@ -393,7 +392,7 @@ export function Header({
           variant={activeView === "export" ? "default" : "ghost"}
           size="sm"
           onClick={() => setActiveView("export")}
-          className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
+          className="h-9 w-9 justify-center p-0 text-xs sm:h-8 sm:w-auto sm:p-2 sm:px-3 sm:text-sm"
           title={t.header.export}
         >
           <FileText className="w-4 h-4 flex-shrink-0" />
@@ -405,7 +404,7 @@ export function Header({
             variant="ghost"
             size="sm"
             onClick={() => router.push(buildUrl("/payment"))}
-            className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm p-2 sm:px-3"
+            className="h-9 w-9 justify-center p-0 text-xs sm:h-8 sm:w-auto sm:p-2 sm:px-3 sm:text-sm"
             title={t.header.payment}
           >
             <CreditCard className="w-4 h-4 flex-shrink-0" />
@@ -414,7 +413,7 @@ export function Header({
         )}
       </nav>
 
-      <div className="flex items-center gap-1 sm:gap-3">
+      <div className="relative z-10 flex items-center gap-1 sm:gap-3 shrink-0">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -527,7 +526,7 @@ export function Header({
                           return (
                             <div
                               key={fav.id}
-                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-colors touch-manipulation active:bg-gray-100 md:hover:bg-gray-100 ${
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
                                 currentSessionId === fav.sessionId ? "bg-blue-50" : ""
                               }`}
                               onClick={() => {
@@ -552,7 +551,7 @@ export function Header({
                                 {fav.preview || "(空)"}
                               </span>
                               <button
-                                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0 touch-manipulation"
+                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   favorites.remove(fav.id);
@@ -622,7 +621,7 @@ export function Header({
                           {groupSessions.map((session) => (
                             <div
                               key={session.id}
-                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-colors touch-manipulation active:bg-gray-100 md:hover:bg-gray-100 ${
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
                                 currentSessionId === session.id ? "bg-blue-50" : ""
                               }`}
                               onClick={() => handleSessionClick(session.id)}
@@ -633,7 +632,7 @@ export function Header({
                                   (language === "zh" ? "新对话" : "New Chat")}
                               </span>
                               <button
-                                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0 touch-manipulation"
+                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
                                 onClick={(e) => requestDelete(session.id, e)}
                                 title={language === "zh" ? "删除对话" : "Delete"}
                               >

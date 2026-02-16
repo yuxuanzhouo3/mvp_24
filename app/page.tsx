@@ -196,17 +196,17 @@ function PlatformContent() {
   };
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50 dark:from-[#0a0c12] dark:to-[#141924]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">加载中...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-400">加载中...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-screen bg-gray-100 flex flex-col overflow-hidden">
+    <div className="h-screen bg-gray-100 dark:bg-[#0b0d12] flex flex-col overflow-hidden">
       {/* Header */}
       <Header
         activeView={activeView}
@@ -242,7 +242,7 @@ function PlatformContent() {
             </div>
 
             {/* 中间对话区域 */}
-            <div className="flex-1 flex flex-col bg-white relative h-full min-h-0 overflow-hidden">
+            <div className="flex-1 flex flex-col bg-white dark:bg-[#11131a] relative h-full min-h-0 overflow-hidden">
               <div className="flex-1 flex flex-col min-h-0 relative">
                 <GPTWorkspace
                   selectedGPTs={selectedGPTs}
@@ -254,7 +254,7 @@ function PlatformContent() {
               </div>
               {/* 备案信息 - 聊天框下方 */}
               {isChinaRegion() && (
-                <div className="text-center py-1 px-1 text-[10px] text-gray-400 flex-shrink-0 bg-white">
+                <div className="text-center py-1 px-1 text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 bg-white dark:bg-[#11131a]">
                   <div className="mb-0.5">本页面含AI生成的内容，请仔细辨别</div>
                   <div>粤ICP备2024281756号-3</div>
                 </div>
@@ -293,10 +293,10 @@ function PlatformContent() {
 export default function MultiGPTPlatform() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 to-blue-50 dark:from-[#0a0c12] dark:to-[#141924]">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">加载中...</p>
+          <p className="mt-4 text-gray-600 dark:text-gray-400">加载中...</p>
         </div>
       </div>
     }>
