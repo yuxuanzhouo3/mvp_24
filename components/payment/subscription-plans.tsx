@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, Crown, Zap, Building2 } from "lucide-react";
+import { Check, Crown, Zap, Building2, AlertCircle } from "lucide-react";
 import { useUser } from "@/components/user-context";
 import { useLanguage } from "@/components/language-provider";
 import { pricingPlans, getPlanPrice, type PricingPlan } from "@/constants/pricing";
@@ -47,9 +47,20 @@ export function SubscriptionPlans({
   // 获取用户当前订阅计划
   const userCurrentPlan = (user?.subscription_plan || "free").toLowerCase();
   const userCurrentLevel = PLAN_HIERARCHY[userCurrentPlan] ?? 0;
-  const hasActiveSubscription =
-    user?.hasActiveSubscription ?? user?.subscription_status === "active";
   const displayMembershipExpiresAt = membershipExpiresAt || user?.membership_expires_at;
+  const membershipExpiryDate = displayMembershipExpiresAt
+    ? new Date(displayMembershipExpiresAt)
+    : null;
+  const hasValidExpiryDate =
+    !!membershipExpiryDate &&
+    Number.isFinite(membershipExpiryDate.getTime());
+  const isMembershipExpired =
+    hasValidExpiryDate && membershipExpiryDate <= new Date();
+  const hasStatusActive =
+    user?.hasActiveSubscription ?? user?.subscription_status === "active";
+  const hasActiveSubscription = Boolean(
+    hasStatusActive && (!hasValidExpiryDate || !isMembershipExpired)
+  );
 
   // 检查计划是否可以选择
   const canSelectPlan = (planId: string): boolean => {
@@ -130,20 +141,48 @@ export function SubscriptionPlans({
     <div className="space-y-6">
       {/* 当前会员到期时间显示 */}
       {user && displayMembershipExpiresAt && (
-        <Card className="border-blue-200 bg-blue-50">
+        <Card
+          className={
+            isMembershipExpired
+              ? "border-orange-200 bg-orange-50"
+              : "border-blue-200 bg-blue-50"
+          }
+        >
           <CardContent className="pt-4">
             <div className="flex items-center gap-3">
-              <Check className="h-5 w-5 text-blue-600" />
+              {isMembershipExpired ? (
+                <AlertCircle className="h-5 w-5 text-orange-600" />
+              ) : (
+                <Check className="h-5 w-5 text-blue-600" />
+              )}
               <div>
-                <p className="font-medium text-blue-800">
+                <p
+                  className={
+                    isMembershipExpired
+                      ? "font-medium text-orange-800"
+                      : "font-medium text-blue-800"
+                  }
+                >
                   {isZh ? "会员到期时间" : "Membership expires"}:{" "}
                   {new Date(displayMembershipExpiresAt).toLocaleDateString(
                     isZh ? "zh-CN" : "en-US",
                     { year: "numeric", month: "long", day: "numeric" }
                   )}
                 </p>
-                <p className="text-sm text-blue-600">
-                  {isZh ? "续费可延长会员时间" : "Renew to extend membership"}
+                <p
+                  className={
+                    isMembershipExpired
+                      ? "text-sm text-orange-700"
+                      : "text-sm text-blue-600"
+                  }
+                >
+                  {isMembershipExpired
+                    ? isZh
+                      ? "会员已过期，请续费恢复会员权益"
+                      : "Membership expired, please renew to restore benefits"
+                    : isZh
+                    ? "续费可延长会员时间"
+                    : "Renew to extend membership"}
                 </p>
               </div>
             </div>
@@ -176,7 +215,7 @@ export function SubscriptionPlans({
         {pricingPlans.map((plan) => {
           const isCurrentPlan =
             userCurrentPlan === plan.id.toLowerCase() &&
-            user?.subscription_status === "active";
+            hasActiveSubscription;
           const price = getPlanPrice(plan.id, billingCycle, isZh);
           const isPopular = plan.popular;
 

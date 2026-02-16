@@ -35,6 +35,36 @@ function getSupabaseAdmin() {
   return supabaseAdminInstance;
 }
 
+function parseDateLike(value: unknown): Date | null {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null;
+  }
+
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function pickLatestDate(
+  ...dates: Array<Date | null | undefined>
+): Date | null {
+  const validDates = dates.filter(
+    (date): date is Date => !!date && Number.isFinite(date.getTime())
+  );
+  if (validDates.length === 0) {
+    return null;
+  }
+
+  return validDates.reduce((latest, current) =>
+    current.getTime() > latest.getTime() ? current : latest
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
     // 鉴权 - 与其他 API 保持一致
@@ -109,9 +139,31 @@ export async function GET(request: NextRequest) {
         .get();
       const wallet = walletResult?.data?.[0] || null;
       const planInfo = getPlanInfo(user, wallet);
+      const walletPlanExpDate = parseDateLike(planInfo.planExp);
+      const membershipExpiresDate = parseDateLike(membershipExpiresAt);
+      const latestExpiryDate = pickLatestDate(
+        walletPlanExpDate,
+        membershipExpiresDate
+      );
+      const hasPaidFlag =
+        planInfo.isBasic ||
+        planInfo.isPro ||
+        planInfo.isEnterprise ||
+        !!(wallet?.pro ?? user.pro);
       const hasActiveSubscription =
-        (planInfo.isBasic || planInfo.isPro || planInfo.isEnterprise || !!(wallet?.pro ?? user.pro)) &&
-        !!planInfo.planActive;
+        hasPaidFlag &&
+        !!latestExpiryDate &&
+        latestExpiryDate.getTime() > Date.now();
+      const normalizedPlan = hasActiveSubscription
+        ? (
+            planInfo.planLower ||
+            String(user.subscription_plan || "").toLowerCase() ||
+            (user.pro ? "pro" : "free")
+          ).toLowerCase()
+        : "free";
+      const normalizedMembershipExpiresAt = latestExpiryDate
+        ? latestExpiryDate.toISOString()
+        : null;
 
       const response = {
         id: user._id || user.id,
@@ -120,12 +172,13 @@ export async function GET(request: NextRequest) {
         avatar: user.avatar || "",
         phone: user.phone || "",
         pro: user.pro || false,
-        subscription_plan: planInfo.planLabel || user.subscription_plan || (user.pro ? "pro" : "free"),
+        subscription_plan: normalizedPlan,
         subscription_status: hasActiveSubscription ? "active" : "inactive",
         subscription_expires_at: user.subscription_expires_at,
-        membership_expires_at: membershipExpiresAt, // ✅ 使用从 subscriptions 读取的值
-        subscription_tier: wallet?.subscription_tier || planInfo.planLabel,
-        plan_exp: planInfo.planExp ? planInfo.planExp.toISOString() : null,
+        membership_expires_at: normalizedMembershipExpiresAt,
+        subscription_tier:
+          wallet?.subscription_tier || planInfo.planLabel || normalizedPlan,
+        plan_exp: walletPlanExpDate ? walletPlanExpDate.toISOString() : null,
         isPaid: hasActiveSubscription,
         hasActiveSubscription,
         hide_ads: user.hide_ads ?? false,
@@ -196,10 +249,26 @@ export async function GET(request: NextRequest) {
         userId,
         user.user_metadata || {}
       );
-      const hasActiveSubscription = resolvedPlan !== "free";
-      const planExpIso =
-        planInfo.planExp?.toISOString() ||
-        (typeof membershipExpiresAt === "string" ? membershipExpiresAt : null);
+      const walletPlanExpDate = parseDateLike(planInfo.planExp);
+      const membershipExpiresDate = parseDateLike(membershipExpiresAt);
+      const latestExpiryDate = pickLatestDate(
+        walletPlanExpDate,
+        membershipExpiresDate
+      );
+      const planCandidate =
+        String(resolvedPlan || "").toLowerCase() !== "free"
+          ? String(resolvedPlan).toLowerCase()
+          : String(planInfo.planLower || (walletRow?.pro ? "pro" : "free")).toLowerCase();
+      const hasActiveSubscription =
+        planCandidate !== "free" &&
+        !!latestExpiryDate &&
+        latestExpiryDate.getTime() > Date.now();
+      const normalizedPlan = hasActiveSubscription ? planCandidate : "free";
+      const planExpIso = walletPlanExpDate
+        ? walletPlanExpDate.toISOString()
+        : latestExpiryDate
+        ? latestExpiryDate.toISOString()
+        : null;
 
       // 构建响应数据
       const response = {
@@ -212,14 +281,16 @@ export async function GET(request: NextRequest) {
         avatar: user.user_metadata?.avatar || "",
         phone: user.user_metadata?.phone || "",
         pro: user.user_metadata?.pro || walletRow?.pro || false,
-        subscription_plan: resolvedPlan,
+        subscription_plan: normalizedPlan,
         subscription_status: hasActiveSubscription ? "active" : "inactive",
         subscription_expires_at: user.user_metadata?.subscription_expires_at,
-        membership_expires_at: membershipExpiresAt, // ✅ 使用从 subscriptions 读取的值
+        membership_expires_at: latestExpiryDate
+          ? latestExpiryDate.toISOString()
+          : null,
         subscription_tier:
           walletRow?.subscription_tier ||
           planInfo.planLabel ||
-          resolvedPlan,
+          normalizedPlan,
         plan_exp: planExpIso,
         isPaid: hasActiveSubscription,
         hasActiveSubscription,

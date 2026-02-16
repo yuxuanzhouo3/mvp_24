@@ -125,7 +125,7 @@ async function refreshTokenForChina(
         name: userProfile?.name || "",
         avatar: userProfile?.avatar || "",
         subscription_plan: userProfile?.subscription_plan || "free",
-        subscription_status: userProfile?.subscription_status || "active",
+        subscription_status: userProfile?.subscription_status || "inactive",
         subscription_expires_at: userProfile?.subscription_expires_at,
         membership_expires_at: userProfile?.membership_expires_at,
       },

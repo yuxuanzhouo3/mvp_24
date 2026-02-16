@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
           name: result.name || "",
           avatar: profile?.avatar || "",
           subscription_plan: profile?.subscription_plan || "free",
-          subscription_status: profile?.subscription_status || "active",
+          subscription_status: profile?.subscription_status || "inactive",
           subscription_expires_at: profile?.subscription_expires_at,
           membership_expires_at: profile?.membership_expires_at,
         },

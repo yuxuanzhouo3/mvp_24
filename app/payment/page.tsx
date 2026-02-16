@@ -68,13 +68,20 @@ export default function PaymentPage() {
       : (user as any)?.membership_expires_at ||
         (user as any)?.subscription_expires_at ||
         null;
+  const membershipExpiryDate = effectiveMembershipExpiresAt
+    ? new Date(effectiveMembershipExpiresAt)
+    : null;
+  const hasValidMembershipExpiry =
+    !!membershipExpiryDate && Number.isFinite(membershipExpiryDate.getTime());
+  const isMembershipExpired =
+    hasValidMembershipExpiry && membershipExpiryDate <= new Date();
   const hasActiveSubscription = (() => {
     if (appleIapStatus?.success) {
       return !appleIapStatus.isExpired;
     }
 
     if (typeof (user as any)?.hasActiveSubscription === "boolean") {
-      return !!(user as any)?.hasActiveSubscription;
+      return !!(user as any)?.hasActiveSubscription && !isMembershipExpired;
     }
 
     const expires = effectiveMembershipExpiresAt;

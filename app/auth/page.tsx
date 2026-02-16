@@ -587,24 +587,43 @@ function AuthPageContent() {
   };
 
   const startWechatOAuthLogin = useCallback(() => {
-    if (!wechatAppId) {
-      setError("微信应用 ID 未配置");
+    const resolvedWechatAppId =
+      (wechatAppId || process.env.NEXT_PUBLIC_WECHAT_APP_ID || "").trim();
+    const resolvedAppUrl =
+      (
+        appUrl ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (typeof window !== "undefined" ? window.location.origin : "")
+      ).trim();
+
+    if (!resolvedWechatAppId) {
+      setError(
+        configLoading ? "微信登录配置加载中，请稍后重试" : "微信应用 ID 未配置"
+      );
       setLoading(false);
       return false;
     }
 
-    if (!appUrl) {
-      setError("应用 URL 未配置");
+    if (!resolvedAppUrl) {
+      setError(
+        configLoading ? "登录地址配置加载中，请稍后重试" : "应用 URL 未配置"
+      );
       setLoading(false);
       return false;
     }
 
-    // 使用 NEXT_PUBLIC_APP_URL 确保与微信开放平台配置的域名一致
-    const redirectUri = `${appUrl}/auth/callback`;
-    const wechatLoginUrl = getWechatLoginUrl(wechatAppId, redirectUri);
-    window.location.href = wechatLoginUrl;
+    const normalizedAppUrl = resolvedAppUrl.replace(/\/+$/, "");
+
+    // 使用 NEXT_PUBLIC_APP_URL（或当前 origin）确保与微信开放平台配置的域名一致
+    const redirectUri = `${normalizedAppUrl}/auth/callback`;
+    const wechatLoginUrl = getWechatLoginUrl(resolvedWechatAppId, redirectUri);
+    console.log("[login] 网页 OAuth 跳转:", {
+      appId: resolvedWechatAppId,
+      redirectUri,
+    });
+    window.location.assign(wechatLoginUrl);
     return true;
-  }, [appUrl, wechatAppId]);
+  }, [appUrl, configLoading, wechatAppId]);
 
   const handleWechatSignIn = async () => {
     if (loading) return;
@@ -617,8 +636,23 @@ function AuthPageContent() {
     }
     console.log("点击了微信登录按钮, 当前平台信息:", JSON.stringify(platformInfo));
 
-    // 套壳 Android：走原生微信登录，再复用小程序登录的 code 交换逻辑
-    if (platformInfo.type === "android-app") {
+    const hasNativeWechatBridge = (() => {
+      if (typeof window === "undefined") return false;
+      const w = window as any;
+      const ua = (navigator.userAgent || "").toLowerCase();
+      return Boolean(
+        w?.Android ||
+          w?.AndroidInterface ||
+          w?.webkit?.messageHandlers?.JSBridge ||
+          w?.median ||
+          w?.gonative ||
+          ua.includes("median") ||
+          ua.includes("gonative")
+      );
+    })();
+
+    // 套壳 Android：仅在检测到原生桥时走原生微信登录，再复用小程序登录的 code 交换逻辑
+    if (platformInfo.type === "android-app" && hasNativeWechatBridge) {
       setError("");
       setLoading(true);
 
@@ -679,19 +713,31 @@ function AuthPageContent() {
       return;
     }
 
+    if (platformInfo.type === "android-app" && !hasNativeWechatBridge) {
+      console.warn(
+        "[login] 命中 android-app 但未检测到原生桥，按网页 OAuth 流程处理"
+      );
+    }
+
     // 直接检查 wx 对象是否存在（不依赖 platformInfo，因为它可能在 wx 注入前就检测了）
     const wxObj = (window as any).wx;
     const mp = wxObj?.miniProgram;
+    const isMiniProgramEnv =
+      platformInfo.isWechatMiniProgram ||
+      (window as any).__wxjs_environment === "miniprogram" ||
+      new URLSearchParams(window.location.search).get("_wxjs_environment") ===
+        "miniprogram";
 
     console.log("[login] 直接检查 wx:", JSON.stringify({
       wxExists: !!wxObj,
       mpExists: !!mp,
       navigateToExists: !!(mp && typeof mp.navigateTo === 'function'),
+      isMiniProgramEnv,
       platformInfo: platformInfo
     }));
 
-    // 如果 wx.miniProgram.navigateTo 可用，使用小程序登录
-    if (mp && typeof mp.navigateTo === 'function') {
+    // 仅在真实小程序环境中使用 wx.miniProgram.navigateTo
+    if (isMiniProgramEnv && mp && typeof mp.navigateTo === 'function') {
       const returnUrl = window.location.href;
       const target = `/pages/webshell/login?returnUrl=${encodeURIComponent(returnUrl)}`;
 
@@ -703,11 +749,18 @@ function AuthPageContent() {
       return;
     }
 
-    // 如果 platformInfo 认为是小程序但 wx 不可用，显示错误
-    if (platformInfo.isWechatMiniProgram) {
+    // 如果识别为小程序环境但 wx.miniProgram 不可用，显示错误
+    if (isMiniProgramEnv) {
       console.error("[login] 检测到小程序环境但 wx.miniProgram.navigateTo 不可用");
       setError("无法连接到小程序环境，请刷新页面重试");
       return;
+    }
+
+    // 非小程序环境下即使存在 wx.miniProgram，也不要调用 navigateTo（会静默失败）
+    if (mp && typeof mp.navigateTo === "function") {
+      console.warn(
+        "[login] 检测到 wx.miniProgram 但当前非小程序环境，改走网页 OAuth"
+      );
     }
 
     // 否则使用微信 OAuth 登录
@@ -1416,6 +1469,7 @@ function AuthPageContent() {
               platformInfo.type !== "ios-app" ? (
                 <div className="space-y-3">
                   <Button
+                    type="button"
                     onClick={handleWechatSignIn}
                     variant="outline"
                     className="w-full h-12"
@@ -1664,6 +1718,7 @@ function AuthPageContent() {
               platformInfo.type !== "ios-app" ? (
                 <div className="space-y-3">
                   <Button
+                    type="button"
                     onClick={handleWechatSignIn}
                     variant="outline"
                     className="w-full h-12"

@@ -25,7 +25,20 @@ export function AdDisplay({ position }: AdDisplayProps) {
   const { user } = useUser();
 
   // 检查用户是否是会员
-  const isMember = user && user.subscription_plan && user.subscription_plan !== "free";
+  const membershipExpiryDate = user?.membership_expires_at
+    ? new Date(user.membership_expires_at)
+    : null;
+  const hasValidExpiryDate =
+    !!membershipExpiryDate && Number.isFinite(membershipExpiryDate.getTime());
+  const isExpired = hasValidExpiryDate && membershipExpiryDate <= new Date();
+  const isMember = Boolean(
+    user &&
+      ((typeof user.hasActiveSubscription === "boolean"
+        ? user.hasActiveSubscription
+        : user.subscription_plan &&
+          user.subscription_plan.toLowerCase() !== "free") &&
+        !isExpired)
+  );
 
   useEffect(() => {
     if (isMember) {

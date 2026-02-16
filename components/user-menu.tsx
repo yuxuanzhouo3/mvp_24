@@ -132,6 +132,13 @@ export function UserMenu() {
 
   // 获取显示名称：优先使用 name，如果为空则使用 email 的用户名部分
   const displayName = getDisplayName(user);
+  const membershipExpiryDate = user?.membership_expires_at
+    ? new Date(user.membership_expires_at)
+    : null;
+  const hasValidMembershipExpiryDate =
+    !!membershipExpiryDate && Number.isFinite(membershipExpiryDate.getTime());
+  const isMembershipExpired =
+    hasValidMembershipExpiryDate && membershipExpiryDate <= new Date();
 
   // 获取用户名首字母
   const userInitial = (() => {
@@ -354,13 +361,22 @@ export function UserMenu() {
               </div>
             ) : user.membership_expires_at ? (
               /* 降级：使用数据库中的过期时间（可能不是最新的）*/
-              <p className="text-xs text-gray-600">
-                {t.user.expiresAt}:{" "}
-                {new Date(user.membership_expires_at).toLocaleDateString(
-                  language === "zh" ? "zh-CN" : "en-US",
-                  { year: "numeric", month: "long", day: "numeric" }
+              <div className="space-y-1">
+                <p className="text-xs text-gray-600">
+                  {t.user.expiresAt}:{" "}
+                  {new Date(user.membership_expires_at).toLocaleDateString(
+                    language === "zh" ? "zh-CN" : "en-US",
+                    { year: "numeric", month: "long", day: "numeric" }
+                  )}
+                </p>
+                {isMembershipExpired && (
+                  <p className="text-xs text-orange-600">
+                    {language === "zh"
+                      ? "会员已过期，请续费恢复权益"
+                      : "Membership expired, renew to restore benefits"}
+                  </p>
                 )}
-              </p>
+              </div>
             ) : (
               <p className="text-xs text-gray-500">{t.user.noMembership}</p>
             )}

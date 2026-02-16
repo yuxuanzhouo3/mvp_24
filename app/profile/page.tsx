@@ -50,6 +50,14 @@ export default function ProfilePage() {
     return takeInitial(user.name) || takeInitial(user.email) || "U";
   }, [user]);
 
+  const membershipExpiryDate = useMemo(() => {
+    if (!user?.membership_expires_at) return null;
+    const parsed = new Date(user.membership_expires_at);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  }, [user?.membership_expires_at]);
+  const isMembershipExpired =
+    !!membershipExpiryDate && membershipExpiryDate <= new Date();
+
   const router = useRouter();
   const currentDebugParam =
     typeof window !== "undefined"
@@ -354,11 +362,18 @@ export default function ProfilePage() {
                     size="sm"
                     onClick={() => router.push(buildUrl("/payment"))}
                   >
-                    {user.membership_expires_at
+                    {user.membership_expires_at && !isMembershipExpired
                       ? t.profile.renew
                       : t.profile.activateMembership}
                   </Button>
                 </div>
+                {isMembershipExpired && (
+                  <p className="text-xs text-orange-600">
+                    {normalizedLanguage === "zh"
+                      ? "会员已过期，请续费恢复权益"
+                      : "Membership expired, renew to restore benefits"}
+                  </p>
+                )}
               </div>
               <div className="space-y-2 md:col-span-2">
                 <Label className="flex items-center gap-2">
