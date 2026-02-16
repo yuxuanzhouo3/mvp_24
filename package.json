@@ -8,6 +8,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
+    "test:multimodal:audio": "node test-multimodal-audio.mjs",
     "start": "next start",
     "vercel:dev": "vercel dev",
     "vercel:deploy": "vercel --prod",

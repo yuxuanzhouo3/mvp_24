@@ -28,6 +28,7 @@ export async function saveIntlMultiAISessionTurn(params: {
   userMessageId?: string;
   assistantMessageId?: string;
   userMessage: string;
+  userModelInput?: string;
   aiResponses: MultiAIResponsePayload[];
   collaborationMode?: MultiAICollaborationMode;
   taskGraph?: unknown;
@@ -38,6 +39,7 @@ export async function saveIntlMultiAISessionTurn(params: {
     userMessageId,
     assistantMessageId,
     userMessage,
+    userModelInput,
     aiResponses,
     collaborationMode,
     taskGraph,
@@ -53,9 +55,20 @@ export async function saveIntlMultiAISessionTurn(params: {
     return timestamp;
   };
 
+  const normalizedUserModelInput =
+    typeof userModelInput === "string" && userModelInput.trim().length > 0
+      ? userModelInput.trim()
+      : "";
+  const userMessageContent = normalizedUserModelInput
+    ? {
+        content: userMessage,
+        modelInput: normalizedUserModelInput,
+      }
+    : userMessage;
+
   const userMessagePayload = {
     id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),
-    content: userMessage,
+    content: userMessageContent,
     role: "user",
     timestamp,
     tokens_used: 0,

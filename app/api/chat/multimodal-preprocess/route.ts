@@ -22,6 +22,7 @@ const MAX_TEXT_PREVIEW_CHARS = 12000;
 const MAX_DATA_URL_CHARS = 3 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 24 * 1024 * 1024;
 const QWEN_OMNI_MODEL = "qwen3-omni-flash";
+const QWEN_OMNI_AUDIO_MODEL = "qwen3-omni-flash-2025-12-01";
 
 function sanitizeAttachment(raw: any): MultimodalAttachmentPayload | null {
   if (!raw || typeof raw !== "object") return null;
@@ -154,7 +155,7 @@ function normalizeAudioFormat(format: string): string {
   return normalized;
 }
 
-function extractAudioData(dataUrl?: string): { format: string; data: string } | null {
+function extractAudioData(dataUrl?: string): { format: string; dataUri: string } | null {
   if (!dataUrl || !dataUrl.startsWith("data:audio/")) return null;
 
   const commaIndex = dataUrl.indexOf(",");
@@ -173,7 +174,10 @@ function extractAudioData(dataUrl?: string): { format: string; data: string } | 
   const format = normalizeAudioFormat(rawFormat);
   if (!format) return null;
 
-  return { format, data };
+  return {
+    format,
+    dataUri: dataUrl,
+  };
 }
 
 function buildPromptContext(message: string, attachments: MultimodalAttachmentPayload[]) {
@@ -204,13 +208,23 @@ function buildPromptContext(message: string, attachments: MultimodalAttachmentPa
   ].join("\n");
 }
 
-async function runQwenOmniPreprocess(params: {
+function isOmniModel(model: string): boolean {
+  return model.startsWith("qwen3-omni-flash");
+}
+
+function resolvePreprocessModel(attachments: MultimodalAttachmentPayload[]) {
+  const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
+  return hasAudioAttachment ? QWEN_OMNI_AUDIO_MODEL : QWEN_OMNI_MODEL;
+}
+
+async function runQwenMultimodalPreprocess(params: {
   userId: string;
   message: string;
   attachments: MultimodalAttachmentPayload[];
 }) {
   const { userId, message, attachments } = params;
   const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
+  const selectedModel = resolvePreprocessModel(attachments);
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) {
     throw new Error("DASHSCOPE_API_KEY is not configured");
@@ -229,6 +243,7 @@ async function runQwenOmniPreprocess(params: {
 
   for (const attachment of attachments) {
     if (
+      isOmniModel(selectedModel) &&
       (attachment.kind === "image" || attachment.kind === "video") &&
       attachment.dataUrl
     ) {
@@ -246,7 +261,7 @@ async function runQwenOmniPreprocess(params: {
         richParts.push({
           type: "input_audio",
           input_audio: {
-            data: audioData.data,
+            data: audioData.dataUri,
             format: audioData.format,
           },
         });
@@ -273,9 +288,9 @@ async function runQwenOmniPreprocess(params: {
     });
   }
 
-  const makeRequest = async (content: any) => {
+  const makeRequest = async (content: any, model: string) => {
     return client.chat.completions.create({
-      model: QWEN_OMNI_MODEL,
+      model,
       messages: [
         {
           role: "system",
@@ -294,26 +309,36 @@ async function runQwenOmniPreprocess(params: {
   };
 
   let completion: any;
+  let modelUsed = selectedModel;
   try {
-    completion = await makeRequest(richParts);
+    completion = await makeRequest(richParts, selectedModel);
   } catch (error) {
     console.warn(
       "[multimodal-preprocess] rich multimodal request failed, fallback to text-only:",
       error
     );
+    const fallbackModel = hasAudioAttachment ? QWEN_OMNI_MODEL : selectedModel;
     const fallbackContext = hasAudioAttachment
       ? [
           promptContext,
           "",
-          "注意：音频通道暂时不可用，请明确指出无法完成逐字转写，并给出可执行的下一步建议（如缩短录音、分段上传）。",
+          "注意：若语音输入不可解析，请明确指出并给出可执行的下一步建议。",
         ].join("\n")
       : promptContext;
-    completion = await makeRequest(fallbackContext);
+    const fallbackContent =
+      hasAudioAttachment && isOmniModel(fallbackModel)
+        ? richParts
+        : fallbackContext;
+    modelUsed = fallbackModel;
+    completion = await makeRequest(fallbackContent, fallbackModel);
   }
 
   const rawContent = completion?.choices?.[0]?.message?.content;
   if (typeof rawContent === "string" && rawContent.trim()) {
-    return rawContent.trim();
+    return {
+      summary: rawContent.trim(),
+      model: modelUsed,
+    };
   }
   if (Array.isArray(rawContent)) {
     const text = rawContent
@@ -326,18 +351,27 @@ async function runQwenOmniPreprocess(params: {
       )
       .join("")
       .trim();
-    if (text) return text;
+    if (text) {
+      return {
+        summary: text,
+        model: modelUsed,
+      };
+    }
   }
 
-  throw new Error("qwen3-omni-flash returned empty content");
+  throw new Error(`${selectedModel} returned empty content`);
 }
 
-function buildEnhancedMessage(userMessage: string, preprocessSummary: string) {
+function buildEnhancedMessage(
+  userMessage: string,
+  preprocessSummary: string,
+  preprocessModel: string
+) {
   const normalizedMessage = userMessage.trim() || "请基于附件内容完成分析。";
   return [
     normalizedMessage,
     "",
-    "【多模态预处理结果（qwen3-omni-flash）】",
+    `【多模态预处理结果（${preprocessModel}）】`,
     preprocessSummary,
     "",
     "请基于以上预处理结果继续推理并回答。如果信息不足，请明确指出。",
@@ -462,7 +496,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const summary = await runQwenOmniPreprocess({
+    const preprocessResult = await runQwenMultimodalPreprocess({
       userId,
       message: rawMessage,
       attachments,
@@ -486,8 +520,12 @@ export async function POST(req: NextRequest) {
 
     const wallet = await getWalletStats(userId);
     const result: MultimodalPreprocessResult = {
-      enhancedMessage: buildEnhancedMessage(rawMessage, summary),
-      summary,
+      enhancedMessage: buildEnhancedMessage(
+        rawMessage,
+        preprocessResult.summary,
+        preprocessResult.model
+      ),
+      summary: preprocessResult.summary,
       quota: buildQuotaSnapshot({ planLower, wallet }),
     };
 

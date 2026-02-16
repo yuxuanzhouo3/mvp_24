@@ -49,12 +49,19 @@ function toHistoryRole(value: unknown): HistoryRole | null {
   return null;
 }
 
-function normalizeHistoryContent(content: unknown): string {
+function normalizeHistoryContent(content: unknown, role?: HistoryRole): string {
   if (typeof content === "string") {
     return content;
   }
 
   if (content && typeof content === "object") {
+    if (role === "user") {
+      const maybeModelInput = (content as any).modelInput ?? (content as any).model_input;
+      if (typeof maybeModelInput === "string" && maybeModelInput.trim().length > 0) {
+        return maybeModelInput;
+      }
+    }
+
     const maybeContent = (content as any).content;
     if (typeof maybeContent === "string") {
       return maybeContent;
@@ -88,7 +95,7 @@ function extractHistoryMessages(
 
         const pieces = raw.content
           .filter((resp: any) => resp?.agentId === currentAgentId)
-          .map((resp: any) => normalizeHistoryContent(resp?.content))
+          .map((resp: any) => normalizeHistoryContent(resp?.content, role))
           .filter((text: string) => text.trim().length > 0);
 
         if (pieces.length === 0) {
@@ -101,7 +108,7 @@ function extractHistoryMessages(
         } as HistoryMessage;
       }
 
-      const plainContent = normalizeHistoryContent(raw?.content);
+      const plainContent = normalizeHistoryContent(raw?.content, role);
       if (!plainContent.trim()) {
         return null;
       }

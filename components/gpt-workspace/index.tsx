@@ -2018,14 +2018,15 @@ export function GPTWorkspace({
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${authToken}`,
               },
-              body: JSON.stringify({
-                sessionId: sessId,
-                userMessageId: userMessage.id,
-                assistantMessageId: finalMessage.id,
-                userMessage: userMessage.content,
-                collaborationMode: "graph",
-                aiResponses: nodeResponses.map((r) => ({
-                  agentId: r.agentId,
+                body: JSON.stringify({
+                  sessionId: sessId,
+                  userMessageId: userMessage.id,
+                  assistantMessageId: finalMessage.id,
+                  userMessage: userMessage.content,
+                  userModelInput: effectiveMessageForModels,
+                  collaborationMode: "graph",
+                  aiResponses: nodeResponses.map((r) => ({
+                    agentId: r.agentId,
                   agentName: r.agentName,
                   content: r.content,
                   model: r.model || runtimeAgentMap.get(r.agentId)?.model || "",
@@ -2106,6 +2107,7 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userModelInput: effectiveMessageForModels,
                   collaborationMode: "normal",
                   aiResponses: finalResponses.map((r) => ({
                     agentId: r.agentId,
@@ -2180,6 +2182,7 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userModelInput: effectiveMessageForModels,
                   collaborationMode: "parallel",
                   aiResponses: finalResponses.map((r) => ({
                     agentId: r.agentId,
@@ -2283,6 +2286,7 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userModelInput: effectiveMessageForModels,
                   collaborationMode: "deep",
                   aiResponses: finalResponses.map((r) => ({
                     agentId: r.agentId,
@@ -2351,6 +2355,7 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userModelInput: effectiveMessageForModels,
                   collaborationMode: "sequential",
                   aiResponses: result.allResponses.map((r) => ({
                     agentId: r.agentId,

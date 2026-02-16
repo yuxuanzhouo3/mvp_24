@@ -318,6 +318,7 @@ export function Header({
     if (onSessionSelect) {
       onSessionSelect(sessionId);
     }
+    setActiveView("workspace");
     setMobileMenuOpen(false);
   };
 
@@ -526,7 +527,7 @@ export function Header({
                           return (
                             <div
                               key={fav.id}
-                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-colors touch-manipulation active:bg-gray-100 md:hover:bg-gray-100 ${
                                 currentSessionId === fav.sessionId ? "bg-blue-50" : ""
                               }`}
                               onClick={() => {
@@ -551,7 +552,7 @@ export function Header({
                                 {fav.preview || "(空)"}
                               </span>
                               <button
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
+                                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0 touch-manipulation"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   favorites.remove(fav.id);
@@ -621,7 +622,7 @@ export function Header({
                           {groupSessions.map((session) => (
                             <div
                               key={session.id}
-                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer transition-colors touch-manipulation active:bg-gray-100 md:hover:bg-gray-100 ${
                                 currentSessionId === session.id ? "bg-blue-50" : ""
                               }`}
                               onClick={() => handleSessionClick(session.id)}
@@ -632,7 +633,7 @@ export function Header({
                                   (language === "zh" ? "新对话" : "New Chat")}
                               </span>
                               <button
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
+                                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0 touch-manipulation"
                                 onClick={(e) => requestDelete(session.id, e)}
                                 title={language === "zh" ? "删除对话" : "Delete"}
                               >

@@ -307,6 +307,7 @@ export async function saveMultiAIMessage(messageData: {
   user_message_id?: string;
   assistant_message_id?: string;
   user_message: string;
+  user_model_input?: string;
   ai_responses: Array<{
     agentId: string;
     agentName: string;
@@ -322,6 +323,18 @@ export async function saveMultiAIMessage(messageData: {
     const db = getCloudBaseApp().database();
     const collection = db.collection("ai_conversations");
 
+    const normalizedUserModelInput =
+      typeof messageData.user_model_input === "string" &&
+      messageData.user_model_input.trim().length > 0
+        ? messageData.user_model_input.trim()
+        : "";
+    const userMessageContent = normalizedUserModelInput
+      ? {
+          content: messageData.user_message,
+          modelInput: normalizedUserModelInput,
+        }
+      : messageData.user_message;
+
     const messages = [
       {
         id:
@@ -329,7 +342,7 @@ export async function saveMultiAIMessage(messageData: {
             ? messageData.user_message_id
             : createMessageId("msg"),
         role: "user",
-        content: messageData.user_message,
+        content: userMessageContent,
         timestamp: new Date().toISOString(),
         tokens_used: 0,
       },

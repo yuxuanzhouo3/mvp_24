@@ -94,4 +94,30 @@ describe("saveIntlMultiAISessionTurn", () => {
       "same question"
     );
   });
+
+  it("persists modelInput for follow-up context while keeping visible user text", async () => {
+    await saveIntlMultiAISessionTurn({
+      sessionId: "s2",
+      userId: "u2",
+      userMessage: "[附件] image.png",
+      userModelInput: "请基于附件分析\n\n【多模态预处理结果】图片里是流程图...",
+      aiResponses: [
+        {
+          agentId: "a2",
+          agentName: "Agent2",
+          content: "已分析",
+          model: "gpt-y",
+          status: "completed",
+          timestamp: new Date("2026-02-16T00:00:00.000Z"),
+        },
+      ],
+    });
+
+    expect(appendSessionMessages).toHaveBeenCalledTimes(1);
+    const payload = (appendSessionMessages as jest.Mock).mock.calls[0][0];
+    expect(payload.messages[0].content).toEqual({
+      content: "[附件] image.png",
+      modelInput: "请基于附件分析\n\n【多模态预处理结果】图片里是流程图...",
+    });
+  });
 });

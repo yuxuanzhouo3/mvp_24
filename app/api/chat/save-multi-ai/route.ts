@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
       userMessageId,
       assistantMessageId,
       userMessage,
+      userModelInput,
       aiResponses,
       taskGraph,
       collaborationMode,
@@ -76,6 +77,7 @@ export async function POST(req: NextRequest) {
       userMessageId?: string;
       assistantMessageId?: string;
       userMessage: string;
+      userModelInput?: string;
       aiResponses: AIResponse[];
       taskGraph?: { spec: TaskGraphSpec; run?: TaskGraphExecutionRun };
       collaborationMode?: MultiAICollaborationMode;
@@ -109,6 +111,7 @@ export async function POST(req: NextRequest) {
         user_message_id: userMessageId,
         assistant_message_id: assistantMessageId,
         ai_responses: aiResponses,
+        user_model_input: userModelInput,
         collaboration_mode: collaborationMode,
         task_graph: taskGraph,
       });
@@ -134,6 +137,7 @@ export async function POST(req: NextRequest) {
           userMessageId,
           assistantMessageId,
           userMessage,
+          userModelInput,
           aiResponses: aiResponses as MultiAIResponsePayload[],
           collaborationMode,
           taskGraph,
