@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
+    const validatedOutTradeNo = validationResult.data.out_trade_no;
 
     // 2. 从 CloudBase 查询订单信息（必须属于当前登录用户）
     let localPayment: any = null;
@@ -49,7 +50,7 @@ export async function GET(request: NextRequest) {
       const db = getDatabase();
       const result = await db
         .collection('payments')
-        .where({ out_trade_no, user_id: user.id })
+        .where({ out_trade_no: validatedOutTradeNo, user_id: user.id })
         .get();
 
       localPayment = result.data?.[0];
@@ -78,7 +79,7 @@ export async function GET(request: NextRequest) {
     });
 
     // 4. 查询微信支付订单状态
-    const paymentStatus = await wechatProvider.queryOrderByOutTradeNo(out_trade_no);
+    const paymentStatus = await wechatProvider.queryOrderByOutTradeNo(validatedOutTradeNo);
 
     // 5. 如果微信报告支付成功但本地数据库还没更新，则更新
     if (
@@ -99,7 +100,7 @@ export async function GET(request: NextRequest) {
         } else {
           await db
             .collection('payments')
-            .where({ out_trade_no, user_id: user.id })
+            .where({ out_trade_no: validatedOutTradeNo, user_id: user.id })
             .update(updatedPayment);
         }
 
@@ -113,7 +114,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        out_trade_no,
+        out_trade_no: validatedOutTradeNo,
         status: mapTradeStateToPaymentStatus(paymentStatus.tradeState),
         trade_state: paymentStatus.tradeState,
         transaction_id: paymentStatus.transactionId,

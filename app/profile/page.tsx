@@ -33,7 +33,8 @@ export default function ProfilePage() {
   const [success, setSuccess] = useState("");
   const { language, activeView, setActiveView } = useApp();
   const { user: currentUser, loading: userLoading } = useUser();
-  const t = useTranslations(language);
+  const normalizedLanguage = language === "en" ? "en" : "zh";
+  const t = useTranslations(normalizedLanguage);
 
   const userInitial = useMemo(() => {
     const takeInitial = (value?: string | null) => {

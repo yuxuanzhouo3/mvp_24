@@ -29,6 +29,7 @@ import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { QuotaDisplay } from "./quota-display";
 import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
+import { isAppleIAPEnabled } from "@/lib/config/apple-iap";
 import {
   getSavedAccounts,
   restoreSavedAuthState,
@@ -39,7 +40,10 @@ export function UserMenu() {
   const router = useRouter();
   const pathname = usePathname();
   const { user, loading, refreshUser, signOut } = useUser();
-  const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus(!!user);
+  const iapFeatureEnabled = isAppleIAPEnabled();
+  const { status: appleIAPStatus, refetch: refetchAppleStatus } = useAppleIAPStatus(
+    iapFeatureEnabled && !!user
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const { language } = useLanguage();
@@ -65,7 +69,9 @@ export function UserMenu() {
       try {
         await refreshUser();
         // 同时刷新 Apple IAP 状态（如果有的话）
-        await refetchAppleStatus();
+        if (iapFeatureEnabled) {
+          await refetchAppleStatus();
+        }
 
       } catch (error) {
         console.error("Failed to refresh user data:", error);

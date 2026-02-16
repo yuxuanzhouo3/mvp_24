@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 
 export default function AuthTestPage() {
   const [authStatus, setAuthStatus] = useState<any>(null);
@@ -78,7 +79,7 @@ export default function AuthTestPage() {
     // 监听认证状态变化
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
       console.log("Auth state changed:", event, session?.user?.id);
       checkAuthStatus();
     });

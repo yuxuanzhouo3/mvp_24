@@ -13,6 +13,7 @@ const miniprogramLoginSchema = z.object({
   code: z.string().min(1, "WeChat authorization code is required"),
   nickName: z.string().optional(), // 小程序传递的昵称
   avatarUrl: z.string().optional(), // 小程序传递的头像URL
+  agreeToPrivacy: z.boolean().optional(),
 });
 
 // 2️⃣ 微信 API 接口:code 换 openid（小程序）
@@ -73,6 +74,7 @@ export async function POST(request: NextRequest) {
     const { code } = validationResult.data;
     const nickName = validationResult.data.nickName; // 获取昵称
     const avatarUrl = validationResult.data.avatarUrl; // 获取头像
+    const agreeToPrivacy = validationResult.data.agreeToPrivacy === true;
 
     // 检查区域
     if (!isChinaRegion()) {
@@ -81,6 +83,22 @@ export async function POST(request: NextRequest) {
           success: false,
           error: "WeChat miniprogram login only available in China region",
           code: "REGION_NOT_SUPPORTED",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!agreeToPrivacy) {
+      logSecurityEvent(
+        "miniprogram_login_privacy_not_accepted",
+        undefined,
+        clientIP
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: "请先阅读并同意隐私政策",
+          code: "PRIVACY_CONSENT_REQUIRED",
         },
         { status: 400 }
       );

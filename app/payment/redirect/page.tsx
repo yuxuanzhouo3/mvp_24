@@ -5,6 +5,16 @@ import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 
+const decodeBase64ToUtf8 = (encoded: string) => {
+  const binary = atob(encoded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  try {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  } catch {
+    return binary;
+  }
+};
+
 /**
  * 支付跳转页面内容组件
  */
@@ -27,7 +37,7 @@ function PaymentRedirectContent() {
 
     try {
       // 解码 base64 编码的表单 HTML
-      const decodedHtml = atob(formHtml);
+      const decodedHtml = decodeBase64ToUtf8(formHtml);
       console.log("Rendering payment form...");
 
       // 创建容器并渲染表单

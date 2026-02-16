@@ -35,7 +35,49 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <head>
-        <script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"></script>
+        {process.env.NODE_ENV === "production" && (
+          <Script id="disable-browser-console" strategy="beforeInteractive">
+            {`
+              (function () {
+                var methods = [
+                  "log",
+                  "info",
+                  "debug",
+                  "warn",
+                  "error",
+                  "trace",
+                  "table",
+                  "dir",
+                  "dirxml",
+                  "group",
+                  "groupCollapsed",
+                  "groupEnd",
+                  "time",
+                  "timeLog",
+                  "timeEnd",
+                  "count",
+                  "countReset",
+                  "assert",
+                  "clear",
+                  "profile",
+                  "profileEnd"
+                ];
+                try {
+                  var c = window.console || {};
+                  for (var i = 0; i < methods.length; i++) {
+                    c[methods[i]] = function () {};
+                  }
+                  window.console = c;
+                } catch (_) {}
+              })();
+            `}
+          </Script>
+        )}
+        <Script
+          id="wechat-js-sdk"
+          src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js"
+          strategy="beforeInteractive"
+        />
       </head>
       <body>
         <GeoProvider>

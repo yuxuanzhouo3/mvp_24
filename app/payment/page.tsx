@@ -27,6 +27,7 @@ import { detectPlatform } from "@/lib/platform-detection";
 import { getAppleIapProductId } from "@/lib/apple-iap";
 import { getAddonPackageById, getAddonDescription, type ProductType } from "@/constants/addon-packages";
 import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
+import { isAppleIAPEnabled } from "@/lib/config/apple-iap";
 
 type SelectedPurchase = {
   planId: string;
@@ -40,6 +41,17 @@ type SelectedPurchase = {
   videoAudioCredits?: number;
 };
 
+const encodeUtf8ToBase64 = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+};
+
 export default function PaymentPage() {
   const { user, loading } = useUser();
   const router = useRouter();
@@ -48,7 +60,8 @@ export default function PaymentPage() {
   const { language } = useLanguage();
   const t = useTranslations(language);
   const currentPlan = user?.subscription_plan || "free";
-  const { status: appleIapStatus } = useAppleIAPStatus(!!user);
+  const iapFeatureEnabled = isAppleIAPEnabled();
+  const { status: appleIapStatus } = useAppleIAPStatus(iapFeatureEnabled && !!user);
   const effectiveMembershipExpiresAt =
     appleIapStatus?.success
       ? appleIapStatus.expiresAt
@@ -396,7 +409,7 @@ export default function PaymentPage() {
         outTradeNo: result.paymentId,
         appPayParams: result.appPayParams,
       };
-      const encoded = btoa(JSON.stringify(schemePayload));
+      const encoded = encodeUtf8ToBase64(JSON.stringify(schemePayload));
       const scheme = `wechat-pay://start?callback=${encodeURIComponent(
         callbackName
       )}&payload=${encodeURIComponent(encoded)}`;
@@ -429,7 +442,7 @@ export default function PaymentPage() {
       ) {
         console.log("Redirecting to Alipay payment page...");
 
-        const encodedForm = btoa(result.paymentUrl);
+        const encodedForm = encodeUtf8ToBase64(result.paymentUrl);
         const redirectUrl = `/payment/redirect?form=${encodeURIComponent(
           encodedForm
         )}`;
@@ -554,7 +567,7 @@ export default function PaymentPage() {
       if (handler?.postMessage) {
         handler.postMessage(message);
       } else {
-        const encoded = btoa(JSON.stringify(payload));
+        const encoded = encodeUtf8ToBase64(JSON.stringify(payload));
         const scheme = `median://iap/purchase?payload=${encodeURIComponent(
           encoded
         )}&callback=${encodeURIComponent(callbackName)}`;
@@ -666,7 +679,7 @@ export default function PaymentPage() {
           <TabsContent value="payment">
             {selectedPlan ? (
               <div className="max-w-2xl mx-auto">
-                {isIOSNativeApp && selectedPlan.productType !== "ADDON" ? (
+                {iapFeatureEnabled && isIOSNativeApp && selectedPlan.productType !== "ADDON" ? (
                   <Card>
                     <CardHeader>
                       <CardTitle>

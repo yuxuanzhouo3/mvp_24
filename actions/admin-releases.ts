@@ -99,7 +99,7 @@ async function deactivateOtherReleases(platform: Platform, variant: Variant | nu
     }
     const result = await query.get();
     if (result.data && result.data.length > 0) {
-      await Promise.all(result.data.map(item =>
+      await Promise.all(result.data.map((item: { _id: string }) =>
         db.collection("app_releases").doc(item._id).update({
           is_active: false,
           updated_at: new Date().toISOString()
@@ -210,6 +210,7 @@ export async function createReleaseWithUrl(
     isMandatory: boolean;
     fileUrl: string;
     fileSize: number;
+    cloudbaseFileId?: string | null;
   }
 ): Promise<CreateReleaseResult> {
   try {

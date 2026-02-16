@@ -16,10 +16,12 @@ import {
 import { TASK_GRAPH_PRESETS } from "@/data/task-graph-presets";
 import { topoLayers, type TaskGraphSpec } from "@/types/task-graph";
 import type { AIResponse, CollaborationMode } from "./types";
+import { SmoothStreamText } from "./smooth-stream-text";
 
 interface LiveCollaborationPanelProps {
   isProcessing: boolean;
   aiResponses: AIResponse[];
+  showPreflightPlaceholder?: boolean;
   effectiveCollaborationMode: CollaborationMode;
   activeTaskGraphSpec: TaskGraphSpec | null;
   taskGraphPresetId: string;
@@ -36,6 +38,7 @@ interface LiveCollaborationPanelProps {
 export function LiveCollaborationPanel({
   isProcessing,
   aiResponses,
+  showPreflightPlaceholder = false,
   effectiveCollaborationMode,
   activeTaskGraphSpec,
   taskGraphPresetId,
@@ -60,14 +63,48 @@ export function LiveCollaborationPanel({
 
   const isSmartResponse = (resp?: AIResponse) =>
     !!resp && (isSmartAgentId(resp.agentId) || isSmartAgentName(resp.agentName));
+  const looksLikeMarkdown = (value?: string) => {
+    const text = (value || "").trim();
+    if (!text) return false;
+    return /(^|\n)\s{0,3}(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|```|~~~)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\|.+\|/.test(
+      text
+    );
+  };
   const hasSmartResponse = aiResponses.some((resp) => isSmartResponse(resp));
   const smartPanelClass =
     "bg-[linear-gradient(90deg,#2f8cff14_0%,#7a5cff14_35%,#ff2d9514_70%,#ff8a1f14_100%)] border-violet-200";
   const smartAvatarClass =
     "bg-[linear-gradient(145deg,#64b5ff_0%,#9f8bff_35%,#ff78bc_70%,#ffb36b_100%)] border border-white/70 ring-1 ring-white/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_8px_20px_-12px_rgba(99,102,241,0.45)]";
 
-  if (!isProcessing || aiResponses.length === 0) {
+  if (!isProcessing) {
     return null;
+  }
+
+  if (aiResponses.length === 0) {
+    if (!showPreflightPlaceholder) {
+      return null;
+    }
+    return (
+      <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center space-x-2">
+            <Users className="w-5 h-5 text-blue-600" />
+            <h3 className="font-semibold text-blue-900">{t.workspace.collaboration}</h3>
+          </div>
+          <Badge variant="secondary" className="bg-blue-100 text-blue-800 animate-pulse">
+            {t.workspace.processing}
+          </Badge>
+        </div>
+        <div className="flex items-start gap-2 text-sm text-blue-800">
+          <Loader2 className="w-4 h-4 mt-0.5 animate-spin" />
+          <span>
+            {language === "zh"
+              ? "正在处理输入并启动模型，请稍候..."
+              : "Processing input and starting models..."}
+          </span>
+        </div>
+      </Card>
+    );
   }
 
   return (
@@ -164,6 +201,8 @@ export function LiveCollaborationPanel({
         {aiResponses.map((aiResp, idx) => {
           const hasTextContent = (aiResp.content || "").trim().length > 0;
           const resolvedStatus = aiResp.status || (hasTextContent ? "completed" : "pending");
+          const renderProcessingAsMarkdown =
+            resolvedStatus === "processing" && looksLikeMarkdown(aiResp.content);
 
           return (
             <div
@@ -202,10 +241,19 @@ export function LiveCollaborationPanel({
                   <>
                     <Card className="p-3 bg-white border-gray-200 max-w-full">
                       {resolvedStatus === "processing" ? (
-                        <p className="text-[15px] leading-7 whitespace-pre-wrap break-words text-gray-800 min-h-6">
-                          {aiResp.content}
-                          <span className="inline-block w-2 h-4 ml-1 align-[-2px] rounded-sm bg-blue-500 animate-pulse" />
-                        </p>
+                        renderProcessingAsMarkdown ? (
+                          aiResp.content ? (
+                            <MarkdownRenderer content={aiResp.content} />
+                          ) : (
+                            <p className="text-sm text-gray-500">{t.workspace.pending}</p>
+                          )
+                        ) : (
+                          <SmoothStreamText
+                            text={aiResp.content || ""}
+                            isStreaming={resolvedStatus === "processing"}
+                            className="text-[15px] leading-7 whitespace-pre-wrap break-words text-gray-800 min-h-6"
+                          />
+                        )
                       ) : aiResp.content ? (
                         <MarkdownRenderer content={aiResp.content} />
                       ) : (

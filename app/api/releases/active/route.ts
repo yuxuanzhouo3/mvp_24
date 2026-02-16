@@ -40,7 +40,7 @@ export async function GET() {
     }
 
     const activeMap: Record<string, any> = {};
-    let fallbackMacRelease = null;
+    let fallbackMacRelease: Record<string, any> | null = null;
 
     const normalizeCloudbaseFileId = (release: any) => {
       if (!release) return release;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -139,6 +139,9 @@ export function GPTWorkspace({
   const [attachments, setAttachments] = useState<MultimodalAttachmentPayload[]>([]);
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [showMultimodalPreprocessHint, setShowMultimodalPreprocessHint] =
+    useState(false);
+  const [isSessionHistoryLoading, setIsSessionHistoryLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const activeAbortControllerRef = useRef<AbortController | null>(null);
@@ -146,6 +149,9 @@ export function GPTWorkspace({
   const isProcessingRef = useRef(false);
   const processingSessionIdRef = useRef<string | null>(null);
   const currentSessionIdRef = useRef<string | undefined>(undefined);
+  const visibleMessagesSessionIdRef = useRef<string | undefined>(undefined);
+  const sessionLoadSeqRef = useRef(0);
+  const sessionSwitchStartedAtRef = useRef(0);
   const messagesRef = useRef<Message[]>([]);
   const sessionMessageCacheRef = useRef<Record<string, Message[]>>({});
   const attachmentsRef = useRef<MultimodalAttachmentPayload[]>([]);
@@ -162,6 +168,8 @@ export function GPTWorkspace({
   const MAX_TEXT_EXTRACT_CHARS = 12000;
   const MAX_DATA_URL_BYTES = 2 * 1024 * 1024;
   const MAX_RECORDING_SECONDS = 120;
+  const RECORDING_AUDIO_BITS_PER_SECOND = 24000;
+  const TARGET_RECORDING_WAV_SAMPLE_RATE = 8000;
 
   const formatFileSize = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return "0 B";
@@ -196,12 +204,12 @@ export function GPTWorkspace({
     }
 
     const candidates = [
-      "audio/webm;codecs=opus",
       "audio/webm",
       "audio/mp4",
-      "audio/ogg;codecs=opus",
       "audio/ogg",
       "audio/wav",
+      "audio/webm;codecs=opus",
+      "audio/ogg;codecs=opus",
     ];
 
     for (const candidate of candidates) {
@@ -339,6 +347,115 @@ export function GPTWorkspace({
       };
     });
 
+  const encodeMonoSamplesToWav = (
+    samples: Float32Array,
+    sampleRate: number
+  ): Blob => {
+    const channelCount = 1;
+    const bytesPerSample = 2;
+    const blockAlign = channelCount * bytesPerSample;
+    const dataSize = samples.length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    const writeString = (offset: number, value: string) => {
+      for (let i = 0; i < value.length; i += 1) {
+        view.setUint8(offset + i, value.charCodeAt(i));
+      }
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, 36 + dataSize, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true); // PCM chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, channelCount, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true); // bits per sample
+    writeString(36, "data");
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
+      const sample = Math.max(-1, Math.min(1, samples[sampleIndex]));
+      const pcm = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      view.setInt16(offset, pcm, true);
+      offset += bytesPerSample;
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+  };
+
+  const downmixAndResampleToMono = (
+    audioBuffer: AudioBuffer,
+    targetSampleRate: number
+  ) => {
+    const sourceRate = audioBuffer.sampleRate;
+    const sourceLength = audioBuffer.length;
+    const channelCount = Math.max(1, audioBuffer.numberOfChannels);
+    const sourceChannels = Array.from({ length: channelCount }, (_, index) =>
+      audioBuffer.getChannelData(index)
+    );
+    const targetLength = Math.max(
+      1,
+      Math.round((sourceLength / sourceRate) * targetSampleRate)
+    );
+    const mixed = new Float32Array(targetLength);
+
+    const getMixedSample = (index: number) => {
+      const clampedIndex = Math.max(0, Math.min(sourceLength - 1, index));
+      let sum = 0;
+      for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+        sum += sourceChannels[channelIndex][clampedIndex] || 0;
+      }
+      return sum / channelCount;
+    };
+
+    for (let i = 0; i < targetLength; i += 1) {
+      const sourceIndex = (i * sourceRate) / targetSampleRate;
+      const leftIndex = Math.floor(sourceIndex);
+      const rightIndex = Math.min(sourceLength - 1, leftIndex + 1);
+      const weight = sourceIndex - leftIndex;
+      const left = getMixedSample(leftIndex);
+      const right = getMixedSample(rightIndex);
+      mixed[i] = left + (right - left) * weight;
+    }
+
+    return { samples: mixed, sampleRate: targetSampleRate };
+  };
+
+  const transcodeAudioBlobToWav = async (blob: Blob): Promise<Blob | null> => {
+    if (typeof window === "undefined") return null;
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return null;
+
+    const context = new Ctx();
+    try {
+      const source = await blob.arrayBuffer();
+      const decoded = await context.decodeAudioData(source.slice(0));
+      const monoResampled = downmixAndResampleToMono(
+        decoded,
+        TARGET_RECORDING_WAV_SAMPLE_RATE
+      );
+      return encodeMonoSamplesToWav(
+        monoResampled.samples,
+        monoResampled.sampleRate
+      );
+    } catch (error) {
+      console.warn("[GPTWorkspace] Failed to transcode recording to wav:", error);
+      return null;
+    } finally {
+      try {
+        await context.close();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
@@ -402,6 +519,10 @@ export function GPTWorkspace({
     Boolean(currentSessionId) &&
     Boolean(processingSessionId) &&
     currentSessionId === processingSessionId;
+  const isPreflightProcessing =
+    isProcessing && !processingSessionId && !currentSessionId;
+  const showWorkspaceProcessing =
+    isCurrentSessionProcessing || isPreflightProcessing;
 
   const visibleAIResponses = isCurrentSessionProcessing ? aiResponses : [];
   const visibleActiveTaskGraphSpec = isCurrentSessionProcessing
@@ -432,6 +553,14 @@ export function GPTWorkspace({
     });
   };
 
+  const setMessagesForSessionView = (
+    sessionId: string | undefined,
+    nextMessages: Message[]
+  ) => {
+    visibleMessagesSessionIdRef.current = sessionId;
+    setMessages(nextMessages);
+  };
+
   const appendMessageForSession = (
     sessionId: string,
     message: Message
@@ -450,7 +579,27 @@ export function GPTWorkspace({
       activeSessionId === sessionId &&
       !visibleMessages.some((item) => item.id === message.id)
     ) {
+      visibleMessagesSessionIdRef.current = sessionId;
       addMessage(message);
+    }
+  };
+
+  const removeMessageForSession = (sessionId: string, messageId: string) => {
+    const activeSessionId = currentSessionIdRef.current;
+    const visibleMessages = messagesRef.current;
+    const fallbackBase = activeSessionId === sessionId ? visibleMessages : [];
+    const cached = sessionMessageCacheRef.current[sessionId] || fallbackBase;
+    const nextCache = cached.filter((item) => item.id !== messageId);
+    sessionMessageCacheRef.current[sessionId] = nextCache;
+
+    if (
+      activeSessionId === sessionId &&
+      visibleMessages.some((item) => item.id === messageId)
+    ) {
+      setMessagesForSessionView(
+        sessionId,
+        visibleMessages.filter((item) => item.id !== messageId)
+      );
     }
   };
 
@@ -647,6 +796,13 @@ export function GPTWorkspace({
 
       try {
         const built = await buildAttachmentFromFile(file);
+        if (built.kind === "audio" && !built.dataUrl) {
+          toast.warning(
+            language === "zh"
+              ? `音频 ${file.name} 体积较大，未嵌入可转写内容。建议缩短录音或分段发送。`
+              : `Audio ${file.name} is too large for inline transcription. Try a shorter recording.`
+          );
+        }
         merged = [...merged, built];
         totalBytes += file.size;
       } catch (error) {
@@ -698,6 +854,27 @@ export function GPTWorkspace({
     mediaRecorderRef.current = null;
   };
 
+  const getMicrophonePermissionState = async (): Promise<
+    PermissionState | "unsupported"
+  > => {
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.permissions ||
+      typeof navigator.permissions.query !== "function"
+    ) {
+      return "unsupported";
+    }
+
+    try {
+      const status = await navigator.permissions.query({
+        name: "microphone" as PermissionName,
+      });
+      return status.state;
+    } catch {
+      return "unsupported";
+    }
+  };
+
   const startAudioRecording = async () => {
     if (
       typeof window === "undefined" ||
@@ -713,12 +890,39 @@ export function GPTWorkspace({
       return;
     }
 
+    if (!window.isSecureContext) {
+      toast.error(
+        language === "zh"
+          ? "当前页面不是安全上下文（需 HTTPS 或 localhost），浏览器不会弹出麦克风授权"
+          : "This page is not a secure context (HTTPS or localhost required), so browser won't request microphone permission."
+      );
+      return;
+    }
+
+    const permissionState = await getMicrophonePermissionState();
+    if (permissionState === "denied") {
+      toast.error(
+        language === "zh"
+          ? "麦克风权限已被浏览器永久拒绝。请点地址栏锁图标 → 站点设置 → 麦克风改为“允许”，然后刷新页面"
+          : "Microphone permission is blocked. Click the lock icon, allow microphone in site settings, then refresh."
+      );
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = getSupportedRecordingMimeType();
-      const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
+      const recorderOptions: MediaRecorderOptions = {};
+      if (mimeType) {
+        recorderOptions.mimeType = mimeType;
+        if (mimeType.includes("webm") || mimeType.includes("ogg")) {
+          recorderOptions.audioBitsPerSecond = RECORDING_AUDIO_BITS_PER_SECOND;
+        }
+      }
+      const recorder =
+        Object.keys(recorderOptions).length > 0
+          ? new MediaRecorder(stream, recorderOptions)
+          : new MediaRecorder(stream);
 
       recordingStreamRef.current = stream;
       recordingChunksRef.current = [];
@@ -765,11 +969,30 @@ export function GPTWorkspace({
             return;
           }
 
-          const extension = getAudioExtensionByMime(effectiveMimeType);
+          let uploadBlob = blob;
+          let uploadMimeType = effectiveMimeType || "audio/webm";
+          const lowerType = uploadMimeType.toLowerCase();
+          if (
+            lowerType.includes("webm") ||
+            lowerType.includes("ogg") ||
+            lowerType.includes("opus")
+          ) {
+            const wavBlob = await transcodeAudioBlobToWav(blob);
+            if (
+              wavBlob &&
+              wavBlob.size > 0 &&
+              wavBlob.size <= MAX_DATA_URL_BYTES
+            ) {
+              uploadBlob = wavBlob;
+              uploadMimeType = "audio/wav";
+            }
+          }
+
+          const extension = getAudioExtensionByMime(uploadMimeType);
           const file = new File(
-            [blob],
+            [uploadBlob],
             `recording-${Date.now()}.${extension}`,
-            { type: effectiveMimeType || "audio/webm" }
+            { type: uploadMimeType }
           );
           await appendFilesAsAttachments([file]);
           toast.success(
@@ -809,12 +1032,28 @@ export function GPTWorkspace({
         });
       }, 1000);
     } catch (error) {
-      console.error("[GPTWorkspace] Failed to start recording:", error);
+      const isEmbedded = window.top !== window;
+      console.error("[GPTWorkspace] Failed to start recording:", {
+        error,
+        isSecureContext: window.isSecureContext,
+        permissionState,
+        isEmbedded,
+        userAgent:
+          typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+      });
       const message =
         error instanceof DOMException && error.name === "NotAllowedError"
           ? language === "zh"
-            ? "麦克风权限被拒绝，请在浏览器中允许后重试"
-            : "Microphone permission denied. Please allow access and retry."
+            ? !window.isSecureContext
+              ? "当前页面不是 HTTPS 安全上下文，浏览器不会弹出麦克风权限"
+              : isEmbedded
+                ? "当前页面在内嵌容器中，容器可能禁用了麦克风权限。请在独立浏览器页打开重试"
+                : "麦克风权限被拒绝。请检查地址栏权限、系统麦克风权限后重试"
+            : !window.isSecureContext
+              ? "This page is not a secure context (HTTPS required), so microphone permission cannot be requested."
+              : isEmbedded
+                ? "This page is embedded and the container may block microphone permission. Open in a standalone browser tab."
+                : "Microphone permission denied. Check browser and OS microphone permissions."
           : language === "zh"
             ? "无法启动录音，请检查设备或权限"
             : "Unable to start recording. Check device or permissions.";
@@ -1005,27 +1244,54 @@ export function GPTWorkspace({
   }, [currentSessionId]);
 
   useEffect(() => {
+    sessionSwitchStartedAtRef.current = Date.now();
+    setShouldAutoScroll(true);
+    const container = chatContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [currentSessionId]);
+
+  useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
   useEffect(() => {
+    if (!currentSessionId) {
+      setIsSessionHistoryLoading(false);
+    }
+  }, [currentSessionId]);
+
+  useEffect(() => {
     if (!currentSessionId) return;
+    if (visibleMessagesSessionIdRef.current !== currentSessionId) return;
     sessionMessageCacheRef.current[currentSessionId] = messages;
   }, [currentSessionId, messages]);
 
   // 在消息或 AI 回复更新时滚动到底部（如果用户未手动向上滚动）
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!shouldAutoScroll) return;
     const container = chatContainerRef.current;
     if (!container) return;
     const hasStreamingOutput =
       isCurrentSessionProcessing &&
       aiResponses.some((resp) => resp.status === "processing");
-    container.scrollTo({
-      top: container.scrollHeight,
-      behavior: hasStreamingOutput ? "auto" : "smooth",
-    });
-  }, [messages, aiResponses, shouldAutoScroll, isCurrentSessionProcessing]);
+    const isRecentSessionSwitch =
+      Date.now() - sessionSwitchStartedAtRef.current < 1600;
+    const instantScroll =
+      hasStreamingOutput || isSessionHistoryLoading || isRecentSessionSwitch;
+    if (instantScroll) {
+      container.scrollTop = container.scrollHeight;
+      return;
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+  }, [
+    messages,
+    aiResponses,
+    shouldAutoScroll,
+    isCurrentSessionProcessing,
+    isSessionHistoryLoading,
+  ]);
 
   // 从“收藏对话”点击进入会话后，自动滚动到收藏的那条消息
   useEffect(() => {
@@ -1147,34 +1413,93 @@ export function GPTWorkspace({
     const loadMessagesFromDatabase = async () => {
       if (!currentSessionId) return;
       const targetSessionId = currentSessionId;
+      const loadSeq = sessionLoadSeqRef.current + 1;
+      sessionLoadSeqRef.current = loadSeq;
+      const pageLimit = 500;
+      const maxPages = 200;
+      setIsSessionHistoryLoading(true);
 
       const cachedMessages = sessionMessageCacheRef.current[targetSessionId];
       if (cachedMessages && cachedMessages.length > 0) {
-        setMessages(cachedMessages);
+        setMessagesForSessionView(targetSessionId, cachedMessages);
+      } else {
+        setMessagesForSessionView(targetSessionId, []);
       }
 
       try {
         const { token } = await getClientAuthToken();
         if (!token) return;
+        let offset = 0;
+        let pageCount = 0;
+        let totalMessages: number | null = null;
+        let loadedSessionConfig: any = null;
+        const loadedMessages: any[] = [];
 
-        const response = await fetch(
-          `/api/chat/sessions/${targetSessionId}/messages`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
+        while (pageCount < maxPages) {
+          if (cancelled || currentSessionIdRef.current !== targetSessionId) {
+            return;
           }
-        );
 
-        if (!response.ok) {
-          console.error("Failed to load messages:", response.status);
-          return;
+          const response = await fetch(
+            `/api/chat/sessions/${targetSessionId}/messages?limit=${pageLimit}&offset=${offset}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null);
+            const serverMessage =
+              typeof payload?.error === "string" ? payload.error : "";
+
+            if (response.status === 404) {
+              // Session may be removed or inaccessible. Keep UI stable without error noise.
+              sessionMessageCacheRef.current[targetSessionId] = [];
+              if (currentSessionIdRef.current === targetSessionId) {
+                setMessagesForSessionView(targetSessionId, []);
+              }
+              return;
+            }
+
+            if (response.status === 401) {
+              // Auth could be refreshing; avoid spamming console errors for expected auth churn.
+              return;
+            }
+
+            console.error(
+              "Failed to load messages:",
+              response.status,
+              serverMessage || response.statusText
+            );
+            return;
+          }
+
+          const data = await response.json();
+          const pageMessages = Array.isArray(data?.messages) ? data.messages : [];
+          loadedMessages.push(...pageMessages);
+
+          if (loadedSessionConfig === null && data?.sessionConfig !== undefined) {
+            loadedSessionConfig = data.sessionConfig ?? null;
+          }
+
+          const parsedTotal =
+            typeof data?.total === "number"
+              ? data.total
+              : Number.parseInt(String(data?.total ?? ""), 10);
+          if (Number.isFinite(parsedTotal) && parsedTotal >= 0) {
+            totalMessages = parsedTotal;
+          }
+
+          offset += pageMessages.length;
+          pageCount += 1;
+
+          if (pageMessages.length === 0) break;
+          if (pageMessages.length < pageLimit) break;
+          if (totalMessages !== null && offset >= totalMessages) break;
         }
-
-        const data = await response.json();
-        const loadedMessages = data.messages || [];
-        const loadedSessionConfig = data.sessionConfig || null;
 
         if (cancelled || currentSessionIdRef.current !== targetSessionId) {
           return;
@@ -1241,8 +1566,17 @@ export function GPTWorkspace({
             timestamp: parseSafeDate(msg?.timestamp),
           };
         });
-        const latestCached =
-          sessionMessageCacheRef.current[targetSessionId] || [];
+        const cachedMessagesForTarget = sessionMessageCacheRef.current[targetSessionId] || [];
+        const visibleMessagesForTarget =
+          isProcessingRef.current &&
+          processingSessionIdRef.current === targetSessionId &&
+          visibleMessagesSessionIdRef.current === targetSessionId
+            ? messagesRef.current
+            : [];
+        const latestCached = mergeSessionMessages(
+          cachedMessagesForTarget,
+          visibleMessagesForTarget
+        );
         const mergedMessages = mergeSessionMessages(
           formattedMessages,
           latestCached
@@ -1264,7 +1598,7 @@ export function GPTWorkspace({
           );
         }
 
-        setMessages(nextMessages);
+        setMessagesForSessionView(targetSessionId, nextMessages);
         sessionMessageCacheRef.current[targetSessionId] = nextMessages;
 
         // 加载会话配置（用于显示AI锁定状态）
@@ -1305,6 +1639,10 @@ export function GPTWorkspace({
         );
       } catch (error) {
         console.error("[GPTWorkspace] Failed to load messages from database:", error);
+      } finally {
+        if (!cancelled && sessionLoadSeqRef.current === loadSeq) {
+          setIsSessionHistoryLoading(false);
+        }
       }
     };
 
@@ -1401,8 +1739,10 @@ export function GPTWorkspace({
   };
 
   const handleSend = async () => {
-    const rawInput = input.trim();
-    if ((!rawInput && attachments.length === 0) || isProcessing) return;
+    const originalInput = input;
+    const rawInput = originalInput.trim();
+    const attachmentSnapshot = [...attachments];
+    if ((!rawInput && attachmentSnapshot.length === 0) || isProcessing) return;
     if (isRecordingAudio) {
       toast.info(
         language === "zh"
@@ -1422,27 +1762,103 @@ export function GPTWorkspace({
       return;
     }
 
-    // 获取认证 Token（支持 CloudBase 和 Supabase）
-    const { token: authToken, error: authError } = await getClientAuthToken();
-
-    if (authError || !authToken) {
-      toast.error("请先登录", {
-        description: "您需要登录后才能使用 AI 对话功能",
-      });
-      return;
-    }
-    const visibleUserInput = buildVisibleUserInput(rawInput, attachments);
+    const visibleUserInput = buildVisibleUserInput(rawInput, attachmentSnapshot);
     const fallbackModelMessage =
       rawInput ||
       (language === "zh"
         ? "请根据我上传的附件内容进行分析并给出答案。"
         : "Please analyze the uploaded attachments and provide the answer.");
     let effectiveMessageForModels = fallbackModelMessage;
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: visibleUserInput || fallbackModelMessage,
+      timestamp: new Date(),
+    };
+    const restoreComposer = () => {
+      setInput(originalInput);
+      setAttachments(attachmentSnapshot);
+    };
+    let sessId: string | null = currentSessionId || null;
+    let isNewSession = false;
+    let userMessageCommitted = false;
+    let userMessageAttachedToSession = false;
+    let modelExecutionStarted = false;
+    const hasMultimodalInput = attachmentSnapshot.length > 0;
+    const appendVisibleMessage = (message: Message) => {
+      const visibleMessages = messagesRef.current;
+      if (!visibleMessages.some((item) => item.id === message.id)) {
+        setMessagesForSessionView(
+          currentSessionIdRef.current,
+          [...visibleMessages, message]
+        );
+      }
+    };
+    const removeVisibleMessageById = (messageId: string) => {
+      const visibleMessages = messagesRef.current;
+      if (visibleMessages.some((item) => item.id === messageId)) {
+        setMessagesForSessionView(
+          currentSessionIdRef.current,
+          visibleMessages.filter((item) => item.id !== messageId)
+        );
+      }
+    };
+    const removeCommittedUserMessage = () => {
+      if (sessId) {
+        removeMessageForSession(sessId, userMessage.id);
+      } else {
+        removeVisibleMessageById(userMessage.id);
+      }
+    };
 
     setIsProcessing(true);
+    setShowMultimodalPreprocessHint(hasMultimodalInput);
     setError(null);
+    setInput("");
+    setAttachments([]);
+    if (sessId) {
+      setProcessingSessionId(sessId);
+      processingSessionIdRef.current = sessId;
+      appendMessageForSession(sessId, userMessage);
+      userMessageAttachedToSession = true;
+    } else {
+      appendVisibleMessage(userMessage);
+    }
+    userMessageCommitted = true;
 
     try {
+      // 获取认证 Token（支持 CloudBase 和 Supabase）
+      const { token: authToken, error: authError } = await getClientAuthToken();
+
+      if (authError || !authToken) {
+        toast.error("请先登录", {
+          description: "您需要登录后才能使用 AI 对话功能",
+        });
+        removeCommittedUserMessage();
+        restoreComposer();
+        return;
+      }
+
+      // 如果没有sessionId，先创建会话，并立刻渲染用户消息
+      if (!sessId) {
+        isNewSession = true;
+        if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
+          throw createAbortError();
+        }
+        sessId = await createSession(authToken, userMessage.content as string);
+        setCurrentSessionId(sessId);
+        // Avoid session-switch race that may drop the optimistic first user message.
+        currentSessionIdRef.current = sessId;
+      }
+      if (!sessId) {
+        throw new Error("Failed to create session");
+      }
+      setProcessingSessionId(sessId);
+      processingSessionIdRef.current = sessId;
+      if (!userMessageAttachedToSession) {
+        appendMessageForSession(sessId, userMessage);
+        userMessageAttachedToSession = true;
+      }
 
       // 检查额度
       try {
@@ -1455,6 +1871,8 @@ export function GPTWorkspace({
           if (usageData.plan === "free" && usageData.used >= usageData.limit) {
             // 触发订阅弹窗
             window.dispatchEvent(new CustomEvent("show-subscription-modal"));
+            removeCommittedUserMessage();
+            restoreComposer();
             setIsProcessing(false);
             return;
           }
@@ -1463,41 +1881,16 @@ export function GPTWorkspace({
         console.error("Failed to check usage before sending:", e);
       }
 
-      if (attachments.length > 0) {
+      if (attachmentSnapshot.length > 0) {
         const preprocessResult = await preprocessMultimodalInput(
           authToken,
           rawInput,
-          attachments,
+          attachmentSnapshot,
           abortController.signal
         );
         effectiveMessageForModels =
           preprocessResult.enhancedMessage?.trim() || fallbackModelMessage;
       }
-
-      const userMessage: Message = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: visibleUserInput || fallbackModelMessage,
-        timestamp: new Date(),
-      };
-
-      setInput("");
-      setAttachments([]);
-
-      // 如果没有sessionId，先创建会话
-      let sessId = currentSessionId;
-      let isNewSession = false;
-      if (!sessId) {
-        isNewSession = true;
-        if (abortController.signal.aborted || runId !== activeRunIdRef.current) {
-          throw createAbortError();
-        }
-        sessId = await createSession(authToken, userMessage.content as string);
-        setCurrentSessionId(sessId);
-      }
-      setProcessingSessionId(sessId);
-      processingSessionIdRef.current = sessId;
-      appendMessageForSession(sessId, userMessage);
 
       // ✅ 改进：使用 sessionConfig 中锁定的 AI，而不是当前的 selectedGPTs
       // 这样确保一旦创建会话，就不能再改 AI
@@ -1514,6 +1907,8 @@ export function GPTWorkspace({
         toast.error("No AI selected", {
           description: "Please select at least one AI",
         });
+        removeCommittedUserMessage();
+        restoreComposer();
         setIsProcessing(false);
         return;
       }
@@ -1557,6 +1952,9 @@ export function GPTWorkspace({
       if (!isNewSession && sessId && sessionConfig?.collaborationMode !== effectiveCollaborationMode) {
         updateSessionCollaborationMode(sessId, authToken, effectiveCollaborationMode);
       }
+
+      modelExecutionStarted = true;
+      setShowMultimodalPreprocessHint(false);
 
       if (effectiveCollaborationMode === "graph") {
         // 立刻给用户可见反馈，避免任务图规划阶段出现“空白等待”
@@ -1983,6 +2381,10 @@ export function GPTWorkspace({
       if (isAbortError(error) || runId !== activeRunIdRef.current) {
         return;
       }
+      if (!modelExecutionStarted && userMessageCommitted) {
+        removeCommittedUserMessage();
+        restoreComposer();
+      }
       console.error("Multi-AI collaboration error:", error);
       setError(error instanceof Error ? error.message : t.workspace.error);
       toast.error(error instanceof Error ? error.message : t.workspace.error);
@@ -1993,6 +2395,7 @@ export function GPTWorkspace({
       activeAbortControllerRef.current = null;
       // 确保状态一定会被清除
       setIsProcessing(false);
+      setShowMultimodalPreprocessHint(false);
       setProcessingSessionId(null);
       processingSessionIdRef.current = null;
       setAIResponses([]);
@@ -3154,27 +3557,6 @@ export function GPTWorkspace({
     }
   };
 
-  const notifyComingSoon = (feature: "upload" | "voice" | "record") => {
-    const featureName =
-      language === "zh"
-        ? feature === "upload"
-          ? "附件上传"
-          : feature === "voice"
-            ? "语音输入"
-            : "麦克风录音"
-        : feature === "upload"
-          ? "File upload"
-          : feature === "voice"
-            ? "Voice input"
-            : "Microphone recording";
-
-    toast.info(
-      language === "zh"
-        ? `${featureName}即将上线`
-        : `${featureName} is coming soon`
-    );
-  };
-
   return (
     <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
       <RightNavDock
@@ -3218,7 +3600,8 @@ export function GPTWorkspace({
             <WorkspaceMessageList
               messages={messages}
               selectedGPTs={selectedGPTs}
-              isProcessing={isCurrentSessionProcessing}
+              isProcessing={showWorkspaceProcessing}
+              isSessionLoading={isSessionHistoryLoading}
               t={t}
               availableAIs={availableAIs}
               currentSessionId={currentSessionId}
@@ -3236,8 +3619,9 @@ export function GPTWorkspace({
             />
 
             <LiveCollaborationPanel
-              isProcessing={isCurrentSessionProcessing}
+              isProcessing={showWorkspaceProcessing}
               aiResponses={visibleAIResponses}
+              showPreflightPlaceholder={showMultimodalPreprocessHint}
               effectiveCollaborationMode={effectiveCollaborationMode}
               activeTaskGraphSpec={visibleActiveTaskGraphSpec}
               taskGraphPresetId={taskGraphPresetId}
@@ -3297,7 +3681,6 @@ export function GPTWorkspace({
         isProcessing={isProcessing}
         onSend={handleSend}
         onStop={() => stopCurrentRun(false)}
-        notifyComingSoon={notifyComingSoon}
         language={language}
         attachments={attachments}
         isRecording={isRecordingAudio}

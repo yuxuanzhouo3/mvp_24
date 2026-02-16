@@ -7,7 +7,7 @@
     "test:ci": "jest --runInBand --ci",
     "build": "next build",
     "dev": "next dev",
-    "lint": "next lint",
+    "lint": "eslint .",
     "start": "next start",
     "vercel:dev": "vercel dev",
     "vercel:deploy": "vercel --prod",

@@ -713,12 +713,12 @@ export default function AdsPage() {
       {/* 删除确认对话框 */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认删除</AlertDialogTitle>
-            <AlertDialogDescription>
-              确定要删除广告 "{selectedAd?.title}" 吗？此操作不可撤销。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+            <AlertDialogHeader>
+              <AlertDialogTitle>确认删除</AlertDialogTitle>
+              <AlertDialogDescription>
+                确定要删除广告“{selectedAd?.title}”吗？此操作不可撤销。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel
               onClick={() => {

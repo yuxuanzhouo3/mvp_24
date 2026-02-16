@@ -31,6 +31,8 @@ interface AIAgent {
   icon?: string;
 }
 
+const WECHAT_PRIVACY_SESSION_KEY = "wechat_privacy_consent";
+
 function PlatformContent() {
   const [selectedGPTs, setSelectedGPTs] = useState<AIAgent[]>([]);
   const [availableAIs, setAvailableAIs] = useState<AIAgent[]>([]);
@@ -53,6 +55,12 @@ function PlatformContent() {
   const handleMiniProgramLogin = useCallback(
     async (code: string, profile?: { nickName?: string; avatarUrl?: string }) => {
       try {
+        const agreeToPrivacy =
+          window.sessionStorage.getItem(WECHAT_PRIVACY_SESSION_KEY) === "1";
+        if (isChinaRegion() && !agreeToPrivacy) {
+          toast.error("请先在登录页勾选隐私协议后再使用微信登录");
+          return;
+        }
         console.log("🚀 [Home] 正在使用小程序 code 登录:", code);
         const response = await fetch("/api/wxlogin", {
           method: "POST",
@@ -61,6 +69,7 @@ function PlatformContent() {
             code,
             nickName: profile?.nickName,
             avatarUrl: profile?.avatarUrl,
+            agreeToPrivacy,
           }),
         });
         const data = await response.json();

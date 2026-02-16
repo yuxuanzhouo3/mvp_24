@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, type MouseEvent } from "react";
+import { useState, useEffect, useMemo, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -62,6 +62,102 @@ interface ChatSession {
   updated_at: string;
 }
 
+type SessionGroupKey =
+  | "today"
+  | "yesterday"
+  | "last7Days"
+  | "last30Days"
+  | "earlier";
+type SessionGroups = Record<SessionGroupKey, ChatSession[]>;
+
+const SESSION_GROUP_ORDER: SessionGroupKey[] = [
+  "today",
+  "yesterday",
+  "last7Days",
+  "last30Days",
+  "earlier",
+];
+
+const DEFAULT_MOBILE_EXPANDED_GROUPS: Record<SessionGroupKey, boolean> = {
+  today: true,
+  yesterday: true,
+  last7Days: true,
+  last30Days: false,
+  earlier: false,
+};
+
+function createEmptySessionGroups(): SessionGroups {
+  return {
+    today: [],
+    yesterday: [],
+    last7Days: [],
+    last30Days: [],
+    earlier: [],
+  };
+}
+
+function groupSessionsByTime(sessions: ChatSession[]): SessionGroups {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const thirtyDaysAgo = new Date(today);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const groups = createEmptySessionGroups();
+
+  for (const session of sessions) {
+    const sessionDate = new Date(session.created_at);
+    if (sessionDate >= today) {
+      groups.today.push(session);
+    } else if (sessionDate >= yesterday) {
+      groups.yesterday.push(session);
+    } else if (sessionDate >= sevenDaysAgo) {
+      groups.last7Days.push(session);
+    } else if (sessionDate >= thirtyDaysAgo) {
+      groups.last30Days.push(session);
+    } else {
+      groups.earlier.push(session);
+    }
+  }
+
+  return groups;
+}
+
+function getSessionGroupLabel(group: SessionGroupKey, language: "zh" | "en") {
+  if (language === "zh") {
+    switch (group) {
+      case "today":
+        return "今天";
+      case "yesterday":
+        return "昨天";
+      case "last7Days":
+        return "最近7天";
+      case "last30Days":
+        return "最近30天";
+      case "earlier":
+      default:
+        return "更早";
+    }
+  }
+
+  switch (group) {
+    case "today":
+      return "Today";
+    case "yesterday":
+      return "Yesterday";
+    case "last7Days":
+      return "Last 7 Days";
+    case "last30Days":
+      return "Last 30 Days";
+    case "earlier":
+    default:
+      return "Earlier";
+  }
+}
+
 interface HeaderProps {
   activeView: string;
   setActiveView: (view: string) => void;
@@ -90,6 +186,9 @@ export function Header({
   const [loading, setLoading] = useState(true);
   const [deleteTargetSessionId, setDeleteTargetSessionId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [mobileExpandedGroups, setMobileExpandedGroups] = useState(
+    DEFAULT_MOBILE_EXPANDED_GROUPS
+  );
   const favorites = useMessageFavorites();
   const blockedMessage =
     language === "zh"
@@ -98,6 +197,7 @@ export function Header({
   const visibleFavoritesMobile = showAllFavoritesMobile
     ? favorites.items
     : favorites.items.slice(0, FAVORITES_INITIAL_VISIBLE);
+  const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -392,24 +492,24 @@ export function Header({
             ) : (
               <div className="space-y-1 py-2 pr-2">
                 {/* 收藏对话（单条消息收藏） */}
-                <div className="px-1 pb-1">
+                <div className="pb-1">
                   <button
                     onClick={() => setFavoritesExpandedMobile((v) => !v)}
-                    className="w-full grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-2 pr-3 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors text-left"
+                    className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
                   >
-                    <span className="truncate">
+                    <span className="min-w-0 truncate text-left">
                       {language === "zh" ? "收藏对话" : "Favorites"}
                     </span>
-                    <span className="text-xs text-gray-400 tabular-nums justify-self-end">
-                      {favorites.items.length}
-                    </span>
-                    <span className="inline-flex h-5 w-5 items-center justify-center justify-self-end">
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs text-gray-400 tabular-nums">
+                        {favorites.items.length}
+                      </span>
                       {favoritesExpandedMobile ? (
                         <ChevronUp className="h-4 w-4 text-gray-500 flex-shrink-0" />
                       ) : (
                         <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
                       )}
-                    </span>
+                    </div>
                   </button>
 
                   {favoritesExpandedMobile &&
@@ -426,7 +526,9 @@ export function Header({
                           return (
                             <div
                               key={fav.id}
-                              className="group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-blue-50 transition-colors"
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
+                                currentSessionId === fav.sessionId ? "bg-blue-50" : ""
+                              }`}
                               onClick={() => {
                                 if (!fav.sessionId) return;
                                 setPendingFavoriteScroll(
@@ -436,13 +538,32 @@ export function Header({
                                 );
                                 handleSessionClick(fav.sessionId);
                               }}
-                              title={fav.preview}
+                              title={`${sessionTitle} · ${fav.preview || "(empty)"}`}
                             >
-                              <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm truncate">{fav.preview || "(空)"}</div>
-                                <div className="text-[11px] truncate text-gray-500">{sessionTitle}</div>
-                              </div>
+                              <Star className="h-4 w-4 flex-shrink-0 text-gray-400" />
+                              <span
+                                className={`flex-1 text-sm truncate ${
+                                  currentSessionId === fav.sessionId
+                                    ? "font-medium text-gray-900"
+                                    : ""
+                                }`}
+                              >
+                                {fav.preview || "(空)"}
+                              </span>
+                              <button
+                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  favorites.remove(fav.id);
+                                }}
+                                title={
+                                  language === "zh"
+                                    ? "取消收藏"
+                                    : "Remove favorite"
+                                }
+                              >
+                                <Trash2 className="h-3 w-3 text-gray-400" />
+                              </button>
                             </div>
                           );
                         })}
@@ -466,28 +587,64 @@ export function Header({
                     ))}
                 </div>
 
-                {sessions.map((session) => (
-                  <div
-                    key={session.id}
-                    className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
-                      currentSessionId === session.id ? "bg-blue-50" : ""
-                    }`}
-                    onClick={() => handleSessionClick(session.id)}
-                  >
-                    <MessageSquare className="h-4 w-4 flex-shrink-0 text-gray-400" />
-                    <span className="flex-1 text-sm truncate">
-                      {session.title ||
-                        (language === "zh" ? "新对话" : "New Chat")}
-                    </span>
-                    <button
-                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
-                      onClick={(e) => requestDelete(session.id, e)}
-                      title={language === "zh" ? "删除对话" : "Delete"}
-                    >
-                      <Trash2 className="h-3 w-3 text-gray-400" />
-                    </button>
-                  </div>
-                ))}
+                {SESSION_GROUP_ORDER.map((group) => {
+                  const groupSessions = groupedSessions[group];
+                  if (groupSessions.length === 0) return null;
+                  const isExpanded = mobileExpandedGroups[group];
+
+                  return (
+                    <div key={group}>
+                      <button
+                        onClick={() =>
+                          setMobileExpandedGroups((prev) => ({
+                            ...prev,
+                            [group]: !prev[group],
+                          }))
+                        }
+                        className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
+                      >
+                        <span>{getSessionGroupLabel(group, language)}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-400">
+                            {groupSessions.length}
+                          </span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-gray-500 flex-shrink-0" />
+                          )}
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="space-y-1 mt-1">
+                          {groupSessions.map((session) => (
+                            <div
+                              key={session.id}
+                              className={`group flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer hover:bg-gray-100 transition-colors ${
+                                currentSessionId === session.id ? "bg-blue-50" : ""
+                              }`}
+                              onClick={() => handleSessionClick(session.id)}
+                            >
+                              <MessageSquare className="h-4 w-4 flex-shrink-0 text-gray-400" />
+                              <span className="flex-1 text-sm truncate">
+                                {session.title ||
+                                  (language === "zh" ? "新对话" : "New Chat")}
+                              </span>
+                              <button
+                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 rounded flex-shrink-0"
+                                onClick={(e) => requestDelete(session.id, e)}
+                                title={language === "zh" ? "删除对话" : "Delete"}
+                              >
+                                <Trash2 className="h-3 w-3 text-gray-400" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </ScrollArea>

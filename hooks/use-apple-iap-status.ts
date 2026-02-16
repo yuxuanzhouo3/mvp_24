@@ -13,6 +13,7 @@
 
 import { useEffect, useState } from "react";
 import { getClientAuthToken } from "@/lib/client-auth";
+import { isAppleIAPEnabled } from "@/lib/config/apple-iap";
 
 export interface AppleIAPStatus {
   success: boolean;
@@ -26,12 +27,14 @@ export interface AppleIAPStatus {
 }
 
 export function useAppleIAPStatus(enabled = true) {
+  const iapFeatureEnabled = isAppleIAPEnabled();
+  const shouldFetch = enabled && iapFeatureEnabled;
   const [status, setStatus] = useState<AppleIAPStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchStatus = async () => {
-    if (!enabled) {
+    if (!shouldFetch) {
       setLoading(false);
       setError(null);
       setStatus(null);
@@ -86,7 +89,7 @@ export function useAppleIAPStatus(enabled = true) {
   // 组件挂载时获取状态
   useEffect(() => {
     void fetchStatus();
-  }, [enabled]);
+  }, [shouldFetch]);
 
   return {
     status,

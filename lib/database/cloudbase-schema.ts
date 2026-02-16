@@ -56,11 +56,9 @@ export interface AIConversation {
   title: string;
   model: string; // 使用的 AI 模型
   provider: string; // 'deepseek' | 'openai' | 'anthropic'
-  messages: Array<{
-    role: "user" | "assistant" | "system";
-    content: string;
-    timestamp: string;
-  }>;
+  messages: ConversationMessage[];
+  aiConfigHistory?: AIConfigHistory[];
+  currentAIConfigVersion?: number;
   tokens?: {
     input: number;
     output: number;
@@ -70,6 +68,31 @@ export interface AIConversation {
   region: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface AIConfigHistory {
+  version: number;
+  agentIds: string[];
+  mode: string;
+  changedAt: string;
+  changedByUser: boolean;
+}
+
+export interface ConversationMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+  isMultiAI?: boolean;
+  agentResponses?: Array<{
+    agentName: string;
+    content: string;
+    status?: "completed" | "processing" | "pending" | "error";
+  }>;
+  aiConfigVersion?: {
+    version: number;
+    agentIds: string[];
+    mode?: string;
+  };
 }
 
 /**

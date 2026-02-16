@@ -17,6 +17,7 @@ import { setAuthCookies } from "@/lib/auth/cookies";
 // 微信登录请求验证schema
 const wechatLoginSchema = z.object({
   code: z.string().min(1, "WeChat authorization code is required"),
+  agreeToPrivacy: z.boolean().optional(),
 });
 
 /**
@@ -57,6 +58,7 @@ export async function POST(request: NextRequest) {
     }
 
     const { code } = validationResult.data;
+    const agreeToPrivacy = validationResult.data.agreeToPrivacy === true;
 
     // 检查是否是中国区域
     if (!isChinaRegion()) {
@@ -65,6 +67,22 @@ export async function POST(request: NextRequest) {
           success: false,
           error: "WeChat authentication only available in China region",
           code: "REGION_NOT_SUPPORTED",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!agreeToPrivacy) {
+      logSecurityEvent(
+        "wechat_login_privacy_not_accepted",
+        undefined,
+        clientIP
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: "请先阅读并同意隐私政策",
+          code: "PRIVACY_CONSENT_REQUIRED",
         },
         { status: 400 }
       );

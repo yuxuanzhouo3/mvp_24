@@ -143,26 +143,60 @@ function buildAttachmentDigest(attachments: MultimodalAttachmentPayload[]): stri
     .join("\n\n");
 }
 
+function normalizeAudioFormat(format: string): string {
+  const normalized = (format || "").toLowerCase().trim();
+  if (!normalized) return "";
+
+  if (normalized === "x-wav") return "wav";
+  if (normalized === "mpeg" || normalized === "mpga") return "mp3";
+  if (normalized === "m4a") return "mp4";
+
+  return normalized;
+}
+
 function extractAudioData(dataUrl?: string): { format: string; data: string } | null {
   if (!dataUrl || !dataUrl.startsWith("data:audio/")) return null;
-  const match = dataUrl.match(/^data:audio\/([a-zA-Z0-9.+-]+);base64,(.+)$/);
-  if (!match) return null;
-  const format = (match[1] || "").toLowerCase();
-  const data = match[2] || "";
-  if (!format || !data) return null;
+
+  const commaIndex = dataUrl.indexOf(",");
+  if (commaIndex <= 0) return null;
+
+  const meta = dataUrl.slice(5, commaIndex); // e.g. audio/webm;codecs=opus;base64
+  const data = dataUrl.slice(commaIndex + 1);
+  if (!meta || !data) return null;
+
+  const metaParts = meta.split(";").map((part) => part.trim()).filter(Boolean);
+  const typePart = metaParts[0] || "";
+  const hasBase64 = metaParts.some((part) => part.toLowerCase() === "base64");
+  if (!hasBase64 || !typePart.startsWith("audio/")) return null;
+
+  const rawFormat = typePart.slice("audio/".length);
+  const format = normalizeAudioFormat(rawFormat);
+  if (!format) return null;
+
   return { format, data };
 }
 
 function buildPromptContext(message: string, attachments: MultimodalAttachmentPayload[]) {
   const userQuestion = message?.trim() || "用户没有输入文本，仅上传了附件。";
   const attachmentDigest = buildAttachmentDigest(attachments);
-  return [
-    "你是多模态预处理器，请将附件解析为可供其他文本模型继续推理的结构化摘要。",
-    "输出要求：",
+  const hasAudio = attachments.some((item) => item.kind === "audio");
+
+  const outputRequirements = [
     "1) 先给出“关键信息摘要”；",
     "2) 再给出“可用于后续模型的事实清单”（编号列表）；",
     "3) 若附件信息不足，明确写出缺失项；",
     "4) 不要编造未出现的事实；",
+  ];
+
+  if (hasAudio) {
+    outputRequirements.unshift("0) 若含音频，必须先给出“音频逐字转写”；");
+    outputRequirements.push("5) 若有听不清片段，标注不清晰时间段，而不是直接放弃转写。");
+  }
+
+  return [
+    "你是多模态预处理器，请将附件解析为可供其他文本模型继续推理的结构化摘要。",
+    "输出要求：",
+    ...outputRequirements,
     "",
     `用户原始问题：\n${userQuestion}`,
     "",
@@ -176,6 +210,7 @@ async function runQwenOmniPreprocess(params: {
   attachments: MultimodalAttachmentPayload[];
 }) {
   const { userId, message, attachments } = params;
+  const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) {
     throw new Error("DASHSCOPE_API_KEY is not configured");
@@ -190,6 +225,7 @@ async function runQwenOmniPreprocess(params: {
 
   const promptContext = buildPromptContext(message, attachments);
   const richParts: any[] = [{ type: "text", text: promptContext }];
+  let audioPayloadCount = 0;
 
   for (const attachment of attachments) {
     if (
@@ -206,6 +242,7 @@ async function runQwenOmniPreprocess(params: {
     if (attachment.kind === "audio" && attachment.dataUrl) {
       const audioData = extractAudioData(attachment.dataUrl);
       if (audioData) {
+        audioPayloadCount += 1;
         richParts.push({
           type: "input_audio",
           input_audio: {
@@ -213,8 +250,27 @@ async function runQwenOmniPreprocess(params: {
             format: audioData.format,
           },
         });
+      } else {
+        console.warn(
+          "[multimodal-preprocess] audio attachment dataUrl could not be parsed:",
+          {
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            dataUrlPrefix: attachment.dataUrl.slice(0, 48),
+          }
+        );
       }
     }
+  }
+
+  if (hasAudioAttachment && audioPayloadCount === 0) {
+    console.warn(
+      "[multimodal-preprocess] audio attachments exist but no parsable audio payload, fallback to metadata-only analysis"
+    );
+    richParts.push({
+      type: "text",
+      text: "注意：当前请求未携带可解析音频数据，只提供了音频元信息。请不要编造逐字转写，并给出用户可执行的下一步建议。",
+    });
   }
 
   const makeRequest = async (content: any) => {
@@ -245,7 +301,14 @@ async function runQwenOmniPreprocess(params: {
       "[multimodal-preprocess] rich multimodal request failed, fallback to text-only:",
       error
     );
-    completion = await makeRequest(promptContext);
+    const fallbackContext = hasAudioAttachment
+      ? [
+          promptContext,
+          "",
+          "注意：音频通道暂时不可用，请明确指出无法完成逐字转写，并给出可执行的下一步建议（如缩短录音、分段上传）。",
+        ].join("\n")
+      : promptContext;
+    completion = await makeRequest(fallbackContext);
   }
 
   const rawContent = completion?.choices?.[0]?.message?.content;
@@ -334,6 +397,9 @@ export async function POST(req: NextRequest) {
       .filter((item: MultimodalAttachmentPayload | null): item is MultimodalAttachmentPayload =>
         item !== null
       );
+    const audioAttachments = attachments.filter(
+      (item: MultimodalAttachmentPayload) => item.kind === "audio"
+    );
     const totalAttachmentBytes = attachments.reduce(
       (sum: number, item: MultimodalAttachmentPayload) =>
         sum + Math.max(0, item.size || 0),
@@ -354,6 +420,22 @@ export async function POST(req: NextRequest) {
           message: `Total attachment size exceeds ${formatBytes(MAX_TOTAL_ATTACHMENT_BYTES)}`,
         },
         { status: 413 }
+      );
+    }
+
+    if (
+      audioAttachments.length > 0 &&
+      !audioAttachments.some(
+        (item: MultimodalAttachmentPayload) =>
+          typeof item.dataUrl === "string" && item.dataUrl.startsWith("data:audio/")
+      )
+    ) {
+      return Response.json(
+        {
+          error: "Audio payload missing",
+          message: "音频未携带可识别数据，可能因文件过大。请缩短录音时长后重试。",
+        },
+        { status: 422 }
       );
     }
 

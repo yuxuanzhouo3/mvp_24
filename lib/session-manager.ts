@@ -146,11 +146,15 @@ export class SessionManager {
   ): Promise<Session> {
     if (isChinaRegion()) {
       // CloudBase
-      const result = await updateCloudBaseSession(userId, sessionId, updates);
+      const result = await updateCloudBaseSession(sessionId, userId, updates);
       if (result.error) {
         throw new Error(`Failed to update session: ${String(result.error)}`);
       }
-      return this.mapCloudBaseSession(result.data);
+      const refreshed = await this.getSession(sessionId, userId);
+      if (!refreshed) {
+        throw new Error("Failed to update session: session not found after update");
+      }
+      return refreshed;
     } else {
       // Supabase
       const { data, error } = await supabaseAdmin

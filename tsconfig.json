@@ -38,6 +38,9 @@
   ],
   "exclude": [
     "node_modules",
-    "cloudbase-integration"
+    "cloudbase-integration",
+    "logindome",
+    "uselessdoc",
+    "scripts"
   ]
 }

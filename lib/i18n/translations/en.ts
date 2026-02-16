@@ -664,42 +664,6 @@ export const en = {
   // ==================== Support ====================
   support: {
     title: "MultiGPT Support",
-    subtitle: "If you encounter any issues while using our app, please contact us through the following methods.",
-    contact: "Contact Us",
-    email: "Email",
-    faq: "Frequently Asked Questions",
-    questions: {
-      resetPassword: {
-        q: "How do I reset my password?",
-        a: "Go to the settings page in the app and select \"Reset Password\". Follow the instructions sent to your email.",
-      },
-      noInternet: {
-        q: "The app won't connect to the internet. What should I do?",
-        a: "Check your internet connection and try restarting the app. If the problem persists, contact our support team.",
-      },
-      update: {
-        q: "How do I update the app?",
-        a: "Updates are available through your device's app store. Check for updates regularly.",
-      },
-      bugReport: {
-        q: "I found a bug. How can I report it?",
-        a: "Please use the feedback form below or email us with details about the issue.",
-      },
-    },
-    feedback: "Send Feedback",
-    form: {
-      name: "Name",
-      email: "Email",
-      subject: "Subject",
-      message: "Message",
-      send: "Send Message",
-    },
-    thankYou: "Thank you for your feedback! We will respond as soon as possible.",
-  },
-
-  // ==================== Support ====================
-  support: {
-    title: "MultiGPT Support",
     subtitle: "If you encounter any issues while using our app, please contact us through the following methods:",
     contact: "Contact Information",
     email: "Email",

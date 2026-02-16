@@ -22,6 +22,8 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2 } from "lucide-react";
 
+const WECHAT_PRIVACY_SESSION_KEY = "wechat_privacy_consent";
+
 function AuthCallbackContent() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -88,6 +90,14 @@ function AuthCallbackContent() {
 
       // 将授权码发送到后端进行登录
       try {
+        const agreeToPrivacy =
+          window.sessionStorage.getItem(WECHAT_PRIVACY_SESSION_KEY) === "1";
+        if (isChinaRegion() && !agreeToPrivacy) {
+          setError("请先返回登录页勾选隐私协议后再使用微信登录");
+          setLoading(false);
+          return;
+        }
+
         const loginResponse = await fetch("/api/auth/wechat", {
           method: "POST",
           headers: {
@@ -95,6 +105,7 @@ function AuthCallbackContent() {
           },
           body: JSON.stringify({
             code: response.code,
+            agreeToPrivacy,
           }),
         });
 
@@ -127,6 +138,7 @@ function AuthCallbackContent() {
           );
           console.log("✅ 认证状态已保存到 localStorage");
         }
+        window.sessionStorage.removeItem(WECHAT_PRIVACY_SESSION_KEY);
 
         // 等待 user-context 更新后跳转
         setTimeout(() => {

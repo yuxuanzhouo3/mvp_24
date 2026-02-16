@@ -8,6 +8,7 @@ import {
   Users,
   Bot,
   User,
+  Loader2,
   Star,
   Sparkles,
   Copy,
@@ -31,6 +32,7 @@ interface WorkspaceMessageListProps {
   messages: Message[];
   selectedGPTs: AIAgent[];
   isProcessing: boolean;
+  isSessionLoading?: boolean;
   t: any;
   availableAIs: AIAgent[];
   currentSessionId?: string;
@@ -55,6 +57,7 @@ export function WorkspaceMessageList({
   messages,
   selectedGPTs,
   isProcessing,
+  isSessionLoading = false,
   t,
   availableAIs,
   currentSessionId,
@@ -116,7 +119,16 @@ export function WorkspaceMessageList({
 
   return (
     <>
-      {messages.length === 0 && selectedGPTs.length === 0 && (
+      {messages.length === 0 && isSessionLoading && (
+        <div className="text-center py-12">
+          <Loader2 className="w-8 h-8 text-gray-400 mx-auto mb-3 animate-spin" />
+          <p className="text-sm text-gray-500">
+            {language === "zh" ? "正在加载对话..." : "Loading conversation..."}
+          </p>
+        </div>
+      )}
+
+      {messages.length === 0 && !isSessionLoading && selectedGPTs.length === 0 && (
         <div className="text-center py-12">
           <Users className="w-16 h-16 text-blue-500 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">{t.workspace.welcome}</h3>
@@ -124,7 +136,10 @@ export function WorkspaceMessageList({
         </div>
       )}
 
-      {messages.length === 0 && selectedGPTs.length > 0 && !isProcessing && (
+      {messages.length === 0 &&
+        !isSessionLoading &&
+        selectedGPTs.length > 0 &&
+        !isProcessing && (
         <div className="text-center py-12">
           <Bot className="w-16 h-16 text-blue-500 mx-auto mb-4" />
           <h3 className="text-lg font-semibold text-gray-900 mb-2">

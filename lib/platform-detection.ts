@@ -53,6 +53,7 @@ export function detectPlatform(): PlatformInfo {
       isWeb: false,
       isMobile: true,
       isDesktop: false,
+      isWechatMiniProgram: false,
     };
   }
 
@@ -64,6 +65,7 @@ export function detectPlatform(): PlatformInfo {
       isWeb: false,
       isMobile: true,
       isDesktop: false,
+      isWechatMiniProgram: false,
     };
   }
 
@@ -75,6 +77,7 @@ export function detectPlatform(): PlatformInfo {
       isWeb: false,
       isMobile: true,
       isDesktop: false,
+      isWechatMiniProgram: false,
     };
   }
 
@@ -86,6 +89,7 @@ export function detectPlatform(): PlatformInfo {
       isWeb: false,
       isMobile: false,
       isDesktop: true,
+      isWechatMiniProgram: false,
     };
   }
 

@@ -385,7 +385,7 @@ export default function OfficialCloudBaseLogin() {
                       登录流程：
                     </h3>
                     <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
-                      <li>点击"微信登录"按钮</li>
+                      <li>点击“微信登录”按钮</li>
                       <li>跳转到微信授权页面</li>
                       <li>用户确认授权并登录</li>
                       <li>自动跳转回此页面</li>

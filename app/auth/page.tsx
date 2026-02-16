@@ -28,6 +28,7 @@ import { detectPlatform } from "@/lib/platform-detection";
 import { saveAuthState } from "@/lib/auth-state-manager";
 
 const authClient = getAuthClient();
+const WECHAT_PRIVACY_SESSION_KEY = "wechat_privacy_consent";
 
 function AuthPageContent() {
   // 从API端点读取配置
@@ -107,6 +108,45 @@ function AuthPageContent() {
 
   const nativeWechatCallbackRef = useRef<string | null>(null);
 
+  const updatePrivacyAgreement = useCallback(
+    (checked: boolean) => {
+      setAgreeToPrivacy(checked);
+      if (typeof window === "undefined" || userRegion !== RegionType.CHINA) {
+        return;
+      }
+      if (checked) {
+        window.sessionStorage.setItem(WECHAT_PRIVACY_SESSION_KEY, "1");
+      } else {
+        window.sessionStorage.removeItem(WECHAT_PRIVACY_SESSION_KEY);
+      }
+    },
+    [userRegion]
+  );
+
+  const hasChinaPrivacyConsent = useCallback(() => {
+    if (userRegion !== RegionType.CHINA) {
+      return true;
+    }
+    if (agreeToPrivacy) {
+      return true;
+    }
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return (
+      window.sessionStorage.getItem(WECHAT_PRIVACY_SESSION_KEY) === "1"
+    );
+  }, [agreeToPrivacy, userRegion]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || userRegion !== RegionType.CHINA) {
+      return;
+    }
+    if (window.sessionStorage.getItem(WECHAT_PRIVACY_SESSION_KEY) === "1") {
+      setAgreeToPrivacy(true);
+    }
+  }, [userRegion]);
+
   // 持续监控 wx 对象状态 (调试用)
   useEffect(() => {
     if (!platformInfo.isWechatMiniProgram) return;
@@ -130,6 +170,11 @@ function AuthPageContent() {
   const handleWechatMiniProgramLogin = useCallback(
     async (code: string, profile?: { nickName?: string; avatarUrl?: string }) => {
       if (loading) return;
+      const privacyAgreed = hasChinaPrivacyConsent();
+      if (userRegion === RegionType.CHINA && !privacyAgreed) {
+        setError("请阅读并同意隐私政策");
+        return;
+      }
       setLoading(true);
       setError("");
       try {
@@ -142,6 +187,7 @@ function AuthPageContent() {
             code,
             nickName: profile?.nickName,
             avatarUrl: profile?.avatarUrl,
+            agreeToPrivacy: privacyAgreed,
           }),
         });
         const data = await response.json();
@@ -180,7 +226,7 @@ function AuthPageContent() {
         setLoading(false);
       }
     },
-    [loading, refreshUser, router]
+    [hasChinaPrivacyConsent, loading, refreshUser, router, userRegion]
   );
 
   // 监听 URL 中的 mpCode (小程序回传)
@@ -424,7 +470,7 @@ function AuthPageContent() {
         setSignupOtp("");
         setSignupOtpSent(false);
         setLoginMethod("password");
-        setAgreeToPrivacy(false);
+        updatePrivacyAgreement(false);
         setLoading(false);
 
         // 重置到登录页面
@@ -461,7 +507,7 @@ function AuthPageContent() {
           setSignupOtp("");
           setSignupOtpSent(false);
           setLoginMethod("password");
-          setAgreeToPrivacy(false);
+          updatePrivacyAgreement(false);
           setLoading(false);
 
           // 5秒后返回登录页面
@@ -541,6 +587,14 @@ function AuthPageContent() {
   };
 
   const handleWechatSignIn = async () => {
+    if (loading) return;
+    if (!hasChinaPrivacyConsent()) {
+      setError("请阅读并同意隐私政策");
+      return;
+    }
+    if (userRegion === RegionType.CHINA) {
+      window.sessionStorage.setItem(WECHAT_PRIVACY_SESSION_KEY, "1");
+    }
     console.log("点击了微信登录按钮, 当前平台信息:", JSON.stringify(platformInfo));
 
     // 套壳 Android：走原生微信登录，再复用小程序登录的 code 交换逻辑
@@ -1209,7 +1263,9 @@ function AuthPageContent() {
           <Checkbox
             id="privacy-agree-signin"
             checked={agreeToPrivacy}
-            onCheckedChange={(checked) => setAgreeToPrivacy(checked as boolean)}
+            onCheckedChange={(checked) =>
+              updatePrivacyAgreement(checked as boolean)
+            }
             className="mt-1"
           />
           <label
@@ -1507,7 +1563,7 @@ function AuthPageContent() {
                     id="privacy-agree"
                     checked={agreeToPrivacy}
                     onCheckedChange={(checked) =>
-                      setAgreeToPrivacy(checked as boolean)
+                      updatePrivacyAgreement(checked as boolean)
                     }
                     disabled={signupStep === "verify"}
                     className="mt-1"

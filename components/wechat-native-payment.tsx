@@ -9,7 +9,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import QRCode from 'qrcode.react';
 
 interface WechatNativePaymentProps {
   amount: number;                    // 金额（元）
@@ -230,7 +229,14 @@ export function WechatNativePayment({
       {(state.status === 'showing_qr' || state.status === 'polling') && state.codeUrl && (
         <div className="flex flex-col items-center gap-4 w-full">
           <div className="border-2 border-gray-300 p-4 rounded-lg bg-white">
-            <QRCode value={state.codeUrl} size={256} level="H" includeMargin={true} />
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(
+                state.codeUrl
+              )}`}
+              alt="WeChat Payment QR Code"
+              width={256}
+              height={256}
+            />
           </div>
 
           <div className="text-center">

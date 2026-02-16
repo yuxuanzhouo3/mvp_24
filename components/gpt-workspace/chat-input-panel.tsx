@@ -11,7 +11,6 @@ import {
   Mic,
   Paperclip,
   Send,
-  Volume2,
   X,
 } from "lucide-react";
 import type {
@@ -41,7 +40,6 @@ interface ChatInputPanelProps {
   isProcessing: boolean;
   onSend: () => void;
   onStop: () => void;
-  notifyComingSoon: (feature: "upload" | "voice" | "record") => void;
   language: string;
   attachments: MultimodalAttachmentPayload[];
   isRecording: boolean;
@@ -71,7 +69,6 @@ export function ChatInputPanel({
   isProcessing,
   onSend,
   onStop,
-  notifyComingSoon,
   language,
   attachments,
   isRecording,
@@ -283,20 +280,6 @@ export function ChatInputPanel({
                 >
                   <Paperclip className="w-3.5 h-3.5" />
                 </Button>
-                <div className="hidden sm:flex items-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 rounded-full"
-                    onClick={() => notifyComingSoon("voice")}
-                    title={language === "zh" ? "语音输入（即将上线）" : "Voice input (coming soon)"}
-                    aria-label={
-                      language === "zh" ? "语音输入（即将上线）" : "Voice input (coming soon)"
-                    }
-                  >
-                    <Volume2 className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
                 <Button
                   variant="ghost"
                   size="icon"

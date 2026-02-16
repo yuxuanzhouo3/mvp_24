@@ -170,8 +170,10 @@ export default function DebugPage() {
       <div style={{ marginBottom: "20px" }}>
         <h2>📖 预期流程</h2>
         <ol>
-          <li>✅ 登录后应该看到: DEBUG_LOGIN_STEP = "3_token_saved"</li>
-          <li>✅ 页面跳转后应该看到: DEBUG_GETUSER_STEP = "3_user_received"</li>
+          <li>✅ 登录后应该看到: DEBUG_LOGIN_STEP = &quot;3_token_saved&quot;</li>
+          <li>
+            ✅ 页面跳转后应该看到: DEBUG_GETUSER_STEP = &quot;3_user_received&quot;
+          </li>
           <li>✅ DEBUG_USER_DATA 中应该有用户信息</li>
           <li>
             ❌ 如果看到 DEBUG_LOGIN_ERROR 或 DEBUG_GETUSER_ERROR，说明有问题

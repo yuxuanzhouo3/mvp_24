@@ -63,6 +63,7 @@ export function PaymentForm({
 
   // 使用 ref 跟踪支付请求，防止重复提交
   const paymentRequestRef = useRef<string | null>(null);
+  const submittingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // 获取可用的支付方式
@@ -105,19 +106,14 @@ export function PaymentForm({
       return;
     }
 
-    if (isProcessing) {
+    if (isProcessing || submittingRef.current) {
       console.warn("Payment already in progress, ignoring duplicate click");
       return;
     }
 
-    const idempotencyKey = `${userId}-${productType}-${planId}-${addonPackageId || ""}-${billingCycle}-${amount}-${Date.now()}`;
+    const idempotencyKey = `${userId}-${selectedMethod}-${productType}-${planId}-${addonPackageId || ""}-${billingCycle}-${amount}`;
 
-    if (paymentRequestRef.current === idempotencyKey) {
-      console.warn(
-        "Duplicate payment request with same idempotency key, ignoring"
-      );
-      return;
-    }
+    submittingRef.current = true;
 
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -214,10 +210,18 @@ export function PaymentForm({
         }
 
         if (errorData.code === "DUPLICATE_PAYMENT_REQUEST") {
+          const waitTime =
+            typeof errorData.waitTime === "number" && Number.isFinite(errorData.waitTime)
+              ? Math.max(1, Math.ceil(errorData.waitTime))
+              : null;
           throw new Error(
             language === "zh"
-              ? "检测到重复支付请求，请勿重复点击"
-              : "Duplicate payment detected, please don't click multiple times"
+              ? waitTime
+                ? `请求过于频繁，请在 ${waitTime} 秒后重试`
+                : "检测到重复支付请求，请稍后再试"
+              : waitTime
+                ? `Too many duplicate requests. Please retry in ${waitTime} seconds.`
+                : "Duplicate payment detected. Please try again shortly."
           );
         }
 
@@ -283,9 +287,8 @@ export function PaymentForm({
       });
     } finally {
       setIsProcessing(false);
-      setTimeout(() => {
-        paymentRequestRef.current = null;
-      }, 3000);
+      submittingRef.current = false;
+      paymentRequestRef.current = null;
     }
   };
 
