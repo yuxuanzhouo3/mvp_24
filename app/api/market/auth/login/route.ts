@@ -3,11 +3,23 @@ import {
   createMarketAdminSession,
   verifyMarketAdminLogin,
 } from "@/lib/market/admin-auth";
+import { isAdminCredentialsConfigured } from "@/lib/admin/credentials";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
+    if (!isAdminCredentialsConfigured()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Admin credentials are not configured. Set ADMIN_USERNAME and ADMIN_PASSWORD (or ADMIN_PASSWORD_HASH).",
+        },
+        { status: 503 }
+      );
+    }
+
     const body = await request.json().catch(() => ({}));
     const username = String(body?.username || "").trim();
     const password = String(body?.password || "").trim();

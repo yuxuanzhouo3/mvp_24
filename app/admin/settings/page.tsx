@@ -1,38 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { changePassword } from "@/actions/admin-auth";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Check, Database, Cloud, Server } from "lucide-react";
+import { Database, Cloud, Server } from "lucide-react";
 
 export default function SettingsPage() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-
-  async function handleChangePassword(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setSuccess(false);
-
-    const formData = new FormData(e.currentTarget);
-    const result = await changePassword(formData);
-
-    if (result.success) {
-      setSuccess(true);
-      (e.target as HTMLFormElement).reset();
-    } else {
-      setError(result.error || "修改失败");
-    }
-    setLoading(false);
-  }
-
   return (
     <div className="space-y-6">
       <div>
@@ -44,71 +17,19 @@ export default function SettingsPage() {
         {/* 修改密码 */}
         <Card>
           <CardHeader>
-            <CardTitle>修改密码</CardTitle>
-            <CardDescription>更新您的管理员登录密码</CardDescription>
+            <CardTitle>管理员凭据</CardTitle>
+            <CardDescription>当前管理员账号密码由环境变量统一管理</CardDescription>
           </CardHeader>
-          <CardContent>
-            <form onSubmit={handleChangePassword} className="space-y-4">
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              {success && (
-                <Alert className="bg-green-50 border-green-200">
-                  <Check className="h-4 w-4 text-green-600" />
-                  <AlertDescription className="text-green-600">
-                    密码修改成功
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              <div className="space-y-2">
-                <Label htmlFor="currentPassword">当前密码</Label>
-                <Input
-                  id="currentPassword"
-                  name="currentPassword"
-                  type="password"
-                  required
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="newPassword">新密码</Label>
-                <Input
-                  id="newPassword"
-                  name="newPassword"
-                  type="password"
-                  required
-                  minLength={6}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="confirmPassword">确认新密码</Label>
-                <Input
-                  id="confirmPassword"
-                  name="confirmPassword"
-                  type="password"
-                  required
-                  minLength={6}
-                  disabled={loading}
-                />
-              </div>
-
-              <Button type="submit" disabled={loading}>
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    修改中...
-                  </>
-                ) : (
-                  "修改密码"
-                )}
-              </Button>
-            </form>
+          <CardContent className="space-y-3 text-sm text-gray-600">
+            <p>请在部署环境中设置以下变量，并重启服务后生效：</p>
+            <div className="rounded-md border bg-gray-50 p-3 space-y-1 font-mono text-xs">
+              <p>ADMIN_USERNAME=your-admin-username</p>
+              <p>ADMIN_PASSWORD=your-admin-password</p>
+              <p>ADMIN_PASSWORD_HASH=optional-bcrypt-hash</p>
+            </div>
+            <p className="text-xs text-gray-500">
+              当配置了 <code>ADMIN_PASSWORD_HASH</code> 时，优先使用哈希校验。
+            </p>
           </CardContent>
         </Card>
 

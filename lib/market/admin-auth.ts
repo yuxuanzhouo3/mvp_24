@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { verifyPassword } from "@/lib/admin/password";
-import {
-  CloudBaseConnector,
-  isCloudBaseConfigured,
-} from "@/lib/admin/cloudbase-connector";
 import {
   createAdminSession,
   destroyAdminSession,
   verifyAdminSessionToken,
 } from "@/lib/admin/session";
-import { IS_DOMESTIC_VERSION } from "@/config";
+import {
+  verifyAdminCredentialsFromEnv,
+} from "@/lib/admin/credentials";
 
 export const MARKET_ADMIN_SESSION_COOKIE = "admin_session";
 
@@ -19,74 +15,16 @@ export interface MarketAdminPrincipal {
   username: string;
 }
 
-async function getCloudbaseDb() {
-  const connector = new CloudBaseConnector();
-  await connector.initialize();
-  return connector.getClient();
-}
-
 export async function verifyMarketAdminLogin(input: {
   username?: string;
   password?: string;
 }): Promise<MarketAdminPrincipal | null> {
-  const username = String(input.username || "").trim();
-  const password = String(input.password || "").trim();
-  if (!username || !password) {
+  const principal = await verifyAdminCredentialsFromEnv(input);
+  if (!principal) {
     return null;
   }
 
-  try {
-    let admin: { id: string; username: string; password_hash: string } | null =
-      null;
-
-    if (IS_DOMESTIC_VERSION && isCloudBaseConfigured()) {
-      const db = await getCloudbaseDb();
-      const result = await db
-        .collection("admin_users")
-        .where({ username })
-        .limit(1)
-        .get();
-
-      if (result.data && result.data.length > 0) {
-        const row = result.data[0];
-        admin = {
-          id: row._id || row.id,
-          username: String(row.username || username),
-          password_hash: String(row.password_hash || ""),
-        };
-      }
-    } else {
-      const { data } = await supabaseAdmin
-        .from("admin_users")
-        .select("id, username, password_hash")
-        .eq("username", username)
-        .maybeSingle();
-
-      if (data) {
-        admin = {
-          id: data.id,
-          username: data.username,
-          password_hash: data.password_hash,
-        };
-      }
-    }
-
-    if (!admin) {
-      return null;
-    }
-
-    const valid = await verifyPassword(password, admin.password_hash);
-    if (!valid) {
-      return null;
-    }
-
-    return {
-      userId: admin.id,
-      username: admin.username,
-    };
-  } catch {
-    return null;
-  }
+  return principal;
 }
 
 export async function createMarketAdminSession(admin: MarketAdminPrincipal) {
