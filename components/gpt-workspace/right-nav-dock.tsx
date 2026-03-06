@@ -35,6 +35,7 @@ interface RightNavDockProps {
   language: string;
   getStatusColor: (status: string) => string;
   getConversationPreview: (message: Message) => string;
+  getConversationAnchorId: (message: Message) => string;
   getLiveResponseAnchorId: (response: AIResponse, index: number) => string;
   getMultiAIResponseAnchorId: (
     messageId: string,
@@ -127,6 +128,7 @@ export function RightNavDock({
   language,
   getStatusColor,
   getConversationPreview,
+  getConversationAnchorId,
   getLiveResponseAnchorId,
   getMultiAIResponseAnchorId,
   onJumpToMessage,
@@ -514,7 +516,8 @@ export function RightNavDock({
                             type="button"
                             onClick={() => {
                               setSelectedTaskGraphMessageId(message.id);
-                              onJumpToMessage(message.id);
+                              const anchorId = getConversationAnchorId(message);
+                              scrollToAnchor(anchorId, message.id, onJumpToMessage);
                             }}
                             className={`flex w-full items-center justify-between rounded-md px-2 py-1 text-left text-xs transition-colors ${
                               isActive
@@ -628,7 +631,8 @@ export function RightNavDock({
                               type="button"
                               onClick={() => {
                                 setSelectedResultMessageId(message.id);
-                                onJumpToMessage(message.id);
+                                const anchorId = getConversationAnchorId(message);
+                                scrollToAnchor(anchorId, message.id, onJumpToMessage);
                               }}
                               className={`w-full rounded-md px-2 py-1 text-left text-xs transition-colors ${
                                 isActive

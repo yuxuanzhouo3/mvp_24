@@ -34,6 +34,7 @@ export function QuotaDisplay() {
       if (!token) return;
 
       const response = await fetch("/api/user/usage", {
+        cache: "no-store",
         headers: {
           Authorization: `Bearer ${token}`,
         },

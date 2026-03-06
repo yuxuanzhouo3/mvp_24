@@ -23,6 +23,7 @@ import { resolveIntlUserPlan } from "@/lib/user-plan";
 import { createMessageId } from "@/lib/chat/message-id";
 import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
 import { resolveSmartModel } from "@/lib/ai/smart-model-router";
+import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 
 // 使用Node.js Runtime以支持winston日志库
 export const runtime = "nodejs";
@@ -837,6 +838,16 @@ export async function POST(req: NextRequest) {
               completionTokens,
               totalTokens,
               costUsd,
+            });
+          }
+
+          if (fullResponse.trim().length > 0) {
+            await grantReferralFirstUseReward({
+              invitedUserId: userId,
+              toolId: agentId || responseModel || model,
+              region: isChinaRegion() ? "CN" : "INTL",
+            }).catch((rewardError) => {
+              console.warn("[Chat API] Failed to grant referral first-use reward:", rewardError);
             });
           }
 

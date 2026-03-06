@@ -65,6 +65,42 @@ function pickLatestDate(
   );
 }
 
+function isInvalidApiKeyError(error: unknown): boolean {
+  const text =
+    typeof error === "object" && error !== null
+      ? `${(error as any).message || ""} ${(error as any).details || ""}`
+      : String(error || "");
+  return text.toLowerCase().includes("invalid api key");
+}
+
+function pickFirstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function getIntlDisplayName(user: any): string {
+  const metadata = (user?.user_metadata || {}) as Record<string, unknown>;
+  return pickFirstString(
+    metadata.displayName,
+    metadata.full_name,
+    metadata.name
+  );
+}
+
+function getIntlAvatar(user: any): string {
+  const metadata = (user?.user_metadata || {}) as Record<string, unknown>;
+  return pickFirstString(
+    metadata.avatar,
+    metadata.avatar_url,
+    metadata.picture,
+    metadata.photo_url
+  );
+}
+
 export async function GET(request: NextRequest) {
   try {
     // 鉴权 - 与其他 API 保持一致
@@ -199,11 +235,32 @@ export async function GET(request: NextRequest) {
 
       // 从 Supabase 获取用户信息
       const {
-        data: { user },
+        data: { user: adminUser },
         error,
       } = await getSupabaseAdmin().auth.admin.getUserById(userId);
 
-      if (error || !user) {
+      let user = adminUser;
+      if ((!user || error) && authResult.user?.id === userId) {
+        if (error && isInvalidApiKeyError(error)) {
+          console.warn(
+            "⚠️ [/api/profile] Supabase admin key invalid, fallback to token user payload."
+          );
+        }
+        user = authResult.user as any;
+      }
+
+      if (!user) {
+        if (error && isInvalidApiKeyError(error)) {
+          console.error("❌ [/api/profile] Supabase API key invalid:", error);
+          return NextResponse.json(
+            {
+              error: "Supabase API key invalid",
+              code: "SUPABASE_API_KEY_INVALID",
+            },
+            { status: 500 }
+          );
+        }
+
         console.error("❌ [/api/profile] Supabase 用户未找到:", error);
         return NextResponse.json(
           {
@@ -274,11 +331,8 @@ export async function GET(request: NextRequest) {
       const response = {
         id: user.id,
         email: user.email || "",
-        name:
-          user.user_metadata?.displayName ||
-          user.user_metadata?.full_name ||
-          "",
-        avatar: user.user_metadata?.avatar || "",
+        name: getIntlDisplayName(user),
+        avatar: getIntlAvatar(user),
         phone: user.user_metadata?.phone || "",
         pro: user.user_metadata?.pro || walletRow?.pro || false,
         subscription_plan: normalizedPlan,
@@ -405,7 +459,10 @@ export async function POST(request: NextRequest) {
       // 构建更新数据
       const updateData: any = {};
       if (name !== undefined) updateData.displayName = name;
-      if (avatar !== undefined) updateData.avatar = avatar;
+      if (avatar !== undefined) {
+        updateData.avatar = avatar;
+        updateData.avatar_url = avatar;
+      }
       if (phone !== undefined) updateData.phone = phone;
       if (preferences !== undefined) updateData.preferences = preferences;
       updateData.updated_at = new Date().toISOString();
@@ -431,8 +488,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           id: user.id,
           email: user.email || "",
-          name: user.user_metadata?.displayName || "",
-          avatar: user.user_metadata?.avatar || "",
+          name: getIntlDisplayName(user),
+          avatar: getIntlAvatar(user),
           phone: user.user_metadata?.phone || "",
           pro: user.user_metadata?.pro || false,
           subscription_plan: user.user_metadata?.subscription_plan || "free",

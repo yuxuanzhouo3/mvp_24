@@ -9,6 +9,7 @@ import { z } from "zod";
 import { verifyEmailOtp } from "@/lib/email-otp";
 import { signupUser } from "@/lib/cloudbase-service";
 import { getOrCreateUserProfile } from "@/lib/cloudbase-user-profile";
+import { bindReferralFromRequest } from "@/lib/market/referrals";
 
 // 注册请求验证schema
 const registerSchema = z
@@ -212,6 +213,7 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = authResponse.user?.id;
+    const signupRegion = isChinaRegion() ? "CN" : "INTL";
 
     // 保存用户资料到数据库
     if (userId && !isChinaRegion()) {
@@ -244,6 +246,23 @@ export async function POST(request: NextRequest) {
         fullName,
         passwordStrength: passwordValidation.score,
       });
+    }
+
+    if (userId) {
+      try {
+        await bindReferralFromRequest({
+          request,
+          invitedUserId: userId,
+          invitedEmail: email,
+          region: signupRegion,
+        });
+      } catch (bindError) {
+        logSecurityEvent("register_referral_bind_failed", userId, clientIP, {
+          email,
+          error: bindError instanceof Error ? bindError.message : "Unknown error",
+          region: signupRegion,
+        });
+      }
     }
 
     // 返回成功响应

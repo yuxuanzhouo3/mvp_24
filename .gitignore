@@ -58,3 +58,4 @@ test-models.mjs
 # Local development
 .turbo/
 .vercel
+multigptandroid-intl/

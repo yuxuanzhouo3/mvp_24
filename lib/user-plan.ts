@@ -1,5 +1,4 @@
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { getPlanInfo } from "@/utils/plan-utils";
 
 function normalizePlan(raw?: string | null): string {
   if (!raw || typeof raw !== "string") {
@@ -9,12 +8,47 @@ function normalizePlan(raw?: string | null): string {
   return raw.toLowerCase().trim();
 }
 
+function parseDateLike(value: unknown): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value : null;
+  }
+
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : null;
+}
+
+function pickLatestDate(values: unknown[]): Date | null {
+  let latest: Date | null = null;
+
+  for (const value of values) {
+    const parsed = parseDateLike(value);
+    if (!parsed) {
+      continue;
+    }
+    if (!latest || parsed.getTime() > latest.getTime()) {
+      latest = parsed;
+    }
+  }
+
+  return latest;
+}
+
 export async function resolveIntlUserPlan(
   userId: string,
   userMetadata?: Record<string, any> | null
 ): Promise<string> {
+  const now = new Date();
   const safeMetadata =
     userMetadata && typeof userMetadata === "object" ? userMetadata : {};
+  const metadataPlan = normalizePlan(safeMetadata.subscription_plan);
 
   const { data: walletRow, error: walletError } = await supabaseAdmin
     .from("user_wallets")
@@ -22,41 +56,44 @@ export async function resolveIntlUserPlan(
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!walletError) {
-    const planInfo = getPlanInfo(safeMetadata, walletRow || null);
-
-    if (planInfo.planLower && planInfo.planLower !== "free") {
-      if (planInfo.planExp && planInfo.planExp > new Date()) {
-        return planInfo.planLower;
-      }
-    }
-
-    if (planInfo.isUnlimited) {
-      return "pro";
-    }
-  }
-
-  const { data: subscriptionRow, error: subscriptionError } = await supabaseAdmin
+  // Pull the latest known subscription end time regardless of status.
+  // Entitlement should be determined by expiry timestamp, not stale status/flags.
+  const { data: subscriptionRow } = await supabaseAdmin
     .from("subscriptions")
     .select("current_period_end")
     .eq("user_id", userId)
-    .eq("status", "active")
     .not("current_period_end", "is", null)
     .order("current_period_end", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  if (!subscriptionError && subscriptionRow?.current_period_end) {
-    const expiresAt = new Date(subscriptionRow.current_period_end);
-    if (expiresAt > new Date()) {
-      return "pro";
-    }
+  const latestExpiry = pickLatestDate([
+    walletRow?.plan_exp,
+    safeMetadata.membership_expires_at,
+    safeMetadata.plan_exp,
+    subscriptionRow?.current_period_end,
+  ]);
+
+  // No valid future expiry => always free.
+  if (!latestExpiry || latestExpiry.getTime() <= now.getTime()) {
+    return "free";
   }
 
-  const metadataPlan = normalizePlan(safeMetadata.subscription_plan);
+  const walletPlan = normalizePlan(
+    (walletRow?.plan as string | undefined) ||
+      (walletRow?.subscription_tier as string | undefined)
+  );
+  if (walletPlan && walletPlan !== "free") {
+    return walletPlan;
+  }
+
   if (metadataPlan && metadataPlan !== "free") {
     return metadataPlan;
   }
 
-  return "free";
+  if (!walletError && (walletRow?.pro || safeMetadata.pro)) {
+    return "pro";
+  }
+
+  return "pro";
 }

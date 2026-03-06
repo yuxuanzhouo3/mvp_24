@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Copy, Home } from "lucide-react";
+import { Copy, Home, LogIn, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -23,10 +23,73 @@ function decodeBase64Url(input: string): string {
 
 function ShareTextContent() {
   const params = useSearchParams();
+  const id = params.get("id") || "";
   const raw = params.get("d") || "";
+  const ref = params.get("ref") || "";
 
-  const content = useMemo(() => decodeBase64Url(raw), [raw]);
+  const [fetchedContent, setFetchedContent] = useState("");
+  const [fetchedShareCode, setFetchedShareCode] = useState("");
+  const [isLoadingById, setIsLoadingById] = useState(false);
+
+  useEffect(() => {
+    if (!id) {
+      setFetchedContent("");
+      setFetchedShareCode("");
+      setIsLoadingById(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingById(true);
+
+    fetch(`/api/share/text?id=${encodeURIComponent(id)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          return { content: "", shareCode: "" };
+        }
+        const json = (await response.json()) as {
+          content?: unknown;
+          shareCode?: unknown;
+        };
+        return {
+          content: typeof json?.content === "string" ? json.content : "",
+          shareCode: typeof json?.shareCode === "string" ? json.shareCode : "",
+        };
+      })
+      .catch(() => ({ content: "", shareCode: "" }))
+      .then((payload) => {
+        if (cancelled) return;
+        setFetchedContent(payload.content || "");
+        setFetchedShareCode(payload.shareCode || "");
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingById(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const legacyContent = useMemo(() => decodeBase64Url(raw), [raw]);
+  const content = id ? fetchedContent : legacyContent;
+  const shareCode = id ? fetchedShareCode || ref : ref;
   const hasContent = content.trim().length > 0;
+  const signInTarget = "/auth";
+  const signUpTarget = "/auth?mode=signup";
+  const signInHref =
+    shareCode && id
+      ? `/r/${encodeURIComponent(shareCode)}?source=share_text&to=${encodeURIComponent(
+          signInTarget
+        )}`
+      : signInTarget;
+  const signUpHref =
+    shareCode && id
+      ? `/r/${encodeURIComponent(shareCode)}?source=share_text&to=${encodeURIComponent(
+          signUpTarget
+        )}`
+      : signUpTarget;
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
@@ -54,7 +117,29 @@ function ShareTextContent() {
             </div>
           </div>
 
-          {hasContent ? (
+          <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button asChild size="sm">
+                <Link href={signInHref}>
+                  <LogIn className="mr-1 h-4 w-4" />
+                  直接登录
+                </Link>
+              </Button>
+              <Button asChild size="sm" variant="outline">
+                <Link href={signUpHref}>
+                  <UserPlus className="mr-1 h-4 w-4" />
+                  注册领取体验
+                </Link>
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-blue-700">
+              通过本页入口注册将自动关联邀请关系。
+            </p>
+          </div>
+
+          {isLoadingById ? (
+            <p className="text-sm text-gray-500">加载分享内容中...</p>
+          ) : hasContent ? (
             <div className="prose prose-sm sm:prose max-w-none">
               <MarkdownRenderer content={content} />
             </div>

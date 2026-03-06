@@ -66,6 +66,10 @@ const REQUIRED_COLLECTIONS = [
   "admin_users", // 添加管理员用户集合
   "advertisements", // 广告集合
   "app_releases", // 应用发布集合
+  "web_referral_links",
+  "web_referral_clicks",
+  "web_referral_relations",
+  "web_referral_rewards",
 ];
 
 async function checkCollectionExists(collectionName: string): Promise<boolean> {
@@ -130,7 +134,9 @@ async function initCloudBaseCollections() {
   console.log("   web_users:");
   console.log("     - 唯一索引: email");
   console.log("     - 普通索引: created_at (倒序)");
-  console.log("     - 普通索引: subscription_status\n");
+  console.log("     - 普通索引: subscription_status");
+  console.log("     - 唯一索引: referral_code (可选/非空)");
+  console.log("     - 普通索引: referred_by\n");
 
   console.log("   ai_conversations:");
   console.log("     - 复合索引: (user_id, created_at)");
@@ -174,6 +180,28 @@ async function initCloudBaseCollections() {
   console.log("   app_releases:");
   console.log("     - 普通索引: created_at (倒序)");
   console.log("     - 复合索引: (platform, variant)\n");
+
+  console.log("   web_referral_links:");
+  console.log("     - 唯一索引: share_code");
+  console.log("     - 复合索引: (creator_user_id, created_at)");
+  console.log("     - 普通索引: is_active\n");
+
+  console.log("   web_referral_clicks:");
+  console.log("     - 复合索引: (share_code, created_at)");
+  console.log("     - 普通索引: registered_user_id\n");
+
+  console.log("   web_referral_relations:");
+  console.log("     - 唯一索引: invited_user_id");
+  console.log("     - 复合索引: (inviter_user_id, invited_user_id)");
+  console.log("     - 普通索引: created_at");
+  console.log("     - 普通索引: first_paid_transaction_id\n");
+
+  console.log("   web_referral_rewards:");
+  console.log("     - 唯一索引: reference_id");
+  console.log("     - 复合索引: (user_id, created_at)");
+  console.log("     - 普通索引: relation_id");
+  console.log("     - 普通索引: related_transaction_id");
+  console.log("     - 普通索引: status\n");
 
   console.log("4️⃣  创建完成后，重新运行此脚本验证：");
   console.log("   npm run init:cloudbase\n");

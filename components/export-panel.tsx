@@ -144,12 +144,6 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       description: t.export.formatDescriptions.pdf,
     },
     {
-      id: "docx",
-      name: t.export.formats.docx,
-      icon: FileText,
-      description: t.export.formatDescriptions.docx,
-    },
-    {
       id: "markdown",
       name: t.export.formats.markdown,
       icon: FileText,
@@ -204,13 +198,203 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     });
   };
 
+  const collectTextFragments = (
+    value: unknown,
+    visited: WeakSet<object> = new WeakSet(),
+    depth = 0
+  ): string[] => {
+    if (depth > 8 || value === null || value === undefined) {
+      return [];
+    }
+
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") {
+      return [String(value)];
+    }
+
+    if (Array.isArray(value)) {
+      return value.flatMap((item) =>
+        collectTextFragments(item, visited, depth + 1)
+      );
+    }
+
+    if (typeof value === "object") {
+      const objectValue = value as Record<string, unknown>;
+      if (visited.has(objectValue)) {
+        return [];
+      }
+      visited.add(objectValue);
+
+      const preferredKeys = [
+        "text",
+        "content",
+        "message",
+        "output",
+        "answer",
+        "result",
+        "parts",
+        "delta",
+      ];
+
+      let fragments: string[] = [];
+
+      for (const key of preferredKeys) {
+        if (key in objectValue) {
+          fragments = fragments.concat(
+            collectTextFragments(objectValue[key], visited, depth + 1)
+          );
+        }
+      }
+
+      if (fragments.length === 0) {
+        fragments = Object.values(objectValue).flatMap((item) =>
+          collectTextFragments(item, visited, depth + 1)
+        );
+      }
+
+      return fragments;
+    }
+
+    return [];
+  };
+
+  const compactFragments = (fragments: string[]) => {
+    const compacted: string[] = [];
+
+    for (const fragment of fragments) {
+      const text = fragment.replace(/\r\n/g, "\n").trim();
+      if (!text) continue;
+      if (compacted[compacted.length - 1] === text) continue;
+      compacted.push(text);
+    }
+
+    return compacted;
+  };
+
+  const normalizeMessageContent = (content: unknown): string => {
+    if (typeof content === "string") {
+      return content;
+    }
+
+    if (content === null || content === undefined) {
+      return "";
+    }
+
+    if (Array.isArray(content)) {
+      const parts = content
+        .map((item: any) => {
+          if (typeof item === "string") {
+            return item.trim();
+          }
+
+          if (!item || typeof item !== "object") {
+            return "";
+          }
+
+          const agentName =
+            typeof item.agentName === "string"
+              ? item.agentName
+              : typeof item.agent_name === "string"
+                ? item.agent_name
+                : "";
+
+          const source =
+            (item as Record<string, unknown>).content ??
+            (item as Record<string, unknown>).text ??
+            (item as Record<string, unknown>).message ??
+            item;
+
+          const text = compactFragments(
+            collectTextFragments(source, new WeakSet())
+          ).join("\n");
+
+          if (!text) {
+            try {
+              const fallback = JSON.stringify(item);
+              return fallback === "{}" ? "" : fallback;
+            } catch {
+              return "";
+            }
+          }
+          return agentName ? `[${agentName}] ${text}` : text;
+        })
+        .filter((item) => item.length > 0);
+
+      return parts.join("\n\n");
+    }
+
+    if (typeof content === "object") {
+      const fragments = compactFragments(collectTextFragments(content));
+      if (fragments.length > 0) {
+        return fragments.join("\n");
+      }
+
+      try {
+        return JSON.stringify(content, null, 2);
+      } catch {
+        return "";
+      }
+    }
+
+    if (typeof content === "number" || typeof content === "boolean") {
+      return String(content);
+    }
+
+    return "";
+  };
+
+  const escapeHtml = (input: string) => {
+    return input
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+
+  const getMessagePreview = (content: unknown, maxLength = 100) => {
+    const text = normalizeMessageContent(content).replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength)}...`;
+  };
+
   const handleExport = async () => {
     if (selectedSessions.length === 0) {
       toast.error(t.export.selectSessionsFirst);
       return;
     }
 
+    let pdfWindow: Window | null = null;
+
     try {
+      if (exportFormat === "pdf") {
+        pdfWindow = window.open("", "_blank");
+        if (!pdfWindow) {
+          toast.error(
+            language === "zh"
+              ? "无法打开PDF窗口，请允许弹出窗口"
+              : "Cannot open PDF window, please allow popups"
+          );
+          return;
+        }
+
+        const preparingText =
+          language === "zh" ? "正在生成 PDF，请稍候..." : "Preparing PDF...";
+        pdfWindow.document.write(`<!DOCTYPE html>
+<html>
+  <head><meta charset="UTF-8"><title>PDF Export</title></head>
+  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px;">
+    <p>${preparingText}</p>
+  </body>
+</html>`);
+        pdfWindow.document.close();
+      }
+
       // 获取认证 token - 根据区域使用正确的认证客户端
       const authClient = getAuthClient();
       const { data: sessionData, error: sessionError } =
@@ -219,6 +403,9 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       if (sessionError || !sessionData.session) {
         console.error("获取会话失败:", sessionError);
         toast.error("请先登录");
+        if (pdfWindow && !pdfWindow.closed) {
+          pdfWindow.close();
+        }
         return;
       }
 
@@ -226,6 +413,9 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       if (!accessToken) {
         console.error("没有访问令牌");
         toast.error("请先登录");
+        if (pdfWindow && !pdfWindow.closed) {
+          pdfWindow.close();
+        }
         return;
       }
 
@@ -247,9 +437,19 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
         if (response.ok) {
           const data = await response.json();
           const sessionData = sessions.find((s) => s.id === sessionId);
+          const messages = Array.isArray(data.messages) ? data.messages : [];
+          const nowIso = new Date().toISOString();
           allMessages.push({
-            session: sessionData,
-            messages: data.messages || [],
+            session:
+              sessionData ||
+              ({
+                id: sessionId,
+                title: language === "zh" ? "未命名会话" : "Untitled Session",
+                model: "Unknown",
+                created_at: nowIso,
+                updated_at: nowIso,
+              } as ChatSession),
+            messages,
           });
         }
       }
@@ -257,15 +457,20 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       // 根据格式导出
       if (exportFormat === "markdown") {
         exportAsMarkdown(allMessages);
-      } else if (exportFormat === "docx") {
-        exportAsDocx(allMessages);
       } else if (exportFormat === "pdf") {
-        exportAsPdf(allMessages);
+        const pdfExported = exportAsPdf(allMessages, pdfWindow);
+        if (!pdfExported) {
+          throw new Error("PDF export failed");
+        }
+        pdfWindow = null;
       }
 
       toast.dismiss();
       toast.success(t.export.exportSuccess);
     } catch (error) {
+      if (pdfWindow && !pdfWindow.closed) {
+        pdfWindow.close();
+      }
       console.error("Export failed:", error);
       toast.dismiss();
       toast.error(t.export.exportFailed);
@@ -297,9 +502,10 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
         messages.forEach((msg: any, msgIndex: number) => {
           const role = msg.role === "user" ? "👤 用户" : "🤖 AI助手";
           const timestamp = msg.created_at ? formatDate(msg.created_at) : "";
+          const messageContent = normalizeMessageContent(msg.content);
 
           markdown += `### ${role}${timestamp ? ` (${timestamp})` : ""}\n\n`;
-          markdown += `${msg.content}\n\n`;
+          markdown += `${messageContent || (language === "zh" ? "（空内容）" : "(Empty content)")}\n\n`;
 
           // 添加元数据
           const metadata = [];
@@ -360,251 +566,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     URL.revokeObjectURL(url);
   };
 
-  const exportAsDocx = (data: any[]) => {
-    // 生成更专业的HTML，兼容Word导入
-    let html = `<!DOCTYPE html>
-<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head>
-  <meta charset="UTF-8">
-  <meta name="ProgId" content="Word.Document">
-  <meta name="Generator" content="Microsoft Word 15">
-  <meta name="Originator" content="Microsoft Word 15">
-  <title>AI 对话导出</title>
-  <style>
-    @page {
-      size: A4;
-      margin: 2.5cm;
-    }
-    body { 
-      font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-      max-width: 21cm;
-      margin: 0 auto;
-      padding: 20px;
-    }
-    h1 { 
-      color: #2c3e50;
-      border-bottom: 4px solid #3498db;
-      padding-bottom: 12px;
-      margin-bottom: 24px;
-      font-size: 28px;
-    }
-    h2 { 
-      color: #3498db;
-      margin-top: 32px;
-      margin-bottom: 16px;
-      font-size: 22px;
-      border-left: 5px solid #3498db;
-      padding-left: 12px;
-    }
-    h3 {
-      color: #555;
-      margin-top: 16px;
-      margin-bottom: 8px;
-      font-size: 16px;
-    }
-    .header-info {
-      background: #ecf0f1;
-      padding: 16px;
-      border-radius: 8px;
-      margin-bottom: 24px;
-    }
-    .header-info p {
-      margin: 4px 0;
-    }
-    .session-meta {
-      background: #f8f9fa;
-      padding: 12px;
-      border-radius: 6px;
-      margin-bottom: 16px;
-      font-size: 14px;
-    }
-    .session-meta ul {
-      margin: 0;
-      padding-left: 20px;
-    }
-    .message { 
-      margin: 16px 0;
-      padding: 16px;
-      border-radius: 8px;
-      border-left: 4px solid #ddd;
-      page-break-inside: avoid;
-    }
-    .message.user { 
-      background: #e3f2fd;
-      border-left-color: #2196f3;
-    }
-    .message.assistant { 
-      background: #f1f8e9;
-      border-left-color: #4caf50;
-    }
-    .message-header {
-      font-weight: bold;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .message-content {
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      line-height: 1.8;
-    }
-    .meta { 
-      color: #666;
-      font-size: 12px;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid #e0e0e0;
-    }
-    .summary {
-      background: #fff3cd;
-      padding: 20px;
-      border-radius: 8px;
-      margin-top: 32px;
-      border: 2px solid #ffc107;
-    }
-    .summary h2 {
-      border-left: none;
-      color: #856404;
-      margin-top: 0;
-    }
-    .summary ul {
-      list-style: none;
-      padding-left: 0;
-    }
-    .summary li {
-      padding: 4px 0;
-    }
-    .page-break {
-      page-break-after: always;
-    }
-    @media print {
-      body {
-        font-size: 12pt;
-      }
-    }
-  </style>
-</head>
-<body>
-  <h1>📝 AI 对话导出报告</h1>
-  
-  <div class="header-info">
-    <p><strong>📅 导出时间:</strong> ${new Date().toLocaleString(
-      language === "zh" ? "zh-CN" : "en-US"
-    )}</p>
-    <p><strong>📊 会话数量:</strong> ${data.length}</p>
-    <p><strong>💬 总消息数:</strong> ${data.reduce(
-      (sum, d) => sum + d.messages.length,
-      0
-    )}</p>
-  </div>
-`;
-
-    const totalTokens = data.reduce(
-      (sum, d) =>
-        sum +
-        d.messages.reduce((s: number, m: any) => s + (m.tokens_used || 0), 0),
-      0
-    );
-    const totalCost = data.reduce(
-      (sum, d) =>
-        sum +
-        d.messages.reduce((s: number, m: any) => s + (m.cost_usd || 0), 0),
-      0
-    );
-
-    data.forEach(({ session, messages }, index) => {
-      html += `<h2>${index + 1}. ${session.title}</h2>`;
-
-      html += `<div class="session-meta">`;
-      html += `<ul>`;
-      html += `<li><strong>模型:</strong> ${session.model || "Unknown"}</li>`;
-      html += `<li><strong>创建时间:</strong> ${formatDate(
-        session.created_at
-      )}</li>`;
-      html += `<li><strong>更新时间:</strong> ${formatDate(
-        session.updated_at
-      )}</li>`;
-      html += `<li><strong>消息数量:</strong> ${messages.length}</li>`;
-      html += `</ul>`;
-      html += `</div>`;
-
-      if (messages.length === 0) {
-        html += `<p style="color: #999; font-style: italic;">暂无消息</p>`;
-      } else {
-        messages.forEach((msg: any) => {
-          const role = msg.role === "user" ? "👤 用户" : "🤖 AI助手";
-          const className = msg.role === "user" ? "user" : "assistant";
-          const timestamp = msg.created_at ? formatDate(msg.created_at) : "";
-
-          html += `<div class="message ${className}">`;
-          html += `<div class="message-header">${role}${
-            timestamp ? ` - ${timestamp}` : ""
-          }</div>`;
-          html += `<div class="message-content">${msg.content
-            .replace(/\n/g, "<br>")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")}</div>`;
-
-          const metadata = [];
-          if (msg.tokens_used) metadata.push(`Tokens: ${msg.tokens_used}`);
-          if (msg.cost_usd) metadata.push(`Cost: $${msg.cost_usd.toFixed(6)}`);
-          if (msg.model) metadata.push(`Model: ${msg.model}`);
-
-          if (metadata.length > 0) {
-            html += `<div class="meta">${metadata.join(" | ")}</div>`;
-          }
-
-          html += `</div>`;
-        });
-      }
-
-      // 每个会话后添加分页符（除了最后一个）
-      if (index < data.length - 1) {
-        html += `<div class="page-break"></div>`;
-      }
-    });
-
-    // 添加统计摘要
-    html += `<div class="summary">`;
-    html += `<h2>📊 统计摘要</h2>`;
-    html += `<ul>`;
-    html += `<li><strong>总会话数:</strong> ${data.length}</li>`;
-    html += `<li><strong>总消息数:</strong> ${data.reduce(
-      (sum, d) => sum + d.messages.length,
-      0
-    )}</li>`;
-    if (totalTokens > 0)
-      html += `<li><strong>总Token数:</strong> ${totalTokens.toLocaleString()}</li>`;
-    if (totalCost > 0)
-      html += `<li><strong>总成本:</strong> $${totalCost.toFixed(4)}</li>`;
-    html += `<li><strong>导出时间:</strong> ${new Date().toLocaleString(
-      language === "zh" ? "zh-CN" : "en-US"
-    )}</li>`;
-    html += `</ul>`;
-    html += `</div>`;
-
-    html += `</body></html>`;
-
-    const blob = new Blob(["\ufeff", html], {
-      type: "application/msword;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const filename = `ai-chat-${
-      new Date().toISOString().split("T")[0]
-    }-${Date.now()}.doc`;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const exportAsPdf = (data: any[]) => {
+  const exportAsPdf = (data: any[], preparedWindow?: Window | null) => {
     // 使用浏览器打印功能生成PDF
     const totalTokens = data.reduce(
       (sum, d) =>
@@ -778,15 +740,15 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
           const role = msg.role === "user" ? "👤 用户" : "🤖 AI助手";
           const className = msg.role === "user" ? "user" : "assistant";
           const timestamp = msg.created_at ? formatDate(msg.created_at) : "";
+          const messageContent = normalizeMessageContent(msg.content);
 
           printContent += `<div class="message ${className}">`;
           printContent += `<div class="message-header">${role}${
             timestamp ? ` - ${timestamp}` : ""
           }</div>`;
-          printContent += `<div class="message-content">${msg.content
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/\n/g, "<br>")}</div>`;
+          printContent += `<div class="message-content">${escapeHtml(
+            messageContent
+          ).replace(/\n/g, "<br>")}</div>`;
 
           const metadata = [];
           if (msg.tokens_used) metadata.push(`Tokens: ${msg.tokens_used}`);
@@ -843,22 +805,25 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
 </html>`;
 
     // 在新窗口打开打印预览
-    const printWindow = window.open("", "_blank");
-    if (printWindow) {
-      printWindow.document.write(printContent);
-      printWindow.document.close();
-      toast.success(
-        language === "zh"
-          ? "已打开PDF预览，请使用浏览器的打印功能保存为PDF"
-          : "PDF preview opened, use browser print to save as PDF"
-      );
-    } else {
+    const printWindow = preparedWindow || window.open("", "_blank");
+    if (!printWindow) {
       toast.error(
         language === "zh"
           ? "无法打开新窗口，请允许弹出窗口"
           : "Cannot open new window, please allow popups"
       );
+      return false;
     }
+
+    printWindow.document.open();
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+    toast.success(
+      language === "zh"
+        ? "已打开PDF预览，请使用浏览器的打印功能保存为PDF"
+        : "PDF preview opened, use browser print to save as PDF"
+    );
+    return true;
   };
 
   const handleShare = async () => {
@@ -904,9 +869,19 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
         if (response.ok) {
           const data = await response.json();
           const sessionData = sessions.find((s) => s.id === sessionId);
+          const messages = Array.isArray(data.messages) ? data.messages : [];
+          const nowIso = new Date().toISOString();
           allMessages.push({
-            session: sessionData,
-            messages: data.messages || [],
+            session:
+              sessionData ||
+              ({
+                id: sessionId,
+                title: language === "zh" ? "未命名会话" : "Untitled Session",
+                model: "Unknown",
+                created_at: nowIso,
+                updated_at: nowIso,
+              } as ChatSession),
+            messages,
           });
         }
       }
@@ -941,8 +916,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       sessions: data.map(({ session, messages }) => ({
         title: session.title,
         messageCount: messages.length,
-        firstMessage:
-          messages.length > 0 ? messages[0].content.substring(0, 100) : "",
+        firstMessage: messages.length > 0 ? getMessagePreview(messages[0].content, 100) : "",
       })),
     };
 
@@ -960,9 +934,7 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
           ? `   ${s.messageCount} 条消息\n`
           : `   ${s.messageCount} messages\n`;
       if (s.firstMessage) {
-        shareText += `   ${s.firstMessage}${
-          s.firstMessage.length >= 100 ? "..." : ""
-        }\n`;
+        shareText += `   ${s.firstMessage}\n`;
       }
       shareText += `\n`;
     });
@@ -1047,11 +1019,8 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       shareText += `${index + 1}. ${session.title}\n`;
       shareText += `   消息: ${messages.length}条\n`;
       if (messages.length > 0) {
-        const firstMsg = messages[0];
-        const preview = firstMsg.content.substring(0, 50);
-        shareText += `   预览: ${preview}${
-          firstMsg.content.length > 50 ? "..." : ""
-        }\n`;
+        const preview = getMessagePreview(messages[0].content, 50);
+        shareText += `   预览: ${preview}\n`;
       }
       shareText += `\n`;
     });
@@ -1102,10 +1071,8 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
         const previewCount = Math.min(3, messages.length);
         messages.slice(0, previewCount).forEach((msg: any) => {
           const role = msg.role === "user" ? "👤" : "🤖";
-          const preview = msg.content.substring(0, 100);
-          shareText += `${role} ${preview}${
-            msg.content.length > 100 ? "..." : ""
-          }\n\n`;
+          const preview = getMessagePreview(msg.content, 100);
+          shareText += `${role} ${preview}\n\n`;
         });
 
         if (messages.length > previewCount) {
@@ -1169,11 +1136,14 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       body += `消息数: ${messages.length}\n\n`;
 
       if (messages.length > 0) {
-        // 显示前5条消息
-        const previewCount = Math.min(5, messages.length);
+        // 邮件正文包含全部消息，避免信息缺失
+        const previewCount = messages.length;
         messages.slice(0, previewCount).forEach((msg: any) => {
           const role = msg.role === "user" ? "[用户]" : "[AI]";
-          body += `${role} ${msg.content}\n\n`;
+          const messageContent = normalizeMessageContent(msg.content);
+          body += `${role} ${
+            messageContent || (language === "zh" ? "（空内容）" : "(Empty content)")
+          }\n\n`;
         });
 
         if (messages.length > previewCount) {

@@ -326,21 +326,41 @@ export function GPTLibrary({
         </div>
 
         <Tabs value={activeCategory} onValueChange={setActiveCategory}>
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="all">{t.library.categories.all}</TabsTrigger>
-            <TabsTrigger value="coding">
+          <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1 sm:grid sm:grid-cols-6 sm:gap-0 sm:overflow-visible">
+            <TabsTrigger
+              value="all"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
+              {t.library.categories.all}
+            </TabsTrigger>
+            <TabsTrigger
+              value="coding"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
               {t.library.categories.coding}
             </TabsTrigger>
-            <TabsTrigger value="creative">
+            <TabsTrigger
+              value="creative"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
               {t.library.categories.creative}
             </TabsTrigger>
-            <TabsTrigger value="analysis">
+            <TabsTrigger
+              value="analysis"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
               {t.library.categories.analysis}
             </TabsTrigger>
-            <TabsTrigger value="research">
+            <TabsTrigger
+              value="research"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
               {t.library.categories.research}
             </TabsTrigger>
-            <TabsTrigger value="recommended">
+            <TabsTrigger
+              value="recommended"
+              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
+            >
               {t.library.categories.recommended}
             </TabsTrigger>
           </TabsList>

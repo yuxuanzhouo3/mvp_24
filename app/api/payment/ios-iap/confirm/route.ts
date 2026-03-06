@@ -10,6 +10,7 @@ import {
   getActiveSubscriptionSnapshot,
   normalizePlanId,
 } from "@/app/api/payment/lib/subscription-plan-guard";
+import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
 
 async function syncUserMembershipCache(
   user: any,
@@ -269,6 +270,20 @@ export async function POST(request: NextRequest) {
         transactionId
       );
 
+      await grantReferralFirstPaymentReward({
+        invitedUserId: user.id,
+        transactionId,
+        provider: "apple",
+        region: "INTL",
+      }).catch((rewardError) => {
+        logWarn("Failed to grant referral first-payment reward for Apple IAP replay", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          error: rewardError instanceof Error ? rewardError.message : String(rewardError),
+        });
+      });
+
       return NextResponse.json({
         success: true,
         transactionId,
@@ -370,6 +385,20 @@ export async function POST(request: NextRequest) {
     }
 
     await syncUserMembershipCache(user, finalExpiresAtIso, operationId, transactionId);
+
+    await grantReferralFirstPaymentReward({
+      invitedUserId: user.id,
+      transactionId,
+      provider: "apple",
+      region: "INTL",
+    }).catch((rewardError) => {
+      logWarn("Failed to grant referral first-payment reward for Apple IAP", {
+        operationId,
+        userId: user.id,
+        transactionId,
+        error: rewardError instanceof Error ? rewardError.message : String(rewardError),
+      });
+    });
 
     logInfo("IAP subscription activated", {
       operationId,

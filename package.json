@@ -21,6 +21,7 @@
     "db:push": "supabase db push",
     "db:pull": "supabase db pull",
     "db:test": "npx tsx scripts/test-db-connection.ts",
+    "db:test:supabase": "node --import tsx scripts/test-supabase-connectivity.ts",
     "db:backup": "npx tsx scripts/backup-database.ts",
     "geo:test": "npx tsx scripts/test-geo-routing.ts",
     "init:cloudbase": "npx tsx scripts/init-cloudbase-collections.ts",

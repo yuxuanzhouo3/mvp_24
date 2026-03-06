@@ -5,6 +5,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { WechatProviderV3 } from "@/lib/architecture-modules/layers/third-party/payment/providers/wechat-provider-v3";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { updateCloudbaseSubscription } from "@/app/api/payment/lib/update-cloudbase-subscription";
+import {
+  grantReferralFirstPaymentReward,
+  rollbackReferralRewardsByTransaction,
+} from "@/lib/market/referrals";
 
 // WeChat Webhook 依赖 Node.js 运行时
 export const runtime = "nodejs";
@@ -49,13 +53,44 @@ export async function POST(request: NextRequest) {
 
     console.log("WeChat webhook event_type:", webhookData.event_type);
 
-    // 6. 仅处理支付成功事件
+    // 6. 处理退款成功事件（自动回滚裂变奖励）
+    if (webhookData.event_type === "REFUND.SUCCESS") {
+      let refundData: any;
+      try {
+        refundData = await wechatProvider.handleWebhookNotification(webhookData);
+      } catch (error) {
+        console.error("Failed to decrypt WeChat refund webhook data:", error);
+        return NextResponse.json(
+          { code: "FAIL", message: "Refund decryption failed" },
+          { status: 400 }
+        );
+      }
+
+      const rollbackTransactionId = String(
+        refundData?.transaction_id || refundData?.out_trade_no || ""
+      ).trim();
+
+      if (rollbackTransactionId) {
+        await rollbackReferralRewardsByTransaction({
+          transactionId: rollbackTransactionId,
+          provider: "wechat",
+          region: "CN",
+          reason: "REFUND.SUCCESS",
+        }).catch((rollbackError) => {
+          console.error("Failed to rollback referral rewards for WeChat refund:", rollbackError);
+        });
+      }
+
+      return NextResponse.json({ code: "SUCCESS", message: "Ok" }, { status: 200 });
+    }
+
+    // 7. 仅处理支付成功事件
     if (webhookData.event_type !== "TRANSACTION.SUCCESS") {
       console.log("Ignoring WeChat webhook event:", webhookData.event_type);
       return NextResponse.json({ code: "SUCCESS", message: "Ok" }, { status: 200 });
     }
 
-    // 7. 解密回调数据
+    // 8. 解密回调数据
     let paymentData: any;
     try {
       paymentData = await wechatProvider.handleWebhookNotification(webhookData);
@@ -74,13 +109,13 @@ export async function POST(request: NextRequest) {
       amount: paymentData.amount?.total,
     });
 
-    // 8. 检查交易状态
+    // 9. 检查交易状态
     if (paymentData.trade_state !== "SUCCESS") {
       console.log("WeChat payment not successful:", paymentData.trade_state);
       return NextResponse.json({ code: "SUCCESS", message: "Ok" }, { status: 200 });
     }
 
-    // 9. 幂等性检查：防止重复处理
+    // 10. 幂等性检查：防止重复处理
     const webhookEventId = `wechat_${paymentData.transaction_id}`;
     let eventExists = false;
 
@@ -101,7 +136,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ code: "SUCCESS", message: "Ok" }, { status: 200 });
     }
 
-    // 10. 记录 Webhook 事件到 CloudBase
+    // 11. 记录 Webhook 事件到 CloudBase
     const webhookEvent = {
       id: webhookEventId,
       provider: "wechat",
@@ -118,7 +153,7 @@ export async function POST(request: NextRequest) {
       console.error("Error saving CloudBase webhook event:", error);
     }
 
-    // 11. 更新支付订单状态到 CloudBase
+    // 12. 更新支付订单状态到 CloudBase
     const updateData = {
       status: "completed",
       transaction_id: paymentData.transaction_id,
@@ -137,7 +172,7 @@ export async function POST(request: NextRequest) {
       console.error("Error updating CloudBase payment:", error);
     }
 
-    // 12. 获取支付订单信息（包含user_id和billingCycle）
+    // 13. 获取支付订单信息（包含user_id和billingCycle）
     const amount = paymentData.amount?.total ? paymentData.amount.total / 100 : 0;
     let paymentRecord: any = null;
     let days = 30; // 默认30天
@@ -164,7 +199,7 @@ export async function POST(request: NextRequest) {
 
     const userId = paymentRecord.user_id;
 
-    // 13. 从支付记录中获取billingCycle，计算订阅天数
+    // 14. 从支付记录中获取billingCycle，计算订阅天数
     // ✅ 修复：从payment record中读取billingCycle，而不是从金额推断
     // 优先级：billing_cycle (顶层字段) > metadata.billingCycle > 默认monthly
     const billingCycle = paymentRecord.billing_cycle ||
@@ -185,7 +220,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // 14. 架构：subscriptions 表是源数据，web_users 是派生数据
+    // 15. 架构：subscriptions 表是源数据，web_users 是派生数据
     // 调用统一函数更新订阅状态
     const currentDate = new Date();
     const subscriptionResult = await updateCloudbaseSubscription({
@@ -200,7 +235,19 @@ export async function POST(request: NextRequest) {
       // 不返回错误，允许webhook继续处理，因为支付数据已更新
     }
 
-    // 16. 标记 Webhook 事件为已处理
+    const rewardTransactionId = String(paymentData.transaction_id || "").trim();
+    if (rewardTransactionId) {
+      await grantReferralFirstPaymentReward({
+        invitedUserId: userId,
+        transactionId: rewardTransactionId,
+        provider: "wechat",
+        region: "CN",
+      }).catch((rewardError) => {
+        console.error("Failed to grant referral first-payment reward for WeChat:", rewardError);
+      });
+    }
+
+    // 17. 标记 Webhook 事件为已处理
     try {
       const db = getDatabase();
       await db
@@ -214,7 +261,7 @@ export async function POST(request: NextRequest) {
       console.error("Error updating CloudBase webhook event:", error);
     }
 
-    // 17. 返回成功响应给微信
+    // 18. 返回成功响应给微信
     return NextResponse.json(
       {
         code: "SUCCESS",

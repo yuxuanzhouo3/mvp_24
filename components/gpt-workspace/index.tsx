@@ -609,22 +609,28 @@ export function GPTWorkspace({
   const truncatePreview = (value: string, maxLength: number = 30) =>
     value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 
-  const getConversationPreview = (message: Message): string => {
+  const findRelatedUserMessage = (message: Message): Message | null => {
     const messageIndex = messages.findIndex((m) => m.id === message.id);
-    let sourceText = "";
+    if (messageIndex <= 0) return null;
 
-    if (messageIndex > 0) {
-      for (let i = messageIndex - 1; i >= 0; i -= 1) {
-        const prevMessage = messages[i];
-        if (
-          prevMessage.role === "user" &&
-          typeof prevMessage.content === "string" &&
-          prevMessage.content.trim()
-        ) {
-          sourceText = prevMessage.content;
-          break;
-        }
+    for (let i = messageIndex - 1; i >= 0; i -= 1) {
+      const prevMessage = messages[i];
+      if (
+        prevMessage.role === "user" &&
+        typeof prevMessage.content === "string" &&
+        prevMessage.content.trim()
+      ) {
+        return prevMessage;
       }
+    }
+    return null;
+  };
+
+  const getConversationPreview = (message: Message): string => {
+    let sourceText = "";
+    const relatedUserMessage = findRelatedUserMessage(message);
+    if (relatedUserMessage && typeof relatedUserMessage.content === "string") {
+      sourceText = relatedUserMessage.content;
     }
 
     if (!sourceText) {
@@ -643,6 +649,14 @@ export function GPTWorkspace({
       return language === "zh" ? "（空内容）" : "(empty)";
     }
     return truncatePreview(normalized);
+  };
+
+  const getConversationAnchorId = (message: Message) => {
+    const relatedUserMessage = findRelatedUserMessage(message);
+    if (relatedUserMessage) {
+      return getMessageAnchorId(relatedUserMessage.id);
+    }
+    return getMessageAnchorId(message.id);
   };
 
   const buildVisibleUserInput = (
@@ -3497,20 +3511,36 @@ export function GPTWorkspace({
     );
   };
 
-  const toBase64Url = (text: string) => {
-    const bytes = new TextEncoder().encode(text);
-    let binary = "";
-    bytes.forEach((b) => {
-      binary += String.fromCharCode(b);
-    });
-    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-  };
-
   const shareMessageByLink = async (content: string) => {
     try {
       if (typeof window === "undefined") return;
-      const encoded = toBase64Url(content);
-      const shareUrl = `${window.location.origin}/share/text?d=${encodeURIComponent(encoded)}`;
+      const { token } = await getClientAuthToken();
+      const response = await fetch("/api/share/text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ content }),
+      });
+
+      const json = (await response.json().catch(() => ({}))) as {
+        id?: string;
+        shareCode?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !json?.id) {
+        throw new Error(json?.error || `HTTP ${response.status}`);
+      }
+
+      const targetPath = `/share/text?id=${encodeURIComponent(json.id)}`;
+      const shareUrl =
+        typeof json.shareCode === "string" && json.shareCode.trim()
+          ? `${window.location.origin}/r/${encodeURIComponent(
+              json.shareCode
+            )}?source=share_text&to=${encodeURIComponent(targetPath)}`
+          : `${window.location.origin}${targetPath}`;
 
       await navigator.clipboard.writeText(shareUrl);
 
@@ -3582,6 +3612,7 @@ export function GPTWorkspace({
         language={language}
         getStatusColor={getStatusColor}
         getConversationPreview={getConversationPreview}
+        getConversationAnchorId={getConversationAnchorId}
         getLiveResponseAnchorId={getLiveResponseAnchorId}
         getMultiAIResponseAnchorId={getMultiAIResponseAnchorId}
         onJumpToMessage={jumpToMessage}

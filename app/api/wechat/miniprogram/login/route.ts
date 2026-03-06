@@ -7,6 +7,7 @@ import { getWechatUserByCode } from "@/lib/wechat/token-exchange";
 import { z } from "zod";
 import { signAccessToken } from "@/lib/security/jwt";
 import { setAuthCookies } from "@/lib/auth/cookies";
+import { bindReferralFromRequest } from "@/lib/market/referrals";
 
 // 1️⃣ 请求参数验证
 const miniprogramLoginSchema = z.object({
@@ -194,6 +195,7 @@ export async function POST(request: NextRequest) {
 
     let userId: string | null = null;
     let existingUser: any = null;
+    let isNewUser = false;
 
     // 查询是否已有该用户（优先用 unionid 统一账号，其次 openid）
     try {
@@ -235,6 +237,7 @@ export async function POST(request: NextRequest) {
     if (!userId) {
       // 新用户
       logInfo("Creating new WeChat user", { openid, loginSource });
+      isNewUser = true;
 
       const newUser = {
         wechat_openid: openid,
@@ -292,6 +295,23 @@ export async function POST(request: NextRequest) {
 
     if (!userId) {
       throw new Error("Failed to create or find user");
+    }
+
+    if (isNewUser) {
+      try {
+        await bindReferralFromRequest({
+          request,
+          invitedUserId: userId,
+          invitedEmail: loginEmail,
+          region: "CN",
+        });
+      } catch (bindError) {
+        logInfo("Miniprogram signup referral bind failed", {
+          userId,
+          openid,
+          error: bindError instanceof Error ? bindError.message : String(bindError),
+        });
+      }
     }
 
     // 7️⃣ 生成 JWT tokens

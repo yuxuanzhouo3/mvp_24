@@ -16,6 +16,7 @@ import {
 import { z } from "zod";
 import crypto from "crypto";
 import { setAuthCookies } from "@/lib/auth/cookies";
+import { bindReferralFromRequest } from "@/lib/market/referrals";
 
 // 微信登录请求验证schema
 const wechatAuthSchema = z.object({
@@ -101,6 +102,7 @@ export async function POST(request: NextRequest) {
 
     // 登录成功，保存用户资料到数据库
     const userId = authResponse.user?.id;
+    let createdUserProfile = false;
     if (userId) {
       try {
         const db = getDatabase();
@@ -139,6 +141,7 @@ export async function POST(request: NextRequest) {
           userProfile.loginCount = 1;
           userProfile.lastLoginAt = new Date();
           await db.insert("web_users", userProfile);
+          createdUserProfile = true;
         }
 
         logSecurityEvent(
@@ -159,6 +162,33 @@ export async function POST(request: NextRequest) {
           clientIP,
           {
             error: dbError instanceof Error ? dbError.message : "Unknown error",
+          }
+        );
+      }
+    }
+
+    if (userId && createdUserProfile) {
+      const metadata = (authResponse.user?.metadata || {}) as Record<string, any>;
+      const openid = String(metadata.openid || "").trim();
+      const fallbackEmail = openid ? `wechat_${openid}@local.wechat` : null;
+
+      try {
+        await bindReferralFromRequest({
+          request,
+          invitedUserId: userId,
+          invitedEmail:
+            (authResponse.user as any)?.email ||
+            (typeof metadata.email === "string" ? metadata.email : null) ||
+            fallbackEmail,
+          region: "CN",
+        });
+      } catch (bindError) {
+        logSecurityEvent(
+          "cloudbase_wechat_referral_bind_failed",
+          userId,
+          clientIP,
+          {
+            error: bindError instanceof Error ? bindError.message : "Unknown error",
           }
         );
       }

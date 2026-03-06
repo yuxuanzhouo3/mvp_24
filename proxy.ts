@@ -24,15 +24,19 @@ export async function proxy(request: NextRequest) {
   // =====================
   // Admin 路由保护
   // =====================
-  if (pathname.startsWith("/admin")) {
+  if (pathname.startsWith("/admin") || pathname.startsWith("/market")) {
+    const isMarketRoute = pathname.startsWith("/market");
+    const loginPath = isMarketRoute ? "/market/login" : "/admin/login";
+    const authedLandingPath = isMarketRoute ? "/market" : "/admin/ads";
+
     // 登录页不需要验证
-    if (pathname === "/admin/login") {
+    if (pathname === loginPath) {
       // 如果已登录，重定向到管理页
       const token = request.cookies.get("admin_session")?.value;
       if (token) {
         const session = verifyAdminSessionToken(token);
         if (session) {
-          return NextResponse.redirect(new URL("/admin/ads", request.url));
+          return NextResponse.redirect(new URL(authedLandingPath, request.url));
         }
       }
       return NextResponse.next();
@@ -42,13 +46,13 @@ export async function proxy(request: NextRequest) {
     const token = request.cookies.get("admin_session")?.value;
 
     if (!token) {
-      return NextResponse.redirect(new URL("/admin/login", request.url));
+      return NextResponse.redirect(new URL(loginPath, request.url));
     }
 
     const session = verifyAdminSessionToken(token);
     if (!session) {
       // Token 无效或过期，重定向到登录页
-      const response = NextResponse.redirect(new URL("/admin/login", request.url));
+      const response = NextResponse.redirect(new URL(loginPath, request.url));
       // 清除无效的 cookie
       response.cookies.delete("admin_session");
       return response;

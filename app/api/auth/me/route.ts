@@ -3,6 +3,15 @@ import { verifyAuthToken } from "@/lib/auth-utils";
 import { logSecurityEvent } from "@/lib/logger";
 import { readAccessTokenFromRequest } from "@/lib/auth/cookies";
 
+function pickFirstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
 /**
  * GET /api/auth/me
  * 获取当前登录用户信息
@@ -46,11 +55,18 @@ export async function GET(request: NextRequest) {
     }
 
     const user = authResult.user || {};
+    const metadata = user.user_metadata || {};
     const responseUser = {
       id: user._id || user.id || authResult.userId,
       email: user.email || "",
       name: user.name || "",
-      avatar: user.avatar || "",
+      avatar: pickFirstString(
+        user.avatar,
+        metadata.avatar,
+        metadata.avatar_url,
+        metadata.picture,
+        metadata.photo_url
+      ),
       pro: Boolean(user.pro),
       region: user.region || (authResult.region === "CN" ? "china" : "intl"),
       subscription_plan: user.subscription_plan || "free",

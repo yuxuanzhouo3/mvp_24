@@ -7,12 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,11 +19,9 @@ import {
   LogIn,
   UserPlus,
   Crown,
-  Monitor,
-  Moon,
-  Sun,
   Trash2,
   RefreshCw,
+  Share2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useUser } from "./user-context";
@@ -42,7 +35,6 @@ import {
   restoreSavedAuthState,
   removeSavedAccount,
 } from "@/lib/auth-state-manager";
-import { useTheme } from "next-themes";
 
 export function UserMenu() {
   const router = useRouter();
@@ -53,18 +45,9 @@ export function UserMenu() {
   );
   const [isLoading, setIsLoading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { theme, setTheme } = useTheme();
   const { language } = useLanguage();
   const t = useTranslations(language);
   const [savedAccounts, setSavedAccounts] = useState<any[]>([]);
-  const selectedTheme: "light" | "dark" | "system" =
-    theme === "light" || theme === "dark" ? theme : "system";
-  const themeLabels = {
-    light: (t.settings as any)?.themeLight || (language === "zh" ? "浅色" : "Light"),
-    dark: (t.settings as any)?.themeDark || (language === "zh" ? "深色" : "Dark"),
-    system:
-      (t.settings as any)?.themeSystem || (language === "zh" ? "跟随系统" : "System"),
-  };
 
   // 监听认证状态变化，同步更新已保存账号列表
   useEffect(() => {
@@ -273,39 +256,19 @@ export function UserMenu() {
             <LogIn className="w-4 h-4" />
             <span>{t.user.login}</span>
           </DropdownMenuItem>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="flex items-center space-x-2">
-              <Monitor className="w-4 h-4" />
-              <span>{t.settings.theme}</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
-              <DropdownMenuRadioGroup
-                value={selectedTheme}
-                onValueChange={(value) =>
-                  setTheme(value as "light" | "dark" | "system")
-                }
-              >
-                <DropdownMenuRadioItem value="light" className="flex items-center space-x-2">
-                  <Sun className="w-4 h-4" />
-                  <span>{themeLabels.light}</span>
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="dark" className="flex items-center space-x-2">
-                  <Moon className="w-4 h-4" />
-                  <span>{themeLabels.dark}</span>
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="system" className="flex items-center space-x-2">
-                  <Monitor className="w-4 h-4" />
-                  <span>{themeLabels.system}</span>
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
           <DropdownMenuItem
             onSelect={handleSignUp}
             className="flex items-center space-x-2"
           >
             <UserPlus className="w-4 h-4" />
             <span>{t.user.register}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => router.push(buildUrl("/settings"))}
+            className="flex items-center space-x-2"
+          >
+            <Settings className="w-4 h-4" />
+            <span>{t.user.settings}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -393,6 +356,13 @@ export function UserMenu() {
         >
           <User className="w-4 h-4" />
           <span>{t.user.profile}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onSelect={() => router.push(buildUrl("/invite"))}
+          className="flex items-center space-x-2"
+        >
+          <Share2 className="w-4 h-4" />
+          <span>{language === "zh" ? "邀请中心" : "Invite Center"}</span>
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => router.push(buildUrl("/settings"))}

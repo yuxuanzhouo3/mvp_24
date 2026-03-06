@@ -8,31 +8,26 @@ export function getSupabaseClient() {
     return supabaseInstance;
   }
 
-  // 延迟到运行时才读取环境变量
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  // 延迟到运行时才读取环境变量，兼容新旧 Key 命名
+  const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  const supabaseAnonKey = (
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    ""
+  ).trim();
 
-  // 运行时检查环境变量
-  if (typeof window !== 'undefined' || process.env.NODE_ENV === 'production') {
-    if (!supabaseUrl) {
-      console.error(
-        '❌ Missing NEXT_PUBLIC_SUPABASE_URL environment variable. ' +
-        'Please set it in your deployment platform (e.g., Tencent Cloud)'
-      );
-    }
-
-    if (!supabaseAnonKey) {
-      console.error(
-        '❌ Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable. ' +
-        'Please set it in your deployment platform (e.g., Tencent Cloud)'
-      );
-    }
+  // 缺失配置时直接报错，避免静默回退到占位域名导致迷惑性网络错误
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error(
+      "Supabase config missing: NEXT_PUBLIC_SUPABASE_URL and " +
+        "(NEXT_PUBLIC_SUPABASE_ANON_KEY or NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY) must be set."
+    );
   }
 
   // 使用 Supabase SDK 的默认存储键（sb-<project>-auth-token）以获得最稳定的持久化行为
   supabaseInstance = createClient(
-    supabaseUrl || 'https://placeholder.supabase.co',
-    supabaseAnonKey || 'placeholder-key',
+    supabaseUrl,
+    supabaseAnonKey,
     {
       auth: {
         autoRefreshToken: true,

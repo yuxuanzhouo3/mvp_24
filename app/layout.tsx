@@ -12,6 +12,7 @@ import InitializeApp from "@/components/initialize-app";
 import { SubscriptionModal } from "@/components/subscription-modal";
 import { WebLogConsole } from "@/components/web-log-console";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AppearanceProvider } from "@/components/appearance-provider";
 import Script from "next/script";
 
 export const metadata: Metadata = {
@@ -87,28 +88,30 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <GeoProvider>
-            <LanguageProvider>
-              <AppProvider>
-                <UserProvider>
-                  {children}
-                  {/* 初始化应用（仅在运行时执行） */}
-                  <InitializeApp />
-                  {/* 订阅提示弹窗 */}
-                  <SubscriptionModal />
-                  {/* Debug mode indicator - 仅开发环境显示 */}
-                  <Suspense fallback={null}>
-                    <DebugModeIndicator />
-                  </Suspense>
-                  {/* Global toast portals */}
-                  <AppToaster />
-                  <SonnerToaster />
-                  {/* H5 日志控制台 - 仅在 debug=true 时显示 */}
-                  <WebLogConsole />
-                </UserProvider>
-              </AppProvider>
-            </LanguageProvider>
-          </GeoProvider>
+          <AppearanceProvider>
+            <GeoProvider>
+              <LanguageProvider>
+                <AppProvider>
+                  <UserProvider>
+                    {children}
+                    {/* 初始化应用（仅在运行时执行） */}
+                    <InitializeApp />
+                    {/* 订阅提示弹窗 */}
+                    <SubscriptionModal />
+                    {/* Debug mode indicator - 仅开发环境显示 */}
+                    <Suspense fallback={null}>
+                      <DebugModeIndicator />
+                    </Suspense>
+                    {/* Global toast portals */}
+                    <AppToaster />
+                    <SonnerToaster />
+                    {/* H5 日志控制台 - 仅在 debug=true 时显示 */}
+                    <WebLogConsole />
+                  </UserProvider>
+                </AppProvider>
+              </LanguageProvider>
+            </GeoProvider>
+          </AppearanceProvider>
         </ThemeProvider>
       </body>
     </html>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Globe, 
   Check,
@@ -54,6 +54,7 @@ import {
   useMessageFavorites,
 } from "@/hooks/use-message-favorites";
 import { detectPlatform } from "@/lib/platform-detection";
+import { useAppearance } from "@/components/appearance-provider";
 
 interface ChatSession {
   id: string;
@@ -179,6 +180,8 @@ export function Header({
   const router = useRouter();
   const { language, setLanguage } = useLanguage();
   const t = useTranslations(language);
+  const { appearance, assistantAvatarFallback, assistantAvatarSrc } =
+    useAppearance();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showAllFavoritesMobile, setShowAllFavoritesMobile] = useState(false);
   const [favoritesExpandedMobile, setFavoritesExpandedMobile] = useState(false);
@@ -198,6 +201,11 @@ export function Header({
     ? favorites.items
     : favorites.items.slice(0, FAVORITES_INITIAL_VISIBLE);
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
+  const headerBrandName = appearance.assistantName || t.header.title;
+  const brandGradientStyle = {
+    backgroundImage:
+      "linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--brand-secondary)) 100%)",
+  };
 
   // 获取当前URL的debug参数
   const currentDebugParam =
@@ -348,21 +356,23 @@ export function Header({
         </Button>
 
         <div className="flex items-center gap-1 sm:gap-2">
-          <div className="hidden sm:flex w-7 h-7 sm:w-8 sm:h-8 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg items-center justify-center flex-shrink-0">
-            <span className="text-white font-bold text-xs sm:text-sm">AI</span>
-          </div>
+          <Avatar className="hidden h-7 w-7 flex-shrink-0 overflow-hidden rounded-lg ring-1 ring-border/60 shadow-sm sm:flex sm:h-8 sm:w-8">
+            <AvatarImage src={assistantAvatarSrc} alt={headerBrandName} />
+            <AvatarFallback
+              className="text-xs font-semibold text-white sm:text-sm"
+              style={brandGradientStyle}
+            >
+              {assistantAvatarFallback}
+            </AvatarFallback>
+          </Avatar>
           {/* 标题和徽章 - 移动端隐藏 */}
-          <h1 className="hidden sm:block text-base sm:text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent truncate">
-            {t.header.title}
+          <h1
+            className="hidden truncate bg-clip-text text-base font-bold text-transparent sm:block sm:text-xl"
+            style={brandGradientStyle}
+          >
+            {headerBrandName}
           </h1>
         </div>
-
-        <Badge
-          variant="secondary"
-          className="bg-green-100 text-green-800 text-xs sm:text-sm whitespace-nowrap hidden sm:inline-block"
-        >
-          {t.header.online}
-        </Badge>
       </div>
 
       <nav className="absolute left-1/2 top-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 sm:static sm:z-auto sm:translate-x-0 sm:translate-y-0">

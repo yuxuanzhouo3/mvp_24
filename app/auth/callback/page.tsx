@@ -2,7 +2,6 @@
 
 import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
 import { getAuthClient } from "@/lib/auth/client";
 import { isChinaRegion } from "@/lib/config/region";
 import { saveAuthState } from "@/lib/auth-state-manager";
@@ -163,6 +162,21 @@ function AuthCallbackContent() {
       }
 
       if (sessionResult.data.session) {
+        const accessToken = sessionResult.data.session.access_token;
+        if (accessToken) {
+          try {
+            await fetch("/api/auth/supabase-profile", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${accessToken}`,
+              },
+            });
+          } catch (profileSyncError) {
+            console.warn("Supabase profile sync failed:", profileSyncError);
+          }
+        }
+
         console.log("认证成功，跳转到首页");
         // 等待user-context更新后跳转
         router.replace(buildUrl("/"));

@@ -289,7 +289,7 @@ export default function ProfilePage() {
     <div className="min-h-screen bg-gray-50">
       <Header activeView={activeView} setActiveView={setActiveView} />
       <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
-        <div className="mb-6">
+        <div className="mb-6 flex items-center justify-between gap-3">
           <Button
             variant="ghost"
             onClick={() => router.back()}
@@ -297,6 +297,12 @@ export default function ProfilePage() {
           >
             <ArrowLeft className="w-4 h-4" />
             <span>{t.profile.back}</span>
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => router.push(buildUrl("/invite"))}
+          >
+            {language === "zh" ? "邀请中心" : "Invite Center"}
           </Button>
         </div>
         <Card>

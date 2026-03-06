@@ -3,9 +3,10 @@
  * 处理不同支付提供商的事件
  */
 
-import { logInfo, logSecurityEvent } from "../../logger";
+import { logInfo, logSecurityEvent, logWarn } from "../../logger";
 import { handlePaymentSuccess } from "./payment-success";
 import { updateSubscriptionStatus, findUserBySubscriptionId } from "./subscription-db";
+import { rollbackReferralRewardsByTransaction } from "@/lib/market/referrals";
 import {
   handleStripeCheckoutCompleted,
   handleStripeSubscriptionCreated,
@@ -14,6 +15,38 @@ import {
   handleStripeInvoicePaymentSucceeded,
   handleStripeInvoicePaymentFailed,
 } from "./stripe";
+
+function uniqueTransactionIds(values: Array<string | null | undefined>) {
+  const out = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    out.add(trimmed);
+  }
+  return Array.from(out);
+}
+
+async function rollbackReferralForTransactions(
+  provider: "stripe" | "paypal" | "wechat",
+  transactionIds: Array<string | null | undefined>
+) {
+  const ids = uniqueTransactionIds(transactionIds);
+  for (const transactionId of ids) {
+    await rollbackReferralRewardsByTransaction({
+      transactionId,
+      provider,
+      region: "ALL",
+      reason: "refund",
+    }).catch((error) => {
+      logWarn("Failed to rollback referral reward from webhook refund event", {
+        provider,
+        transactionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+}
 
 /**
  * 处理 PayPal 事件
@@ -28,6 +61,17 @@ export async function handlePayPalEvent(
     case "PAYMENT.SALE.COMPLETED":
     case "PAYMENT.CAPTURE.COMPLETED":
       return await handlePaymentSuccess("paypal", resource);
+
+    case "PAYMENT.SALE.REFUNDED":
+    case "PAYMENT.CAPTURE.REFUNDED": {
+      await rollbackReferralForTransactions("paypal", [
+        resource.id,
+        resource.sale_id,
+        resource.parent_payment,
+        resource.invoice_number,
+      ]);
+      return true;
+    }
 
     case "CHECKOUT.ORDER.APPROVED":
       logInfo("PayPal order approved, waiting for capture completion", {
@@ -82,6 +126,16 @@ export async function handleStripeEvent(
     case "invoice.payment_failed":
       return await handleStripeInvoicePaymentFailed(data);
 
+    case "charge.refunded": {
+      await rollbackReferralForTransactions("stripe", [
+        data.id,
+        data.payment_intent,
+        data.invoice,
+        data.metadata?.transaction_id,
+      ]);
+      return true;
+    }
+
     default:
       logInfo(`Unhandled Stripe event: ${eventType}`, { eventType, data });
       return true;
@@ -119,6 +173,15 @@ export async function handleWechatEvent(
   switch (eventType) {
     case "SUCCESS":
       return await handlePaymentSuccess("wechat", eventData);
+
+    case "REFUND.SUCCESS": {
+      await rollbackReferralForTransactions("wechat", [
+        eventData.transaction_id,
+        eventData.out_trade_no,
+        eventData.refund_id,
+      ]);
+      return true;
+    }
 
     default:
       logInfo(`Unhandled WeChat event: ${eventType}`, {

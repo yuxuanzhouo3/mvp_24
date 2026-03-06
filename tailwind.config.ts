@@ -34,12 +34,12 @@ const config: Config = {
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT: "#2563eb", // DeepSeek blue
+          DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
         },
         secondary: {
-          DEFAULT: "#8b5cf6", // Grok purple
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: "hsl(var(--brand-secondary))",
+          foreground: "hsl(var(--brand-secondary-foreground))",
         },
         destructive: {
           DEFAULT: "hsl(var(--destructive))",

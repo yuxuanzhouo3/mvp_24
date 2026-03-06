@@ -78,6 +78,27 @@ export function ChatInputPanel({
   onRemoveAttachment,
   onClearAttachments,
 }: ChatInputPanelProps) {
+  const isZh = language === "zh";
+  const modeLabels: Record<
+    CollaborationMode,
+    { zh: string; en: string }
+  > = {
+    normal: { zh: "普通模式", en: "Normal Mode" },
+    parallel: { zh: "并行模式", en: "Parallel Mode" },
+    sequential: { zh: "顺序模式", en: "Sequential Mode" },
+    deep: { zh: "深度模式", en: "Deep Mode" },
+    graph: { zh: "任务图模式", en: "Task Graph Mode" },
+  };
+  const getModeLabel = (mode: CollaborationMode) =>
+    isZh ? modeLabels[mode].zh : modeLabels[mode].en;
+  const getTaskGraphPresetName = (id: string, defaultName: string) => {
+    if (isZh) return defaultName;
+    if (id === "general") return "General Decomposition";
+    if (id === "coding") return "Coding Execution";
+    if (id === "research") return "Research Analysis";
+    return defaultName;
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const formatBytes = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return "0B";
@@ -175,20 +196,10 @@ export function ChatInputPanel({
                 size="sm"
                 className="h-7 sm:h-8 px-2.5 sm:px-3.5 rounded-full text-xs sm:text-sm font-medium flex items-center gap-1.5 flex-shrink-0"
                 onClick={() => setModeMenuOpen(!modeMenuOpen)}
-                title="选择协作模式"
+                title={isZh ? "选择协作模式" : "Select collaboration mode"}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>
-                  {effectiveCollaborationMode === "normal"
-                    ? "普通模式"
-                    : effectiveCollaborationMode === "sequential"
-                    ? "顺序模式"
-                    : effectiveCollaborationMode === "deep"
-                      ? "深度模式"
-                      : effectiveCollaborationMode === "graph"
-                        ? "任务图模式"
-                        : "并行模式"}
-                </span>
+                <span>{getModeLabel(effectiveCollaborationMode)}</span>
                 <ChevronDown
                   className={`w-3.5 h-3.5 transition-transform ${
                     modeMenuOpen ? "-rotate-180" : ""
@@ -205,7 +216,7 @@ export function ChatInputPanel({
                     onClick={() => onCollaborationModeChange("normal")}
                   >
                     <Bot className="w-3.5 h-3.5" />
-                    <span>普通模式</span>
+                    <span>{getModeLabel("normal")}</span>
                   </Button>
 
                   <Button
@@ -215,7 +226,7 @@ export function ChatInputPanel({
                     onClick={() => onCollaborationModeChange("parallel")}
                   >
                     <Layers className="w-3.5 h-3.5" />
-                    <span>并行模式</span>
+                    <span>{getModeLabel("parallel")}</span>
                   </Button>
 
                   <Button
@@ -225,7 +236,7 @@ export function ChatInputPanel({
                     onClick={() => onCollaborationModeChange("sequential")}
                   >
                     <ListOrdered className="w-3.5 h-3.5" />
-                    <span>顺序模式</span>
+                    <span>{getModeLabel("sequential")}</span>
                   </Button>
 
                   <Button
@@ -235,7 +246,7 @@ export function ChatInputPanel({
                     onClick={() => onCollaborationModeChange("deep")}
                   >
                     <Brain className="w-3.5 h-3.5" />
-                    <span>深度模式</span>
+                    <span>{getModeLabel("deep")}</span>
                   </Button>
 
                   <Button
@@ -245,7 +256,7 @@ export function ChatInputPanel({
                     onClick={() => onCollaborationModeChange("graph")}
                   >
                     <GitBranch className="w-3.5 h-3.5" />
-                    <span>任务图模式</span>
+                    <span>{getModeLabel("graph")}</span>
                   </Button>
 
                   {effectiveCollaborationMode === "graph" && (
@@ -254,11 +265,11 @@ export function ChatInputPanel({
                         className="h-7 px-2 rounded-lg border border-gray-200 bg-white text-[10px] sm:text-xs text-gray-700 w-full"
                         value={taskGraphPresetId}
                         onChange={(e) => setTaskGraphPresetId(e.target.value)}
-                        aria-label="任务图模板"
+                        aria-label={isZh ? "任务图模板" : "Task graph preset"}
                       >
                         {TASK_GRAPH_PRESETS.map((p) => (
                           <option key={p.id} value={p.id}>
-                            {p.name}
+                            {getTaskGraphPresetName(p.id, p.name)}
                           </option>
                         ))}
                       </select>

@@ -11,6 +11,7 @@ import {
   LogOut,
   LayoutDashboard,
   BarChart3,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +24,11 @@ const menuItems = [
     title: "数据仪表盘",
     href: "/admin/dashboard",
     icon: BarChart3,
+  },
+  {
+    title: "Market 裂变系统",
+    href: "/market",
+    icon: UsersRound,
   },
   {
     title: "广告管理",

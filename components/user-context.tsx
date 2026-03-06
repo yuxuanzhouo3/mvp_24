@@ -21,6 +21,15 @@ import { supabase } from "@/lib/supabase";
 
 const authClient = getAuthClient();
 
+function pickFirstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -53,14 +62,21 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [isAuthInitialized, setIsAuthInitialized] = useState(false);
 
   const mapSupabaseUserToProfile = useCallback((supabaseUser: any): UserProfile => {
+    const metadata = supabaseUser?.user_metadata || {};
     return {
       id: supabaseUser.id,
       email: supabaseUser.email || "",
-      name:
-        supabaseUser.user_metadata?.displayName ||
-        supabaseUser.user_metadata?.full_name ||
-        "",
-      avatar: supabaseUser.user_metadata?.avatar || "",
+      name: pickFirstString(
+        metadata.displayName,
+        metadata.full_name,
+        metadata.name
+      ),
+      avatar: pickFirstString(
+        metadata.avatar,
+        metadata.avatar_url,
+        metadata.picture,
+        metadata.photo_url
+      ),
     };
   }, []);
 

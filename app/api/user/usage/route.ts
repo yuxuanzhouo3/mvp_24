@@ -11,6 +11,8 @@ import {
 } from "@/services/wallet";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   try {
@@ -114,13 +116,22 @@ export async function GET(req: NextRequest) {
       console.error("Error fetching multimodal usage stats:", error);
     }
 
-    return NextResponse.json({
-      used,
-      limit,
-      plan,
-      remaining: Math.max(0, limit - used),
-      multimodal,
-    });
+    return NextResponse.json(
+      {
+        used,
+        limit,
+        plan,
+        remaining: Math.max(0, limit - used),
+        multimodal,
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+          Pragma: "no-cache",
+          Expires: "0",
+        },
+      }
+    );
   } catch (error) {
     console.error("Error fetching user usage:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

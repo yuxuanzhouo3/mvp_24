@@ -14,6 +14,7 @@ import { getOrCreateUserProfile } from "@/lib/cloudbase-user-profile";
 import { setAuthCookies } from "@/lib/auth/cookies";
 import { verifyEmailOtp } from "@/lib/email-otp";
 import { isChinaRegion } from "@/lib/config/region";
+import { bindReferralFromRequest } from "@/lib/market/referrals";
 
 const authSchema = z.object({
   action: z.enum(["login", "signup"]).default("login"),
@@ -153,6 +154,17 @@ export async function POST(request: NextRequest) {
       email,
       name: email.split("@")[0],
     });
+
+    try {
+      await bindReferralFromRequest({
+        request,
+        invitedUserId: result.userId,
+        invitedEmail: email,
+        region: "CN",
+      });
+    } catch (bindError) {
+      console.warn("[/api/auth] referral bind failed on signup:", bindError);
+    }
 
     const response = NextResponse.json({
       success: true,

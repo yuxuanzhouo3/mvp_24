@@ -26,6 +26,7 @@ import { isChinaDeployment } from "@/lib/config/deployment.config";
 import { useAuthConfig } from "@/lib/hooks/useAuthConfig";
 import { detectPlatform } from "@/lib/platform-detection";
 import { saveAuthState } from "@/lib/auth-state-manager";
+import { signInWithNativeGoogleBridge } from "@/lib/native-google-login";
 
 const authClient = getAuthClient();
 const WECHAT_PRIVACY_SESSION_KEY = "wechat_privacy_consent";
@@ -658,7 +659,7 @@ function AuthPageContent() {
 
       const callbackName = "__wechatNativeAuthCallback";
       nativeWechatCallbackRef.current = callbackName;
-      let fallbackTimer: ReturnType<typeof window.setTimeout> | null = null;
+      let fallbackTimer: number | null = null;
       let callbackHandled = false;
 
       const clearNativeCallback = () => {
@@ -788,6 +789,40 @@ function AuthPageContent() {
     setError("");
 
     try {
+      const nativeResult = await signInWithNativeGoogleBridge({
+        timeoutMs: 60_000,
+      });
+
+      if (nativeResult.success) {
+        console.log("原生 Google 登录成功，准备跳转...");
+        setLoading(false);
+        window.dispatchEvent(new Event("auth-state-changed"));
+        setTimeout(() => {
+          router.replace(buildUrl("/"));
+        }, 500);
+        return;
+      }
+
+      if (nativeResult.reason === "cancelled") {
+        setError(language === "zh" ? "已取消 Google 登录" : "Google login cancelled");
+        setLoading(false);
+        return;
+      }
+
+      if (
+        nativeResult.reason === "native_error" ||
+        nativeResult.reason === "timeout"
+      ) {
+        setError(
+          nativeResult.error ||
+            (language === "zh"
+              ? "原生 Google 登录失败，请检查 App 配置（包名、google-services.json、web client id）"
+              : "Native Google login failed. Please verify app config (package, google-services.json, web client id).")
+        );
+        setLoading(false);
+        return;
+      }
+
       const { error } = await authClient.signInWithOAuth({
         provider: "google",
         options: {
@@ -1489,7 +1524,10 @@ function AuthPageContent() {
                   </Button>
                 </div>
               ) : userRegion === RegionType.USA &&
-                !platformInfo.type.includes("app") ? (
+                (platformInfo.type === "web" ||
+                  platformInfo.type === "android-app" ||
+                  platformInfo.type === "harmonyos-app" ||
+                  platformInfo.type === "desktop-app") ? (
                 <div className="space-y-3">
                   <Button
                     onClick={handleGoogleSignIn}
@@ -1517,20 +1555,23 @@ function AuthPageContent() {
                     </svg>
                     {t.auth.googleLogin}
                   </Button>
-                  <Button
-                    onClick={handleAppleSignIn}
-                    variant="outline"
-                    className="w-full h-12"
-                    disabled={loading}
-                  >
-                    <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
-                      <path
-                        fill="currentColor"
-                        d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
-                      />
-                    </svg>
-                    {t.auth.appleLogin}
-                  </Button>
+                  {(platformInfo.type === "web" ||
+                    platformInfo.type === "desktop-app") && (
+                    <Button
+                      onClick={handleAppleSignIn}
+                      variant="outline"
+                      className="w-full h-12"
+                      disabled={loading}
+                    >
+                      <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
+                        <path
+                          fill="currentColor"
+                          d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
+                        />
+                      </svg>
+                      {t.auth.appleLogin}
+                    </Button>
+                  )}
                 </div>
               ) : null}
 
@@ -1738,7 +1779,10 @@ function AuthPageContent() {
                   </Button>
                 </div>
               ) : userRegion === RegionType.USA &&
-                !platformInfo.type.includes("app") ? (
+                (platformInfo.type === "web" ||
+                  platformInfo.type === "android-app" ||
+                  platformInfo.type === "harmonyos-app" ||
+                  platformInfo.type === "desktop-app") ? (
                 <div className="space-y-3">
                   <Button
                     onClick={handleGoogleSignIn}
@@ -1766,20 +1810,23 @@ function AuthPageContent() {
                     </svg>
                     {t.auth.googleRegister}
                   </Button>
-                  <Button
-                    onClick={handleAppleSignIn}
-                    variant="outline"
-                    className="w-full h-12"
-                    disabled={loading}
-                  >
-                    <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
-                      <path
-                        fill="currentColor"
-                        d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
-                      />
-                    </svg>
-                    {t.auth.appleRegister}
-                  </Button>
+                  {(platformInfo.type === "web" ||
+                    platformInfo.type === "desktop-app") && (
+                    <Button
+                      onClick={handleAppleSignIn}
+                      variant="outline"
+                      className="w-full h-12"
+                      disabled={loading}
+                    >
+                      <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
+                        <path
+                          fill="currentColor"
+                          d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
+                        />
+                      </svg>
+                      {t.auth.appleRegister}
+                    </Button>
+                  )}
                 </div>
               ) : null}
 

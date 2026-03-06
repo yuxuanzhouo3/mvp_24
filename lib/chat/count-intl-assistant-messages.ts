@@ -3,6 +3,11 @@ import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messa
 
 const COUNT_ASSISTANT_MESSAGES_RPC = "count_gpt_assistant_messages_since";
 
+function isInvalidApiKey(error: any): boolean {
+  const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
+  return text.includes("invalid api key");
+}
+
 function isRpcMissing(error: any): boolean {
   const text = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
   return (
@@ -63,6 +68,13 @@ export async function countIntlAssistantMessagesSince(
     return parseRpcCount(data);
   }
 
+  if (isInvalidApiKey(error)) {
+    console.warn(
+      "[Usage] Supabase API key is invalid for usage RPC. Fallback to 0 usage."
+    );
+    return 0;
+  }
+
   if (!isRpcMissing(error)) {
     throw new Error(`Failed to count assistant messages: ${error.message}`);
   }
@@ -74,6 +86,12 @@ export async function countIntlAssistantMessagesSince(
     .eq("user_id", userId);
 
   if (sessionsError) {
+    if (isInvalidApiKey(sessionsError)) {
+      console.warn(
+        "[Usage] Supabase API key is invalid for sessions fallback query. Fallback to 0 usage."
+      );
+      return 0;
+    }
     throw new Error(`Failed to fetch sessions for usage count: ${sessionsError.message}`);
   }
 

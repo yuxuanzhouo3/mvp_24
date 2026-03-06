@@ -12,6 +12,7 @@ import {
 import { extendMembership } from "@/app/api/payment/lib/extend-membership";
 import { addAddonCredits } from "@/services/wallet";
 import { getAddonPackageById } from "@/constants/addon-packages";
+import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
 
 type ResolvedProductType = "ADDON" | "SUBSCRIPTION";
 
@@ -620,6 +621,26 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      const existingTransactionId = String(
+        existingCompletedPayment.transaction_id || transactionId || ""
+      ).trim();
+      if (existingTransactionId) {
+        await grantReferralFirstPaymentReward({
+          invitedUserId: user.id,
+          transactionId: existingTransactionId,
+          provider:
+            String(existingCompletedPayment.payment_method || "").trim() || null,
+          region: isChinaRegion() ? "CN" : "INTL",
+        }).catch((rewardError) => {
+          logWarn("Failed to grant referral first-payment reward for completed payment", {
+            operationId,
+            userId: user.id,
+            transactionId: existingTransactionId,
+            error: rewardError instanceof Error ? rewardError.message : String(rewardError),
+          });
+        });
+      }
+
       return NextResponse.json({
         success: true,
         message: "Payment already processed",
@@ -914,6 +935,35 @@ export async function GET(request: NextRequest) {
           },
           { status: 500 }
         );
+      }
+
+      const paymentProviderHint =
+        String(pendingPayment?.payment_method || "").trim() ||
+        (sessionId
+          ? "stripe"
+          : token
+          ? "paypal"
+          : wechatOutTradeNo
+          ? "wechat"
+          : tradeNo
+          ? "alipay"
+          : "payment-confirm");
+
+      if (transactionId) {
+        await grantReferralFirstPaymentReward({
+          invitedUserId: user.id,
+          transactionId,
+          provider: paymentProviderHint,
+          region: isChinaRegion() ? "CN" : "INTL",
+        }).catch((rewardError) => {
+          logWarn("Failed to grant referral first-payment reward", {
+            operationId,
+            userId: user.id,
+            transactionId,
+            provider: paymentProviderHint,
+            error: rewardError instanceof Error ? rewardError.message : String(rewardError),
+          });
+        });
       }
     }
 

@@ -13,6 +13,7 @@ import { getCloudBaseApp } from "@/lib/cloudbase/init";
 import { z } from "zod";
 import { signAccessToken } from "@/lib/security/jwt";
 import { setAuthCookies } from "@/lib/auth/cookies";
+import { bindReferralFromRequest } from "@/lib/market/referrals";
 
 // 微信登录请求验证schema
 const wechatLoginSchema = z.object({
@@ -129,6 +130,7 @@ export async function POST(request: NextRequest) {
     // 根据 openid 查找现有用户
     let userId: string | null = null;
     let existingUser: any = null;
+    let isNewUser = false;
 
     try {
       // 查询是否已有该微信用户
@@ -152,6 +154,7 @@ export async function POST(request: NextRequest) {
     // 如果是新用户，创建账户
     if (!userId) {
       logInfo("Creating new WeChat user", { openid });
+      isNewUser = true;
 
       const now = new Date().toISOString();
       const newUser = {
@@ -200,6 +203,23 @@ export async function POST(request: NextRequest) {
 
     if (!userId) {
       throw new Error("Failed to create or find user");
+    }
+
+    if (isNewUser) {
+      try {
+        await bindReferralFromRequest({
+          request,
+          invitedUserId: userId,
+          invitedEmail: `wechat_${openid}@local.wechat`,
+          region: "CN",
+        });
+      } catch (bindError) {
+        logInfo("WeChat signup referral bind failed", {
+          userId,
+          openid,
+          error: bindError instanceof Error ? bindError.message : String(bindError),
+        });
+      }
     }
 
     // ✅ 第8步：生成 JWT tokens

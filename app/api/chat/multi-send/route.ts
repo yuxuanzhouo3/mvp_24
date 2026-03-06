@@ -21,6 +21,7 @@ import { resolveIntlUserPlan } from "@/lib/user-plan";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { createMessageId } from "@/lib/chat/message-id";
 import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
+import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 
 export const runtime = "nodejs";
 
@@ -412,6 +413,19 @@ export async function POST(req: NextRequest) {
         .update({ updated_at: new Date().toISOString() })
         .eq("id", sessionId)
         .eq("user_id", userId);
+    }
+
+    const successfulResponses = result.responses.filter(
+      (item) => !item.error && String(item.content || "").trim().length > 0
+    );
+    if (successfulResponses.length > 0) {
+      await grantReferralFirstUseReward({
+        invitedUserId: userId,
+        toolId: successfulResponses[0]?.agentId || null,
+        region: isChinaRegion() ? "CN" : "INTL",
+      }).catch((rewardError) => {
+        console.warn("[Multi-Send API] Failed to grant referral first-use reward:", rewardError);
+      });
     }
 
     // 返回结果

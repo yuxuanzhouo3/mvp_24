@@ -22,6 +22,7 @@ import {
 } from "@/services/wallet-cloudbase";
 import { getAddonPackageById } from "@/constants/addon-packages";
 import { updateSubscriptionStatus, findUserBySubscriptionId } from "./subscription-db";
+import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
 import type { PaymentData, PaymentRecord } from "./types";
 
 /**
@@ -165,6 +166,31 @@ export async function handlePaymentSuccess(
 
       if (pendingPayment) {
         await updateUserWallet(userId, pendingPayment, provider);
+      }
+
+      const rewardTransactionId = String(
+        pendingPayment?.transaction_id ||
+          pendingPayment?.out_trade_no ||
+          paypalOrderId ||
+          subscriptionId ||
+          data?.id ||
+          ""
+      ).trim();
+
+      if (rewardTransactionId) {
+        await grantReferralFirstPaymentReward({
+          invitedUserId: userId,
+          transactionId: rewardTransactionId,
+          provider,
+          region: isChinaRegion() ? "CN" : "INTL",
+        }).catch((rewardError) => {
+          logWarn("Failed to grant referral first-payment reward in webhook success", {
+            provider,
+            userId,
+            transactionId: rewardTransactionId,
+            error: rewardError instanceof Error ? rewardError.message : String(rewardError),
+          });
+        });
       }
     }
 
