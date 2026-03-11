@@ -99,7 +99,7 @@ export function QuotaDisplay() {
     );
   }
 
-  const isConversationUnlimited = usage.limit >= 999999;
+  const isConversationUnlimited = usage.limit <= 0;
   const conversationPercentage = isConversationUnlimited
     ? 100
     : usage.limit > 0
@@ -167,7 +167,7 @@ export function QuotaDisplay() {
         {showConversationQuota && (
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px]">
-              <span>{language === "zh" ? "对话" : "Conversation"}</span>
+              <span>{language === "zh" ? "对话Token" : "Tokens"}</span>
               <span
                 className={`font-semibold ${
                   isConversationLow ? "text-orange-600" : "text-foreground"

@@ -66,6 +66,7 @@ const REQUIRED_COLLECTIONS = [
   "admin_users", // 添加管理员用户集合
   "advertisements", // 广告集合
   "app_releases", // 应用发布集合
+  "plan_quota_settings", // 套餐月额度配置
   "web_referral_links",
   "web_referral_clicks",
   "web_referral_relations",
@@ -180,6 +181,9 @@ async function initCloudBaseCollections() {
   console.log("   app_releases:");
   console.log("     - 普通索引: created_at (倒序)");
   console.log("     - 复合索引: (platform, variant)\n");
+
+  console.log("   plan_quota_settings:");
+  console.log("     - 唯一索引: plan_id\n");
 
   console.log("   web_referral_links:");
   console.log("     - 唯一索引: share_code");

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { adminLogout } from "@/actions/admin-auth";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Image,
   Package,
@@ -12,48 +13,35 @@ import {
   LayoutDashboard,
   BarChart3,
   UsersRound,
+  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AdminSidebarProps {
   username: string;
+  regionLabel: string;
+  providerLabel: string;
 }
 
 const menuItems = [
-  {
-    title: "数据仪表盘",
-    href: "/admin/dashboard",
-    icon: BarChart3,
-  },
-  {
-    title: "Market 裂变系统",
-    href: "/market",
-    icon: UsersRound,
-  },
-  {
-    title: "广告管理",
-    href: "/admin/ads",
-    icon: Image,
-  },
-  {
-    title: "发布版本",
-    href: "/admin/releases",
-    icon: Package,
-  },
-  {
-    title: "系统设置",
-    href: "/admin/settings",
-    icon: Settings,
-  },
+  { title: "数据仪表盘", href: "/admin/dashboard", icon: BarChart3 },
+  { title: "Market 裂变系统", href: "/market", icon: UsersRound },
+  { title: "套餐限额", href: "/admin/plan-quotas", icon: SlidersHorizontal },
+  { title: "广告管理", href: "/admin/ads", icon: Image },
+  { title: "发布版本", href: "/admin/releases", icon: Package },
+  { title: "系统设置", href: "/admin/settings", icon: Settings },
 ];
 
-export default function AdminSidebar({ username }: AdminSidebarProps) {
+export default function AdminSidebar({
+  username,
+  regionLabel,
+  providerLabel,
+}: AdminSidebarProps) {
   const pathname = usePathname();
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 flex flex-col">
-      {/* Logo */}
-      <div className="p-6 border-b border-gray-200">
+      <div className="p-6 border-b border-gray-200 space-y-3">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-lg bg-primary/10">
             <LayoutDashboard className="w-6 h-6 text-primary" />
@@ -63,9 +51,12 @@ export default function AdminSidebar({ username }: AdminSidebarProps) {
             <p className="text-xs text-gray-500">MultiGPT Admin</p>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <Badge>{regionLabel}</Badge>
+          <Badge variant="outline">{providerLabel}</Badge>
+        </div>
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1">
         {menuItems.map((item) => {
           const isActive = pathname === item.href;
@@ -87,7 +78,6 @@ export default function AdminSidebar({ username }: AdminSidebarProps) {
         })}
       </nav>
 
-      {/* User Info & Logout */}
       <div className="p-4 border-t border-gray-200">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
@@ -100,11 +90,7 @@ export default function AdminSidebar({ username }: AdminSidebarProps) {
           </div>
         </div>
         <form action={adminLogout}>
-          <Button
-            type="submit"
-            variant="outline"
-            className="w-full justify-start"
-          >
+          <Button type="submit" variant="outline" className="w-full justify-start">
             <LogOut className="w-4 h-4 mr-2" />
             退出登录
           </Button>

@@ -4,6 +4,7 @@
  */
 
 import { getDatabase } from "@/lib/cloudbase-service";
+import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
 import {
   getBasicDailyLimit,
   getProDailyLimit,
@@ -113,33 +114,16 @@ function clampAnchorDay(
 // 钱包操作
 // =============================================================================
 
-export function getPlanMediaLimits(planLower: string): {
+export async function getPlanMediaLimits(planLower: string): Promise<{
   imageLimit: number;
   videoLimit: number;
-} {
-  const plan = (planLower || "").toLowerCase();
-  switch (plan) {
-    case "basic":
-      return {
-        imageLimit: getBasicMonthlyPhotoLimit(),
-        videoLimit: getBasicMonthlyVideoAudioLimit(),
-      };
-    case "pro":
-      return {
-        imageLimit: getProMonthlyPhotoLimit(),
-        videoLimit: getProMonthlyVideoAudioLimit(),
-      };
-    case "enterprise":
-      return {
-        imageLimit: getEnterpriseMonthlyPhotoLimit(),
-        videoLimit: getEnterpriseMonthlyVideoAudioLimit(),
-      };
-    default:
-      return {
-        imageLimit: getFreeMonthlyPhotoLimit(),
-        videoLimit: getFreeMonthlyVideoAudioLimit(),
-      };
-  }
+}> {
+  const planId = coercePlanId(planLower);
+  const quota = await getPlanQuotaSettings(planId);
+  return {
+    imageLimit: quota.imageLimit,
+    videoLimit: quota.videoAudioLimit,
+  };
 }
 
 export function getPlanDailyLimit(planLower: string): number {
@@ -253,7 +237,7 @@ export async function seedCloudBaseWalletForPlan(
     }
 
     const isFreePlan = effectivePlan === "free";
-    const baseLimits = getPlanMediaLimits(effectivePlan);
+    const baseLimits = await getPlanMediaLimits(effectivePlan);
 
     // 新钱包初始化
     if (!wallet) {

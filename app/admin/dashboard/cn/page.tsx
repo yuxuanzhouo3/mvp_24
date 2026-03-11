@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import StatsCard from "../region/StatsCard";
@@ -20,6 +21,10 @@ interface StatsData {
 }
 
 export default function CNDashboard() {
+  const router = useRouter();
+  const currentRegion =
+    process.env.NEXT_PUBLIC_DEPLOYMENT_REGION === "INTL" ? "INTL" : "CN";
+
   const [dateRange, setDateRange] = useState({
     startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       .toISOString()
@@ -56,6 +61,11 @@ export default function CNDashboard() {
 
   // 获取统计数据
   useEffect(() => {
+    if (currentRegion !== "CN") {
+      router.replace("/admin/dashboard");
+      return;
+    }
+
     const fetchStats = async () => {
       setLoading(true);
       try {
@@ -83,7 +93,7 @@ export default function CNDashboard() {
     };
 
     fetchStats();
-  }, [dateRange]);
+  }, [currentRegion, dateRange, router]);
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">

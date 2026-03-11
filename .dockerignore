@@ -1,0 +1,39 @@
+# Dependencies and package manager artifacts
+node_modules
+.pnpm-store
+.npm
+.yarn
+
+# Build and cache outputs
+.next
+dist
+out
+coverage
+.nyc_output
+.turbo
+.cache
+
+# Logs and local runtime files
+*.log
+logs
+tmp
+
+# VCS and editor files
+.git
+.gitignore
+.vscode
+.idea
+
+# Env and local config
+.env
+.env.*
+!.env.example
+
+# OS artifacts
+.DS_Store
+
+# Tests and docs not required for production image build context
+tests
+docs
+uselessdoc
+IMPLEMENTATION_REPORT.txt

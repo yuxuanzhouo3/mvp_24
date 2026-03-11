@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { IS_DOMESTIC_VERSION } from "@/config";
-import { CloudBaseConnector, isCloudBaseConfigured } from "@/lib/admin/cloudbase-connector";
+import { CloudBaseConnector } from "@/lib/admin/cloudbase-connector";
+import { getCurrentAdminDataProvider } from "@/lib/admin/region";
 
 export const runtime = "nodejs";
 
@@ -9,22 +9,17 @@ export async function GET() {
   try {
     let data: any[] = [];
 
-    if (IS_DOMESTIC_VERSION && isCloudBaseConfigured()) {
-      // 国内版从 CloudBase 读取
+    if (getCurrentAdminDataProvider() === "cloudbase") {
       const connector = new CloudBaseConnector();
       await connector.initialize();
       const db = connector.getClient();
-
-      const result = await db.collection("app_releases")
-        .where({
-          is_active: true
-        })
+      const result = await db
+        .collection("app_releases")
+        .where({ is_active: true })
         .orderBy("created_at", "desc")
         .get();
-
-      data = result.data || [];
+      data = result?.data || [];
     } else {
-      // 国际版从 Supabase 读取
       const { data: supaData, error } = await supabaseAdmin
         .from("app_releases")
         .select("platform, variant, version, cloudbase_file_id, download_filename, file_url, file_size")
@@ -59,14 +54,11 @@ export async function GET() {
           }
           return;
         }
-
         if (!fallbackMacRelease) {
           fallbackMacRelease = release;
         }
-
         return;
       }
-
       if (!activeMap[release.platform]) {
         activeMap[release.platform] = release;
       }
@@ -77,8 +69,8 @@ export async function GET() {
     }
 
     return NextResponse.json({ success: true, releases: Object.values(activeMap) });
-  } catch (err) {
-    console.error("[Active Releases API]", err);
+  } catch (error) {
+    console.error("[Active Releases API]", error);
     return NextResponse.json({ success: false, error: "获取版本信息失败" }, { status: 500 });
   }
 }

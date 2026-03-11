@@ -378,13 +378,13 @@ function buildEnhancedMessage(
   ].join("\n");
 }
 
-function buildQuotaSnapshot(params: {
+async function buildQuotaSnapshot(params: {
   planLower: string;
   wallet: Awaited<ReturnType<typeof getWalletStats>>;
 }) {
   const { planLower, wallet } = params;
   if (!wallet) return undefined;
-  const mediaLimits = getPlanMediaLimits(planLower);
+  const mediaLimits = await getPlanMediaLimits(planLower);
   const imageUsed = Math.max(0, mediaLimits.imageLimit - wallet.monthly.image);
   const videoUsed = Math.max(0, mediaLimits.videoLimit - wallet.monthly.video);
 
@@ -526,7 +526,7 @@ export async function POST(req: NextRequest) {
         preprocessResult.model
       ),
       summary: preprocessResult.summary,
-      quota: buildQuotaSnapshot({ planLower, wallet }),
+      quota: await buildQuotaSnapshot({ planLower, wallet }),
     };
 
     return Response.json({

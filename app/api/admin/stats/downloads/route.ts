@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { getAdminSession } from "@/lib/admin/session";
+import { resolveAdminRegionAccess } from "@/lib/admin/region";
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,7 +17,15 @@ export async function GET(req: NextRequest) {
 
     // 获取查询参数
     const searchParams = req.nextUrl.searchParams;
-    const region = searchParams.get("region") || "all";
+    const requestedRegion = searchParams.get("region");
+    const regionAccess = resolveAdminRegionAccess(requestedRegion);
+    if (!regionAccess.ok) {
+      return NextResponse.json(
+        { success: false, error: regionAccess.error },
+        { status: 403 }
+      );
+    }
+    const region = regionAccess.region;
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
 
@@ -30,7 +39,7 @@ export async function GET(req: NextRequest) {
     };
 
     // 查询版本发布信息（Supabase）- INTL 版本
-    if (region === "all" || region === "INTL") {
+    if (region === "INTL") {
       try {
         console.log("[Stats API] 开始查询 INTL 下载数据");
         
@@ -81,7 +90,7 @@ export async function GET(req: NextRequest) {
 
     // 查询版本发布信息（CloudBase）- CN 版本
     // 注意：CloudBase 中没有 app_releases 集合，该功能仅在 Supabase (INTL) 中可用
-    if (region === "all" || region === "CN") {
+    if (region === "CN") {
       result.cn = {
         totalVersions: 0,
         activeVersions: 0,
@@ -93,26 +102,7 @@ export async function GET(req: NextRequest) {
     }
 
     // 合计数据
-    if (region === "all") {
-      const intlPlatforms = result.intl.platformDistribution || {};
-      const cnPlatforms = result.cn.platformDistribution || {};
-      
-      const totalPlatforms: Record<string, number> = {};
-      Object.keys({ ...intlPlatforms, ...cnPlatforms }).forEach((key) => {
-        totalPlatforms[key] = (intlPlatforms[key] || 0) + (cnPlatforms[key] || 0);
-      });
-
-      result.data = {
-        totalVersions:
-          (result.intl.totalVersions || 0) + (result.cn.totalVersions || 0),
-        activeVersions:
-          (result.intl.activeVersions || 0) + (result.cn.activeVersions || 0),
-        mandatoryUpdates:
-          (result.intl.mandatoryUpdates || 0) + (result.cn.mandatoryUpdates || 0),
-        platformDistribution: totalPlatforms,
-        updateTime: now.toISOString(),
-      };
-    } else if (region === "INTL") {
+    if (region === "INTL") {
       result.data = result.intl;
     } else if (region === "CN") {
       result.data = result.cn;

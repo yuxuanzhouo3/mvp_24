@@ -196,40 +196,74 @@ export class OpenAIProvider extends BaseAIProvider {
         stop: options?.stop,
         user: options?.user,
         stream: true,
+        stream_options: { include_usage: true },
       });
 
       let totalContent = "";
+      let promptTokens = 0;
+      let completionTokens = 0;
+      let usageTotalTokens = 0;
+      let finishReason: string | null = null;
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
         const content = delta?.content || "";
-        const finishReason = chunk.choices[0]?.finish_reason;
+        const chunkFinishReason = chunk.choices[0]?.finish_reason;
+        const chunkPromptTokens = chunk.usage?.prompt_tokens;
+        const chunkCompletionTokens = chunk.usage?.completion_tokens;
+        const chunkUsageTotalTokens = chunk.usage?.total_tokens;
+
+        if (chunkFinishReason !== null && chunkFinishReason !== undefined) {
+          finishReason = chunkFinishReason;
+        }
+        if (typeof chunkPromptTokens === "number" && chunkPromptTokens >= 0) {
+          promptTokens = chunkPromptTokens;
+        }
+        if (
+          typeof chunkCompletionTokens === "number" &&
+          chunkCompletionTokens >= 0
+        ) {
+          completionTokens = chunkCompletionTokens;
+        }
+        if (
+          typeof chunkUsageTotalTokens === "number" &&
+          chunkUsageTotalTokens > 0
+        ) {
+          usageTotalTokens = chunkUsageTotalTokens;
+        }
 
         totalContent += content;
 
-        yield {
-          content,
-          done: finishReason !== null,
-          finish_reason: finishReason,
-        };
-
-        // 如果流结束，计算并返回token数
-        if (finishReason) {
-          const tokens = this.countTokens([
-            ...messages,
-            { role: "assistant", content: totalContent },
-          ]);
-
+        if (content) {
           yield {
-            content: "",
-            done: true,
-            tokens,
-            finish_reason: finishReason,
+            content,
+            done: false,
+            finish_reason: finishReason ?? chunkFinishReason,
           };
-
-          this.logRequest(model, tokens);
         }
       }
+
+      // 流结束时统一产出 done，确保能拿到最后 usage chunk
+      const estimatedTokens = this.countTokens([
+        ...messages,
+        { role: "assistant", content: totalContent },
+      ]);
+      const tokens = usageTotalTokens > 0 ? usageTotalTokens : estimatedTokens;
+
+      yield {
+        content: "",
+        done: true,
+        tokens,
+        usage: {
+          prompt: promptTokens || undefined,
+          completion: completionTokens || undefined,
+          total: tokens,
+          source: usageTotalTokens > 0 ? "provider" : "estimated",
+        },
+        finish_reason: finishReason || "stop",
+      };
+
+      this.logRequest(model, tokens);
     } catch (error) {
       throw this.handleError(error);
     }

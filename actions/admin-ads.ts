@@ -1,20 +1,23 @@
 "use server";
 
-/**
- * 广告管理 Server Actions
- * 实现双端同步：Supabase (国际版) + CloudBase (国内版)
- */
-
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { CloudBaseConnector, isCloudBaseConfigured } from "@/lib/admin/cloudbase-connector";
-import { IS_DOMESTIC_VERSION } from "@/config";
-import { getAdminSession } from "@/lib/admin/session";
 import { revalidatePath } from "next/cache";
+import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  CloudBaseConnector,
+  isCloudBaseConfigured,
+} from "@/lib/admin/cloudbase-connector";
+import { getAdminSession } from "@/lib/admin/session";
+import { getCurrentAdminDataProvider } from "@/lib/admin/region";
 
-// 广告位置类型
-export type AdPosition = "top" | "bottom" | "left" | "right" | "sidebar" | "bottom-left" | "bottom-right";
+export type AdPosition =
+  | "top"
+  | "bottom"
+  | "left"
+  | "right"
+  | "sidebar"
+  | "bottom-left"
+  | "bottom-right";
 
-// 广告类型定义
 export interface Advertisement {
   id: string;
   title: string;
@@ -27,6 +30,7 @@ export interface Advertisement {
   created_at: string;
   source: "supabase" | "cloudbase" | "both";
   file_size?: number;
+  cloudbase_file_id?: string | null;
 }
 
 export interface CreateAdResult {
@@ -68,9 +72,9 @@ export interface ListFilesResult {
   cloudbaseFiles?: StorageFile[];
 }
 
-/**
- * 验证管理员权限
- */
+const COLLECTION = "advertisements";
+const STORAGE_BUCKET = "ads";
+
 async function requireAdmin() {
   const session = await getAdminSession();
   if (!session) {
@@ -79,10 +83,18 @@ async function requireAdmin() {
   return session;
 }
 
-/**
- * 获取 CloudBase 客户端
- */
+function shouldUseCloudBaseBackend(): boolean {
+  return getCurrentAdminDataProvider() === "cloudbase";
+}
+
+function getCurrentSource(): "supabase" | "cloudbase" {
+  return shouldUseCloudBaseBackend() ? "cloudbase" : "supabase";
+}
+
 async function getCloudBase() {
+  if (!isCloudBaseConfigured()) {
+    throw new Error("CloudBase 未配置，当前国内版后台无法访问数据");
+  }
   const connector = new CloudBaseConnector();
   await connector.initialize();
   return {
@@ -91,20 +103,82 @@ async function getCloudBase() {
   };
 }
 
-/**
- * 上传文件到 Supabase Storage
- */
-async function uploadToSupabase(
-  file: File,
-  fileName: string
-): Promise<string | null> {
+function normalizeAd(record: any): Advertisement {
+  return {
+    id: record?.id || record?._id || record?._ID || record?.docId,
+    title: record?.title || "",
+    position: record?.position,
+    media_type: record?.media_type,
+    media_url: record?.media_url || "",
+    target_url: record?.target_url || null,
+    is_active: Boolean(record?.is_active),
+    priority: Number(record?.priority || 0),
+    created_at: record?.created_at || new Date().toISOString(),
+    source: (record?.source || getCurrentSource()) as Advertisement["source"],
+    file_size:
+      typeof record?.file_size === "number" ? record.file_size : undefined,
+    cloudbase_file_id: record?.cloudbase_file_id || null,
+  };
+}
+
+async function findCloudBaseAd(id: string): Promise<any | null> {
+  const { db } = await getCloudBase();
+  let result = await db.collection(COLLECTION).where({ _id: id }).limit(1).get();
+  if (result?.data?.length) return result.data[0];
+  result = await db.collection(COLLECTION).where({ id }).limit(1).get();
+  return result?.data?.[0] || null;
+}
+
+async function updateCloudBaseAd(id: string, data: Record<string, unknown>) {
+  const { db } = await getCloudBase();
+  try {
+    await db.collection(COLLECTION).doc(id).update(data);
+    return;
+  } catch {}
+
+  let result = await db.collection(COLLECTION).where({ _id: id }).limit(1).get();
+  if (result?.data?.length) {
+    await db.collection(COLLECTION).doc(result.data[0]._id).update(data);
+    return;
+  }
+
+  result = await db.collection(COLLECTION).where({ id }).limit(1).get();
+  if (result?.data?.length) {
+    await db.collection(COLLECTION).doc(result.data[0]._id).update(data);
+    return;
+  }
+
+  throw new Error("广告不存在");
+}
+
+async function removeCloudBaseAd(id: string) {
+  const { db } = await getCloudBase();
+  try {
+    await db.collection(COLLECTION).doc(id).remove();
+    return;
+  } catch {}
+
+  let result = await db.collection(COLLECTION).where({ _id: id }).limit(1).get();
+  if (result?.data?.length) {
+    await db.collection(COLLECTION).doc(result.data[0]._id).remove();
+    return;
+  }
+
+  result = await db.collection(COLLECTION).where({ id }).limit(1).get();
+  if (result?.data?.length) {
+    await db.collection(COLLECTION).doc(result.data[0]._id).remove();
+    return;
+  }
+
+  throw new Error("广告不存在");
+}
+
+async function uploadToSupabase(file: File, fileName: string): Promise<string | null> {
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const filePath = `${fileName}`;
-
     const { error } = await supabaseAdmin.storage
-      .from("ads")
-      .upload(filePath, buffer, {
+      .from(STORAGE_BUCKET)
+      .upload(fileName, buffer, {
         contentType: file.type,
         upsert: true,
       });
@@ -114,129 +188,53 @@ async function uploadToSupabase(
       return null;
     }
 
-    const { data: urlData } = supabaseAdmin.storage
-      .from("ads")
-      .getPublicUrl(filePath);
-
-    return urlData.publicUrl;
-  } catch (err) {
-    console.error("Supabase upload exception:", err);
+    const { data } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(fileName);
+    return data.publicUrl;
+  } catch (error) {
+    console.error("Supabase upload exception:", error);
     return null;
   }
 }
 
-/**
- * 上传文件到 CloudBase Storage
- */
-async function uploadToCloudBase(
-  file: File,
-  fileName: string
-): Promise<string | null> {
-  if (!isCloudBaseConfigured()) {
-    console.log("CloudBase not configured, skipping upload");
-    return null;
-  }
-
+async function uploadToCloudBase(file: File, fileName: string): Promise<string | null> {
   try {
     const { app } = await getCloudBase();
     const buffer = Buffer.from(await file.arrayBuffer());
-    const cloudPath = `ads/${fileName}`;
-
-    const uploadResult = await app.uploadFile({
-      cloudPath,
+    const result = await app.uploadFile({
+      cloudPath: `${STORAGE_BUCKET}/${fileName}`,
       fileContent: buffer,
     });
-
-    if (!uploadResult.fileID) {
-      console.error("CloudBase upload failed: no fileID returned");
-      return null;
-    }
-
-    return uploadResult.fileID;
-  } catch (err) {
-    console.error("CloudBase upload exception:", err);
+    return result?.fileID || null;
+  } catch (error) {
+    console.error("CloudBase upload exception:", error);
     return null;
   }
 }
 
-/**
- * 创建广告（使用客户端预上传的文件URL）
- * 文件已在客户端直接上传到存储，绕过 Server Action body size 限制
- */
-export async function createAdvertisementWithUrl(
-  data: {
-    title: string;
-    position: AdPosition;
-    mediaType: "image" | "video";
-    mediaUrl: string;
-    targetUrl?: string;
-    priority?: number;
-    isActive: boolean;
-    fileSize: number;
-  }
-): Promise<CreateAdResult> {
+export async function createAdvertisementWithUrl(data: {
+  title: string;
+  position: AdPosition;
+  mediaType: "image" | "video";
+  mediaUrl: string;
+  targetUrl?: string;
+  priority?: number;
+  isActive: boolean;
+  fileSize: number;
+}): Promise<CreateAdResult> {
   try {
     await requireAdmin();
 
     const { title, position, mediaType, mediaUrl, targetUrl, priority = 0, isActive, fileSize } = data;
-
     if (!title || !position || !mediaType || !mediaUrl) {
       return { success: false, error: "请填写必要字段" };
     }
 
-    // 根据部署版本决定主要目标
-    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
+    const source = getCurrentSource();
+    const now = new Date().toISOString();
 
-    // 确定数据来源
-    let source: "supabase" | "cloudbase" | "both" = primaryTarget as "supabase" | "cloudbase";
-    if (primaryTarget === "supabase" && isCloudBaseConfigured()) {
-      source = "both";
-    } else if (primaryTarget === "cloudbase" && !IS_DOMESTIC_VERSION) {
-      source = "both";
-    }
-
-    // 插入数据库
-    let ad: any;
-
-    if (primaryTarget === "supabase") {
-      const { data: supaData, error } = await supabaseAdmin
-        .from("advertisements")
-        .insert({
-          title,
-          position,
-          media_type: mediaType,
-          media_url: mediaUrl,
-          target_url: targetUrl || null,
-          is_active: isActive,
-          priority,
-          file_size: fileSize,
-          source,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error("Insert advertisement error:", error);
-        return { success: false, error: "创建广告失败" };
-      }
-      ad = supaData;
-
-      // 如果配置了 CloudBase，同步到 CloudBase 数据库
-      if (isCloudBaseConfigured()) {
-        try {
-          const { db } = await getCloudBase();
-          await db.collection("advertisements").add({
-            ...ad,
-            cloudbase_file_id: mediaUrl.startsWith("cloud://") ? mediaUrl : null,
-          });
-        } catch (err) {
-          console.error("CloudBase sync error:", err);
-        }
-      }
-    } else {
-      // CloudBase 为主
+    if (shouldUseCloudBaseBackend()) {
       const { db } = await getCloudBase();
-      const result = await db.collection("advertisements").add({
+      const payload = {
         title,
         position,
         media_type: mediaType,
@@ -247,157 +245,21 @@ export async function createAdvertisementWithUrl(
         file_size: fileSize,
         source,
         cloudbase_file_id: mediaUrl.startsWith("cloud://") ? mediaUrl : null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-      ad = {
-        id: result.id,
-        ...result.data,
+        created_at: now,
+        updated_at: now,
       };
+      const result = await db.collection(COLLECTION).add(payload);
+      const ad = normalizeAd({ ...payload, _id: result.id });
 
-      // 如果不是国内版，也同步到 Supabase
-      if (!IS_DOMESTIC_VERSION) {
-        try {
-          const { data: supaData, error } = await supabaseAdmin
-            .from("advertisements")
-            .insert({
-              title,
-              position,
-              media_type: mediaType,
-              media_url: mediaUrl,
-              target_url: targetUrl || null,
-              is_active: isActive,
-              priority,
-              file_size: fileSize,
-              source,
-            })
-            .select()
-            .single();
-
-          if (error) {
-            console.error("Supabase sync error:", error);
-          }
-        } catch (err) {
-          console.error("Supabase sync error:", err);
-        }
-      }
+      revalidatePath("/admin/ads");
+      revalidatePath("/api/advertisements");
+      revalidatePath("/");
+      return { success: true, data: ad };
     }
 
-    // 清除缓存
-    revalidatePath("/admin/ads");
-    revalidatePath("/api/advertisements");
-    revalidatePath("/");
-    return { success: true, data: ad };
-  } catch (err) {
-    console.error("Create advertisement error:", err);
-    return { success: false, error: "创建广告失败" };
-  }
-}
-
-/**
- * 创建广告
- */
-export async function createAdvertisement(
-  formData: FormData
-): Promise<CreateAdResult> {
-  try {
-    await requireAdmin();
-
-    const title = formData.get("title") as string;
-    const position = formData.get("position") as AdPosition;
-    const mediaType = formData.get("mediaType") as "image" | "video";
-    const targetUrl = formData.get("targetUrl") as string;
-    const priority = parseInt(formData.get("priority") as string) || 0;
-    const isActive = formData.get("isActive") === "true";
-    const file = formData.get("file") as File;
-
-    if (!title || !position || !mediaType) {
-      return { success: false, error: "请填写必要字段" };
-    }
-
-    if (!file || file.size === 0) {
-      return { success: false, error: "请上传媒体文件" };
-    }
-
-    // 生成唯一文件名
-    const ext = file.name.split(".").pop();
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-    let supabaseUrl: string | null = null;
-    let cloudbaseFileId: string | null = null;
-
-    // 根据部署版本决定上传目标
-    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
-
-    // 上传到主要目标
-    if (primaryTarget === "supabase") {
-      supabaseUrl = await uploadToSupabase(file, fileName);
-    } else if (primaryTarget === "cloudbase" && isCloudBaseConfigured()) {
-      cloudbaseFileId = await uploadToCloudBase(file, fileName);
-    }
-
-    // 如果主要目标失败，尝试另一个
-    if (!supabaseUrl && !cloudbaseFileId) {
-      if (primaryTarget === "supabase" && isCloudBaseConfigured()) {
-        cloudbaseFileId = await uploadToCloudBase(file, fileName);
-      } else if (primaryTarget === "cloudbase") {
-        supabaseUrl = await uploadToSupabase(file, fileName);
-      }
-    }
-
-    const mediaUrl = supabaseUrl || cloudbaseFileId;
-    if (!mediaUrl) {
-      return { success: false, error: "文件上传失败" };
-    }
-
-    // 确定数据来源
-    let source: "supabase" | "cloudbase" | "both" = primaryTarget as "supabase" | "cloudbase";
-    if (supabaseUrl && cloudbaseFileId) {
-      source = "both";
-    }
-
-    // 插入数据库
-    let data: any;
-
-    if (primaryTarget === "supabase") {
-      const { data: supaData, error } = await supabaseAdmin
-        .from("advertisements")
-        .insert({
-          title,
-          position,
-          media_type: mediaType,
-          media_url: mediaUrl,
-          target_url: targetUrl || null,
-          is_active: isActive,
-          priority,
-          file_size: file.size,
-          source,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error("Insert advertisement error:", error);
-        return { success: false, error: "创建广告失败" };
-      }
-      data = supaData;
-
-      // 如果配置了 CloudBase，同步到 CloudBase 数据库
-      if (isCloudBaseConfigured()) {
-        try {
-          const { db } = await getCloudBase();
-          await db.collection("advertisements").add({
-            ...data,
-            cloudbase_file_id: cloudbaseFileId,
-          });
-        } catch (err) {
-          console.error("CloudBase sync error:", err);
-        }
-      }
-    } else {
-      // CloudBase 为主
-      const { db } = await getCloudBase();
-      const result = await db.collection("advertisements").add({
+    const { data: ad, error } = await supabaseAdmin
+      .from(COLLECTION)
+      .insert({
         title,
         position,
         media_type: mediaType,
@@ -405,102 +267,102 @@ export async function createAdvertisement(
         target_url: targetUrl || null,
         is_active: isActive,
         priority,
-        file_size: file.size,
+        file_size: fileSize,
         source,
-        cloudbase_file_id: cloudbaseFileId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-      data = {
-        id: result.id,
-        ...result.data,
-      };
+      })
+      .select()
+      .single();
 
-      // 如果不是国内版，也同步到 Supabase
-      if (!IS_DOMESTIC_VERSION) {
-        try {
-          const { data: supaData, error } = await supabaseAdmin
-            .from("advertisements")
-            .insert({
-              title,
-              position,
-              media_type: mediaType,
-              media_url: mediaUrl,
-              target_url: targetUrl || null,
-              is_active: isActive,
-              priority,
-              file_size: file.size,
-              source,
-            })
-            .select()
-            .single();
-
-          if (error) {
-            console.error("Supabase sync error:", error);
-          }
-        } catch (err) {
-          console.error("Supabase sync error:", err);
-        }
-      }
+    if (error || !ad) {
+      console.error("Create advertisement error:", error);
+      return { success: false, error: "创建广告失败" };
     }
 
-    // 清除缓存
     revalidatePath("/admin/ads");
     revalidatePath("/api/advertisements");
     revalidatePath("/");
-    return { success: true, data };
-  } catch (err) {
-    console.error("Create advertisement error:", err);
+    return { success: true, data: normalizeAd(ad) };
+  } catch (error) {
+    console.error("Create advertisement error:", error);
     return { success: false, error: "创建广告失败" };
   }
 }
 
-/**
- * 获取广告列表
- */
+export async function createAdvertisement(formData: FormData): Promise<CreateAdResult> {
+  try {
+    await requireAdmin();
+
+    const title = String(formData.get("title") || "");
+    const position = formData.get("position") as AdPosition;
+    const mediaType = formData.get("mediaType") as "image" | "video";
+    const targetUrl = String(formData.get("targetUrl") || "");
+    const priority = parseInt(String(formData.get("priority") || "0"), 10) || 0;
+    const isActive = formData.get("isActive") === "true";
+    const file = formData.get("file") as File;
+
+    if (!title || !position || !mediaType) {
+      return { success: false, error: "请填写必要字段" };
+    }
+    if (!file || file.size === 0) {
+      return { success: false, error: "请上传媒体文件" };
+    }
+
+    const ext = file.name.split(".").pop() || "bin";
+    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const mediaUrl = shouldUseCloudBaseBackend()
+      ? await uploadToCloudBase(file, fileName)
+      : await uploadToSupabase(file, fileName);
+
+    if (!mediaUrl) {
+      return { success: false, error: "文件上传失败" };
+    }
+
+    return createAdvertisementWithUrl({
+      title,
+      position,
+      mediaType,
+      mediaUrl,
+      targetUrl: targetUrl || undefined,
+      priority,
+      isActive,
+      fileSize: file.size,
+    });
+  } catch (error) {
+    console.error("Create advertisement error:", error);
+    return { success: false, error: "创建广告失败" };
+  }
+}
+
 export async function listAdvertisements(): Promise<ListAdsResult> {
   try {
     await requireAdmin();
 
-    let data: any[] = [];
-    const using = IS_DOMESTIC_VERSION && isCloudBaseConfigured() ? "CloudBase" : "Supabase";
-    console.log(`[listAdvertisements] Using ${using} database (IS_DOMESTIC_VERSION=${IS_DOMESTIC_VERSION}, isCloudBaseConfigured=${isCloudBaseConfigured()})`);
-
-    if (IS_DOMESTIC_VERSION && isCloudBaseConfigured()) {
-      // 国内版从 CloudBase 读取
+    if (shouldUseCloudBaseBackend()) {
       const { db } = await getCloudBase();
-      const result = await db.collection("advertisements")
-        .orderBy("created_at", "desc")
-        .get();
-      data = (result.data || []).map((ad: any) => ({
-        ...ad,
-        id: ad.id || ad._id || ad._ID || ad.docId,
-      }));
-      console.log(`[listAdvertisements] CloudBase returned ${data.length} ads`);
-    } else {
-      // 国际版从 Supabase 读取
-      const { data: supaData, error } = await supabaseAdmin
-        .from("advertisements")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) {
-        console.error("List advertisements error:", error);
-        return { success: false, error: "获取广告列表失败" };
-      }
-      data = supaData || [];
+      const result = await db.collection(COLLECTION).orderBy("created_at", "desc").get();
+      return {
+        success: true,
+        data: (result?.data || []).map((item: any) => normalizeAd(item)),
+      };
     }
 
-    return { success: true, data };
-  } catch (err) {
-    console.error("List advertisements error:", err);
+    const { data, error } = await supabaseAdmin
+      .from(COLLECTION)
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("List advertisements error:", error);
+      return { success: false, error: "获取广告列表失败" };
+    }
+
+    return { success: true, data: (data || []).map((item: any) => normalizeAd(item)) };
+  } catch (error) {
+    console.error("List advertisements error:", error);
     return { success: false, error: "获取广告列表失败" };
   }
 }
 
-/**
- * 更新广告
- */
 export async function updateAdvertisement(
   id: string,
   formData: FormData
@@ -508,88 +370,34 @@ export async function updateAdvertisement(
   try {
     await requireAdmin();
 
-    const title = formData.get("title") as string;
-    const targetUrl = formData.get("targetUrl") as string;
-    const priority = parseInt(formData.get("priority") as string) || 0;
-    const isActive = formData.get("isActive") === "true";
-
     const updateData = {
-      title,
-      target_url: targetUrl || null,
-      priority,
-      is_active: isActive,
+      title: String(formData.get("title") || ""),
+      target_url: String(formData.get("targetUrl") || "") || null,
+      priority: parseInt(String(formData.get("priority") || "0"), 10) || 0,
+      is_active: formData.get("isActive") === "true",
+      updated_at: new Date().toISOString(),
     };
 
-    // 根据部署版本决定主要目标
-    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
-
-    if (primaryTarget === "cloudbase" && isCloudBaseConfigured()) {
-      // 国内版主要更新 CloudBase
-      const { db } = await getCloudBase();
-      try {
-        await db.collection("advertisements").doc(id).update(updateData);
-      } catch (err) {
-        // 如果 doc(id) 失败，尝试用 where 查询
-        console.warn("Doc update failed, trying where query:", err);
-        await db.collection("advertisements")
-          .where({ _id: id })
-          .update(updateData);
-      }
-
-      // 同步到 Supabase
-      try {
-        await supabaseAdmin
-          .from("advertisements")
-          .update(updateData)
-          .eq("id", id);
-      } catch (err) {
-        console.error("Supabase sync error:", err);
-      }
+    if (shouldUseCloudBaseBackend()) {
+      await updateCloudBaseAd(id, updateData);
     } else {
-      // 国际版主要更新 Supabase
-      const { error } = await supabaseAdmin
-        .from("advertisements")
-        .update(updateData)
-        .eq("id", id);
-
+      const { error } = await supabaseAdmin.from(COLLECTION).update(updateData).eq("id", id);
       if (error) {
         console.error("Update advertisement error:", error);
         return { success: false, error: "更新广告失败" };
       }
-
-      // 同步到 CloudBase
-      if (isCloudBaseConfigured()) {
-        try {
-          const { db } = await getCloudBase();
-          try {
-            await db.collection("advertisements").doc(id).update(updateData);
-          } catch (err) {
-            // 如果 doc(id) 失败，尝试用 where 查询
-            console.warn("Doc update failed, trying where query:", err);
-            await db.collection("advertisements")
-              .where({ _id: id })
-              .update(updateData);
-          }
-        } catch (err) {
-          console.error("CloudBase sync error:", err);
-        }
-      }
     }
 
-    // 清除缓存
     revalidatePath("/admin/ads");
     revalidatePath("/api/advertisements");
     revalidatePath("/");
     return { success: true };
-  } catch (err) {
-    console.error("Update advertisement error:", err);
+  } catch (error) {
+    console.error("Update advertisement error:", error);
     return { success: false, error: "更新广告失败" };
   }
 }
 
-/**
- * 切换广告状态
- */
 export async function toggleAdvertisementStatus(
   id: string,
   isActive: boolean
@@ -597,238 +405,136 @@ export async function toggleAdvertisementStatus(
   try {
     await requireAdmin();
 
-    console.log(`[toggleAdvertisementStatus] Toggling ad ${id} to ${isActive}`);
-
-    // 根据部署版本决定主要目标
-    const primaryTarget = IS_DOMESTIC_VERSION ? "cloudbase" : "supabase";
-
-    if (primaryTarget === "cloudbase" && isCloudBaseConfigured()) {
-      // 国内版主要更新 CloudBase
-      const { db } = await getCloudBase();
-      let updateSuccess = false;
-      
-      try {
-        // 尝试用 doc(id) 直接更新
-        await db.collection("advertisements").doc(id).update({ is_active: isActive });
-        updateSuccess = true;
-        console.log(`[toggleAdvertisementStatus] CloudBase doc(${id}) update success`);
-      } catch (err: any) {
-        // 如果 doc(id) 失败，尝试用 where 查询 _id
-        console.warn(`[toggleAdvertisementStatus] Doc update failed: ${err?.message}, trying where query with _id`);
-        try {
-          await db.collection("advertisements")
-            .where({ _id: id })
-            .update({ is_active: isActive });
-          updateSuccess = true;
-          console.log(`[toggleAdvertisementStatus] CloudBase where(_id: ${id}) update success`);
-        } catch (whereErr: any) {
-          console.error(`[toggleAdvertisementStatus] Where query also failed: ${whereErr?.message}`);
-          // 最后尝试用 id 字段查询
-          try {
-            await db.collection("advertisements")
-              .where({ id: id })
-              .update({ is_active: isActive });
-            updateSuccess = true;
-            console.log(`[toggleAdvertisementStatus] CloudBase where(id: ${id}) update success`);
-          } catch (idErr: any) {
-            console.error(`[toggleAdvertisementStatus] All CloudBase update methods failed: ${idErr?.message}`);
-          }
-        }
-      }
-
-      if (!updateSuccess) {
-        return { success: false, error: "CloudBase 更新失败" };
-      }
-
-      // 同步到 Supabase
-      try {
-        await supabaseAdmin
-          .from("advertisements")
-          .update({ is_active: isActive })
-          .eq("id", id);
-        console.log(`[toggleAdvertisementStatus] Supabase sync success`);
-      } catch (err) {
-        console.error("Supabase sync error:", err);
-      }
+    if (shouldUseCloudBaseBackend()) {
+      await updateCloudBaseAd(id, {
+        is_active: isActive,
+        updated_at: new Date().toISOString(),
+      });
     } else {
-      // 国际版主要更新 Supabase
       const { error } = await supabaseAdmin
-        .from("advertisements")
+        .from(COLLECTION)
         .update({ is_active: isActive })
         .eq("id", id);
-
       if (error) {
         console.error("Toggle advertisement status error:", error);
         return { success: false, error: "切换状态失败" };
       }
-      console.log(`[toggleAdvertisementStatus] Supabase update success`);
-
-      // 同步到 CloudBase
-      if (isCloudBaseConfigured()) {
-        try {
-          const { db } = await getCloudBase();
-          try {
-            await db.collection("advertisements").doc(id).update({ is_active: isActive });
-          } catch (err) {
-            // 如果 doc(id) 失败，尝试用 where 查询
-            console.warn("Doc update failed, trying where query:", err);
-            await db.collection("advertisements")
-              .where({ _id: id })
-              .update({ is_active: isActive });
-          }
-        } catch (err) {
-          console.error("CloudBase sync error:", err);
-        }
-      }
     }
 
-    // 清除前台缓存
-    revalidatePath("/admin/ads");
-    revalidatePath("/api/advertisements");
-    revalidatePath("/"); // 清除首页缓存
-    console.log(`[toggleAdvertisementStatus] Cache revalidated`);
-    return { success: true };
-  } catch (err) {
-    console.error("Toggle advertisement status error:", err);
-    return { success: false, error: "切换状态失败" };
-  }
-}
-
-/**
- * 删除广告
- */
-export async function deleteAdvertisement(id: string): Promise<DeleteAdResult> {
-  try {
-    await requireAdmin();
-
-    // 先获取广告信息
-    const { data: ad, error: fetchError } = await supabaseAdmin
-      .from("advertisements")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (fetchError || !ad) {
-      return { success: false, error: "广告不存在" };
-    }
-
-    // 删除存储文件
-    if (ad.media_url) {
-      try {
-        // 从 URL 提取文件名
-        const fileName = ad.media_url.split("/").pop();
-        if (fileName) {
-          await supabaseAdmin.storage.from("ads").remove([fileName]);
-        }
-      } catch (err) {
-        console.error("Delete storage file error:", err);
-      }
-    }
-
-    // 删除数据库记录
-    const { error } = await supabaseAdmin
-      .from("advertisements")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      console.error("Delete advertisement error:", error);
-      return { success: false, error: "删除广告失败" };
-    }
-
-    // 如果配置了 CloudBase，同步删除
-    if (isCloudBaseConfigured()) {
-      try {
-        const { db } = await getCloudBase();
-        try {
-          await db.collection("advertisements").doc(id).remove();
-        } catch (err) {
-          // 如果 doc(id) 失败，尝试用 where 查询
-          console.warn("Doc remove failed, trying where query:", err);
-          await db.collection("advertisements")
-            .where({ _id: id })
-            .remove();
-        }
-      } catch (err) {
-        console.error("CloudBase delete error:", err);
-      }
-    }
-
-    // 清除缓存
     revalidatePath("/admin/ads");
     revalidatePath("/api/advertisements");
     revalidatePath("/");
     return { success: true };
-  } catch (err) {
-    console.error("Delete advertisement error:", err);
+  } catch (error) {
+    console.error("Toggle advertisement status error:", error);
+    return { success: false, error: "切换状态失败" };
+  }
+}
+
+export async function deleteAdvertisement(id: string): Promise<DeleteAdResult> {
+  try {
+    await requireAdmin();
+
+    if (shouldUseCloudBaseBackend()) {
+      const ad = await findCloudBaseAd(id);
+      if (!ad) {
+        return { success: false, error: "广告不存在" };
+      }
+
+      const fileId = ad.cloudbase_file_id || (String(ad.media_url || "").startsWith("cloud://") ? ad.media_url : null);
+      if (fileId) {
+        try {
+          const { app } = await getCloudBase();
+          await app.deleteFile({ fileList: [fileId] });
+        } catch (error) {
+          console.error("Delete CloudBase storage file error:", error);
+        }
+      }
+
+      await removeCloudBaseAd(id);
+    } else {
+      const { data: ad, error: fetchError } = await supabaseAdmin
+        .from(COLLECTION)
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (fetchError || !ad) {
+        return { success: false, error: "广告不存在" };
+      }
+
+      if (ad.media_url) {
+        try {
+          const fileName = String(ad.media_url).split("/").pop();
+          if (fileName) {
+            await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([fileName]);
+          }
+        } catch (error) {
+          console.error("Delete Supabase storage file error:", error);
+        }
+      }
+
+      const { error } = await supabaseAdmin.from(COLLECTION).delete().eq("id", id);
+      if (error) {
+        console.error("Delete advertisement error:", error);
+        return { success: false, error: "删除广告失败" };
+      }
+    }
+
+    revalidatePath("/admin/ads");
+    revalidatePath("/api/advertisements");
+    revalidatePath("/");
+    return { success: true };
+  } catch (error) {
+    console.error("Delete advertisement error:", error);
     return { success: false, error: "删除广告失败" };
   }
 }
 
-/**
- * 获取存储文件列表
- */
 export async function listStorageFiles(): Promise<ListFilesResult> {
   try {
     await requireAdmin();
 
-    const supabaseFiles: StorageFile[] = [];
-    const cloudbaseFiles: StorageFile[] = [];
-
-    // 获取 Supabase 文件
-    const { data: files, error } = await supabaseAdmin.storage
-      .from("ads")
-      .list();
-
-    if (!error && files) {
-      for (const file of files) {
-        const { data: urlData } = supabaseAdmin.storage
-          .from("ads")
-          .getPublicUrl(file.name);
-
-        supabaseFiles.push({
-          name: file.name,
-          url: urlData.publicUrl,
-          size: file.metadata?.size,
-          lastModified: file.updated_at,
-          source: "supabase",
-        });
-      }
+    if (shouldUseCloudBaseBackend()) {
+      const { db } = await getCloudBase();
+      const result = await db.collection(COLLECTION).get();
+      const cloudbaseFiles = (result?.data || [])
+        .filter((item: any) => item?.cloudbase_file_id)
+        .map((item: any) => ({
+          name: String(item.cloudbase_file_id).split("/").pop() || "",
+          url: item.cloudbase_file_id,
+          size: item.file_size,
+          source: "cloudbase" as const,
+          fileId: item.cloudbase_file_id,
+          adId: item._id || item.id,
+        }));
+      return { success: true, cloudbaseFiles, supabaseFiles: [] };
     }
 
-    // 获取 CloudBase 文件
-    if (isCloudBaseConfigured()) {
-      try {
-        const { db } = await getCloudBase();
-        const result = await db.collection("advertisements").get();
-
-        for (const ad of result.data || []) {
-          if (ad.cloudbase_file_id) {
-            cloudbaseFiles.push({
-              name: ad.cloudbase_file_id.split("/").pop() || "",
-              url: ad.cloudbase_file_id,
-              size: ad.file_size,
-              source: "cloudbase",
-              fileId: ad.cloudbase_file_id,
-              adId: ad.id,
-            });
-          }
-        }
-      } catch (err) {
-        console.error("CloudBase list files error:", err);
-      }
+    const { data: files, error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).list();
+    if (error) {
+      console.error("List storage files error:", error);
+      return { success: false, error: "获取文件列表失败" };
     }
 
-    return { success: true, supabaseFiles, cloudbaseFiles };
-  } catch (err) {
-    console.error("List storage files error:", err);
+    const supabaseFiles = (files || []).map((file: any) => {
+      const { data } = supabaseAdmin.storage.from(STORAGE_BUCKET).getPublicUrl(file.name);
+      return {
+        name: file.name,
+        url: data.publicUrl,
+        size: file.metadata?.size,
+        lastModified: file.updated_at,
+        source: "supabase" as const,
+      };
+    });
+
+    return { success: true, supabaseFiles, cloudbaseFiles: [] };
+  } catch (error) {
+    console.error("List storage files error:", error);
     return { success: false, error: "获取文件列表失败" };
   }
 }
 
-/**
- * 删除存储文件
- */
 export async function deleteStorageFile(
   name: string,
   source: "supabase" | "cloudbase",
@@ -837,19 +543,28 @@ export async function deleteStorageFile(
   try {
     await requireAdmin();
 
-    if (source === "supabase") {
-      const { error } = await supabaseAdmin.storage.from("ads").remove([name]);
-      if (error) {
-        return { success: false, error: "删除文件失败" };
+    if (shouldUseCloudBaseBackend()) {
+      if (source !== "cloudbase" || !fileId) {
+        return { success: false, error: "当前后台仅允许删除国内版文件" };
       }
-    } else if (source === "cloudbase" && fileId && isCloudBaseConfigured()) {
       const { app } = await getCloudBase();
       await app.deleteFile({ fileList: [fileId] });
+      return { success: true };
+    }
+
+    if (source !== "supabase") {
+      return { success: false, error: "当前后台仅允许删除国际版文件" };
+    }
+
+    const { error } = await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([name]);
+    if (error) {
+      console.error("Delete storage file error:", error);
+      return { success: false, error: "删除文件失败" };
     }
 
     return { success: true };
-  } catch (err) {
-    console.error("Delete storage file error:", err);
+  } catch (error) {
+    console.error("Delete storage file error:", error);
     return { success: false, error: "删除文件失败" };
   }
 }

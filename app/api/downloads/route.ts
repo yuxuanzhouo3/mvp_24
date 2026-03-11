@@ -5,6 +5,7 @@ import {
   type Platform,
   type Variant,
 } from "@/actions/admin-releases";
+import { getCurrentAdminRegion } from "@/lib/admin/region";
 
 async function handleRegionDownload(
   platform: Platform,
@@ -144,7 +145,14 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const region = regionParam === "CN" ? "CN" : "INTL";
+  const deploymentRegion = getCurrentAdminRegion();
+  if (regionParam && regionParam !== deploymentRegion) {
+    return NextResponse.json(
+      { error: `当前部署仅支持 ${deploymentRegion} 下载` },
+      { status: 400 }
+    );
+  }
+  const region = deploymentRegion;
   const platform = platformParam as Platform;
   const variant =
     platform === "macos" && archParam === "apple-silicon" ? "apple-silicon" : null;

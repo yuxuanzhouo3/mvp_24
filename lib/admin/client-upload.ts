@@ -35,7 +35,7 @@ export async function uploadToStorage(
 ): Promise<UploadResult> {
   try {
     // Check if domestic version (CloudBase)
-    const isDomestic = process.env.NEXT_PUBLIC_DEFAULT_LANGUAGE === "zh";
+    const isDomestic = process.env.NEXT_PUBLIC_DEPLOYMENT_REGION !== "INTL";
 
     if (isDomestic) {
       // CloudBase: Direct upload with progress

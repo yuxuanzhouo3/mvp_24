@@ -201,6 +201,9 @@ export class DeepSeekProvider extends BaseAIProvider {
       const decoder = new TextDecoder();
       let buffer = "";
       let totalTokens = 0;
+      let promptTokens = 0;
+      let completionTokens = 0;
+      let totalContent = "";
 
       try {
         while (true) {
@@ -215,11 +218,26 @@ export class DeepSeekProvider extends BaseAIProvider {
             if (line.startsWith("data: ")) {
               const data = line.slice(6);
               if (data === "[DONE]") {
+                const estimatedTokens =
+                  totalTokens > 0
+                    ? totalTokens
+                    : this.countTokens([
+                        ...messages,
+                        { role: "assistant", content: totalContent },
+                      ]);
+                const finalTokens = totalTokens > 0 ? totalTokens : estimatedTokens;
+
                 // 发送完成标志
                 yield {
                   content: "",
                   done: true,
-                  tokens: totalTokens,
+                  tokens: finalTokens,
+                  usage: {
+                    prompt: promptTokens || undefined,
+                    completion: completionTokens || undefined,
+                    total: finalTokens,
+                    source: totalTokens > 0 ? "provider" : "estimated",
+                  },
                   finish_reason: "stop",
                 };
                 return;
@@ -229,14 +247,21 @@ export class DeepSeekProvider extends BaseAIProvider {
                 const parsed = JSON.parse(data);
                 const choice = parsed.choices?.[0];
                 if (choice?.delta?.content) {
+                  totalContent += choice.delta.content;
                   yield {
                     content: choice.delta.content,
                     done: false,
                     finish_reason: choice.finish_reason,
                   };
                 }
-                // 累计 token 使用量（如果有）
-                if (parsed.usage?.total_tokens) {
+                // 提取 token usage（如果有）
+                if (typeof parsed.usage?.prompt_tokens === "number") {
+                  promptTokens = parsed.usage.prompt_tokens;
+                }
+                if (typeof parsed.usage?.completion_tokens === "number") {
+                  completionTokens = parsed.usage.completion_tokens;
+                }
+                if (typeof parsed.usage?.total_tokens === "number") {
                   totalTokens = parsed.usage.total_tokens;
                 }
               } catch (e) {
@@ -247,10 +272,24 @@ export class DeepSeekProvider extends BaseAIProvider {
         }
 
         // 流结束但没收到 [DONE]，手动发送完成标志
+        const estimatedTokens =
+          totalTokens > 0
+            ? totalTokens
+            : this.countTokens([
+                ...messages,
+                { role: "assistant", content: totalContent },
+              ]);
+        const finalTokens = totalTokens > 0 ? totalTokens : estimatedTokens;
         yield {
           content: "",
           done: true,
-          tokens: totalTokens,
+          tokens: finalTokens,
+          usage: {
+            prompt: promptTokens || undefined,
+            completion: completionTokens || undefined,
+            total: finalTokens,
+            source: totalTokens > 0 ? "provider" : "estimated",
+          },
           finish_reason: "stop",
         };
       } finally {

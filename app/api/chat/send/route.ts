@@ -8,7 +8,7 @@ import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { aiRouter } from "@/lib/ai/router";
 import type { BaseAIProvider } from "@/lib/ai/providers/base-provider";
-import { calculateCost, recordUsage } from "@/lib/ai/token-counter";
+import { calculateCost, getUserMonthlyUsage, recordUsage } from "@/lib/ai/token-counter";
 import { AIMessage } from "@/lib/ai/types";
 import { edgeChatRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
@@ -17,11 +17,10 @@ import { isChinaRegion } from "@/lib/config/region";
 import {
   saveGptMessage as saveCloudBaseMessage,
 } from "@/lib/cloudbase-db";
-import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
+import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
 import { createMessageId } from "@/lib/chat/message-id";
-import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
 import { resolveSmartModel } from "@/lib/ai/smart-model-router";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 
@@ -447,60 +446,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 如果是免费用户，检查月度限额
-    if (subscriptionPlan === "free") {
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const planId = coercePlanId(subscriptionPlan);
+    const quotaSettings = await getPlanQuotaSettings(planId);
 
-      let count = 0;
-      let countError = null;
-
-      if (isChinaRegion()) {
-        // 国内版：从 CloudBase 的 ai_conversations 集合计数
-        try {
-          const cloudbase = require("@cloudbase/node-sdk")
-            .init({
-              env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
-              secretId: process.env.CLOUDBASE_SECRET_ID,
-              secretKey: process.env.CLOUDBASE_SECRET_KEY,
-            })
-            .database();
-
-          // 查询用户的所有会话（不按时间过滤会话，按消息时间过滤）
-          const conversationsResult = await cloudbase
-            .collection("ai_conversations")
-            .where({
-              user_id: userId,
-            })
-            .get();
-
-          // 使用统一的计数函数
-          if (conversationsResult.data && Array.isArray(conversationsResult.data)) {
-            count = countAssistantMessagesInMonth(conversationsResult.data, startOfMonth);
-          }
-        } catch (err) {
-          console.error("[CloudBase] Error checking usage limit:", err);
-          countError = err;
-        }
-      } else {
-        // 国际版：从 Supabase 的 gpt_sessions 表计数
-        try {
-          count = await countIntlAssistantMessagesSince(userId, startOfMonth);
-        } catch (err) {
-          console.error("Error checking usage limit:", err);
-          countError = err;
-        }
+    if (quotaSettings.tokenLimit > 0) {
+      let usedTokens = 0;
+      try {
+        usedTokens = await getUserMonthlyUsage(userId);
+      } catch (err) {
+        console.error("[chat/send] Failed to check token quota:", err);
       }
 
-      if (countError) {
-        console.error("Error checking usage limit:", countError);
-      } else if (count >= 50) {
+      if (usedTokens >= quotaSettings.tokenLimit) {
         return new Response(
           JSON.stringify({
-            error: "Monthly quota exceeded",
+            error: "Monthly token quota exceeded",
             message:
-              "You have reached the free tier limit of 50 messages per month. Please upgrade to continue.",
-            quota: { limit: 50, used: count },
+              "You have reached your monthly token limit. Please upgrade or wait for the next cycle.",
+            quota: { limit: quotaSettings.tokenLimit, used: usedTokens },
           }),
           { status: 429, headers: { "Content-Type": "application/json" } }
         );
@@ -622,6 +585,7 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         let activeModelForError = smartAttemptModels[0] || effectiveModel;
         let activeProviderForError = "unknown";
+        let usageSource: "provider" | "estimated" = "estimated";
 
         try {
           // 发送开始事件
@@ -681,6 +645,9 @@ export async function POST(req: NextRequest) {
 
             let attemptResponse = "";
             let attemptTokens = 0;
+            let attemptPromptTokens = 0;
+            let attemptCompletionTokens = 0;
+            let attemptUsageSource: "provider" | "estimated" = "estimated";
             let isDone = false;
 
             try {
@@ -713,11 +680,37 @@ export async function POST(req: NextRequest) {
 
                 if (chunk.done) {
                   isDone = true;
+                  if (chunk.usage) {
+                    if (typeof chunk.usage.prompt === "number" && chunk.usage.prompt >= 0) {
+                      attemptPromptTokens = chunk.usage.prompt;
+                    }
+                    if (
+                      typeof chunk.usage.completion === "number" &&
+                      chunk.usage.completion >= 0
+                    ) {
+                      attemptCompletionTokens = chunk.usage.completion;
+                    }
+                    if (
+                      typeof chunk.usage.source === "string" &&
+                      (chunk.usage.source === "provider" ||
+                        chunk.usage.source === "estimated")
+                    ) {
+                      attemptUsageSource = chunk.usage.source;
+                    }
+                  }
                   const calculatedTokens = attemptProvider.countTokens([
                     ...messages,
                     { role: "assistant", content: attemptResponse },
                   ]);
-                  attemptTokens = chunk.tokens || calculatedTokens;
+                  const usageTotal =
+                    typeof chunk.usage?.total === "number" && chunk.usage.total > 0
+                      ? chunk.usage.total
+                      : 0;
+                  attemptTokens =
+                    usageTotal ||
+                    (typeof chunk.tokens === "number" && chunk.tokens > 0
+                      ? chunk.tokens
+                      : calculatedTokens);
                 }
               }
             } catch (attemptError) {
@@ -753,6 +746,34 @@ export async function POST(req: NextRequest) {
               ]);
             }
 
+            if (attemptPromptTokens <= 0 && attemptCompletionTokens <= 0) {
+              // 回退：无 provider usage 时，按输入消息 token 与总 token 反推
+              const promptEstimate = attemptProvider.countTokens(messages, attemptModel);
+              attemptPromptTokens = Math.min(promptEstimate, attemptTokens);
+              attemptCompletionTokens = Math.max(
+                0,
+                attemptTokens - attemptPromptTokens
+              );
+              attemptUsageSource = "estimated";
+            } else if (
+              attemptTokens > 0 &&
+              attemptPromptTokens > 0 &&
+              attemptCompletionTokens <= 0
+            ) {
+              attemptCompletionTokens = Math.max(
+                0,
+                attemptTokens - attemptPromptTokens
+              );
+            } else if (
+              attemptTokens > 0 &&
+              attemptCompletionTokens > 0 &&
+              attemptPromptTokens <= 0
+            ) {
+              attemptPromptTokens = Math.max(0, attemptTokens - attemptCompletionTokens);
+            } else if (attemptTokens <= 0) {
+              attemptTokens = attemptPromptTokens + attemptCompletionTokens;
+            }
+
             const hasTextResponse = attemptResponse.trim().length > 0;
             const canRetryOnEmpty =
               isFallbackRetryEnabled &&
@@ -767,6 +788,9 @@ export async function POST(req: NextRequest) {
 
             fullResponse = attemptResponse;
             totalTokens = attemptTokens;
+            promptTokens = attemptPromptTokens;
+            completionTokens = attemptCompletionTokens;
+            usageSource = attemptUsageSource;
             responseModel = attemptModel;
             streamResolved = true;
             break;
@@ -781,9 +805,12 @@ export async function POST(req: NextRequest) {
             throw new Error("No response from available models");
           }
 
-          // 估算输入/输出Token比例（假设历史消息占40%输入）
-          promptTokens = Math.floor(totalTokens * 0.4);
-          completionTokens = totalTokens - promptTokens;
+          if (promptTokens + completionTokens <= 0 && totalTokens > 0) {
+            const promptEstimate = Math.floor(totalTokens * 0.5);
+            promptTokens = promptEstimate;
+            completionTokens = Math.max(0, totalTokens - promptEstimate);
+            usageSource = "estimated";
+          }
 
           // 保存AI响应到数据库
           if (!skipSave) {
@@ -829,17 +856,15 @@ export async function POST(req: NextRequest) {
             completionTokens
           );
 
-          if (!isChinaRegion()) {
-            await recordUsage({
-              userId,
-              sessionId,
-              model: responseModel,
-              promptTokens,
-              completionTokens,
-              totalTokens,
-              costUsd,
-            });
-          }
+          await recordUsage({
+            userId,
+            sessionId,
+            model: responseModel,
+            promptTokens,
+            completionTokens,
+            totalTokens,
+            costUsd,
+          });
 
           if (fullResponse.trim().length > 0) {
             await grantReferralFirstUseReward({
@@ -890,6 +915,7 @@ export async function POST(req: NextRequest) {
                   total: totalTokens,
                 },
                 cost: costUsd,
+                usageSource,
                 duration: endTime - startTime,
               })}\n\n`
             )

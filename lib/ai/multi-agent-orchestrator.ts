@@ -20,6 +20,9 @@ export interface AgentResponse {
   model?: string;
   content: string;
   tokens: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  usageSource?: "provider" | "estimated";
   cost: number;
   timestamp: Date;
   error?: string;
@@ -104,6 +107,9 @@ export class MultiAgentOrchestrator {
           model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
+          promptTokens: result.tokens.prompt,
+          completionTokens: result.tokens.completion,
+          usageSource: "provider",
           cost: this.calculateCost(
             runtimeModel,
             result.tokens.prompt,
@@ -126,6 +132,9 @@ export class MultiAgentOrchestrator {
           agentName: getAgentById(agentId)?.name || agentId,
           content: "",
           tokens: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          usageSource: "estimated",
           cost: 0,
           timestamp: new Date(),
           error: error instanceof Error ? error.message : "Unknown error",
@@ -190,6 +199,9 @@ export class MultiAgentOrchestrator {
           model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
+          promptTokens: result.tokens.prompt,
+          completionTokens: result.tokens.completion,
+          usageSource: "provider",
           cost: this.calculateCost(
             runtimeModel,
             result.tokens.prompt,
@@ -206,6 +218,9 @@ export class MultiAgentOrchestrator {
           agentName: getAgentById(agentId)?.name || agentId,
           content: "",
           tokens: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          usageSource: "estimated",
           cost: 0,
           timestamp: new Date(),
           error: error instanceof Error ? error.message : "Unknown error",
@@ -284,6 +299,9 @@ export class MultiAgentOrchestrator {
           model: runtimeModel,
           content: result.content,
           tokens: result.tokens.total,
+          promptTokens: result.tokens.prompt,
+          completionTokens: result.tokens.completion,
+          usageSource: "provider",
           cost: this.calculateCost(
             runtimeModel,
             result.tokens.prompt,
@@ -370,6 +388,9 @@ ${analysisText}
       model: synthesisModel,
       content: result.content,
       tokens: result.tokens.total,
+      promptTokens: result.tokens.prompt,
+      completionTokens: result.tokens.completion,
+      usageSource: "provider",
       cost: this.calculateCost(
         synthesisModel,
         result.tokens.prompt,

@@ -62,6 +62,8 @@ export class AIGatewayProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     let totalTokens = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
 
     try {
       while (true) {
@@ -69,10 +71,17 @@ export class AIGatewayProvider {
 
         if (done) {
           console.log("[AI Gateway] Stream completed");
+          const finalTokens = totalTokens > 0 ? totalTokens : 0;
           yield {
             content: "",
             done: true,
-            tokens: totalTokens,
+            tokens: finalTokens,
+            usage: {
+              prompt: promptTokens || undefined,
+              completion: completionTokens || undefined,
+              total: finalTokens,
+              source: totalTokens > 0 ? "provider" : "estimated",
+            },
           };
           break;
         }
@@ -91,10 +100,17 @@ export class AIGatewayProvider {
 
           if (data === "[DONE]") {
             console.log("[AI Gateway] Received [DONE] signal");
+            const finalTokens = totalTokens > 0 ? totalTokens : 0;
             yield {
               content: "",
               done: true,
-              tokens: totalTokens,
+              tokens: finalTokens,
+              usage: {
+                prompt: promptTokens || undefined,
+                completion: completionTokens || undefined,
+                total: finalTokens,
+                source: totalTokens > 0 ? "provider" : "estimated",
+              },
             };
             return;
           }
@@ -113,6 +129,12 @@ export class AIGatewayProvider {
 
             // 提取 token 使用信息
             if (parsed.usage) {
+              if (typeof parsed.usage.prompt_tokens === "number") {
+                promptTokens = parsed.usage.prompt_tokens;
+              }
+              if (typeof parsed.usage.completion_tokens === "number") {
+                completionTokens = parsed.usage.completion_tokens;
+              }
               totalTokens = parsed.usage.total_tokens || 0;
             }
           } catch (error) {
@@ -179,6 +201,9 @@ export class AIGatewayProvider {
 
     let fullContent = "";
     let totalTokens = 0;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let hasProviderUsage = false;
 
     for await (const chunk of this.chatStream(messages, {
       model,
@@ -187,16 +212,38 @@ export class AIGatewayProvider {
       if (chunk.content) {
         fullContent += chunk.content;
       }
-      if (chunk.done && chunk.tokens) {
-        totalTokens = chunk.tokens;
+      if (chunk.done) {
+        if (typeof chunk.tokens === "number" && chunk.tokens > 0) {
+          totalTokens = chunk.tokens;
+        }
+        if (chunk.usage) {
+          if (typeof chunk.usage.prompt === "number") {
+            promptTokens = chunk.usage.prompt;
+            hasProviderUsage = true;
+          }
+          if (typeof chunk.usage.completion === "number") {
+            completionTokens = chunk.usage.completion;
+            hasProviderUsage = true;
+          }
+          if (typeof chunk.usage.total === "number" && chunk.usage.total > 0) {
+            totalTokens = chunk.usage.total;
+            hasProviderUsage = hasProviderUsage || chunk.usage.source === "provider";
+          }
+        }
       }
+    }
+
+    if (!hasProviderUsage && totalTokens > 0) {
+      const promptEstimate = this.countTokens(messages, model);
+      promptTokens = Math.min(promptEstimate, totalTokens);
+      completionTokens = Math.max(0, totalTokens - promptTokens);
     }
 
     return {
       content: fullContent,
       tokens: {
-        prompt: Math.floor(totalTokens * 0.4),
-        completion: Math.floor(totalTokens * 0.6),
+        prompt: promptTokens,
+        completion: completionTokens,
         total: totalTokens,
       },
       model,

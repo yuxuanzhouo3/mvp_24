@@ -1,20 +1,21 @@
-"use client";
-
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Database, Cloud, Server } from "lucide-react";
+import { Cloud, Database, Server } from "lucide-react";
+import { getCurrentAdminDataProvider, getCurrentAdminRegionLabel } from "@/lib/admin/region";
 
 export default function SettingsPage() {
+  const regionLabel = getCurrentAdminRegionLabel();
+  const providerLabel = getCurrentAdminDataProvider() === "cloudbase" ? "CloudBase" : "Supabase";
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">系统设置</h1>
-        <p className="text-gray-500">管理系统配置和账户安全</p>
+        <p className="text-gray-500">当前后台仅管理 {regionLabel} 数据</p>
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* 修改密码 */}
         <Card>
           <CardHeader>
             <CardTitle>管理员凭据</CardTitle>
@@ -33,11 +34,10 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* 系统信息 */}
         <Card>
           <CardHeader>
             <CardTitle>系统信息</CardTitle>
-            <CardDescription>当前系统配置概览</CardDescription>
+            <CardDescription>当前后台只连接当前部署区的数据面</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between py-2 border-b">
@@ -51,38 +51,35 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between py-2 border-b">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-gray-400" />
-                <span className="text-sm">国际版数据库</span>
+                <span className="text-sm">当前区域</span>
               </div>
-              <Badge>Supabase</Badge>
+              <Badge>{regionLabel}</Badge>
             </div>
 
             <div className="flex items-center justify-between py-2 border-b">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-gray-400" />
-                <span className="text-sm">国内版数据库</span>
+                <span className="text-sm">当前数据库</span>
               </div>
-              <Badge variant="outline">CloudBase</Badge>
+              <Badge variant="outline">{providerLabel}</Badge>
             </div>
 
             <div className="flex items-center justify-between py-2 border-b">
               <div className="flex items-center gap-2">
                 <Cloud className="w-4 h-4 text-gray-400" />
-                <span className="text-sm">存储服务</span>
+                <span className="text-sm">数据策略</span>
               </div>
-              <Badge variant="secondary">双端同步</Badge>
+              <Badge variant="secondary">单区隔离</Badge>
             </div>
 
             <div className="pt-4 text-xs text-gray-400">
-              <p>后台管理系统支持国际版和国内版的双端数据同步。</p>
-              <p className="mt-1">
-                上传的文件可选择同步到 Supabase Storage 和 CloudBase COS。
-              </p>
+              <p>后台不再跨国内版/国际版同步广告、版本和统计数据。</p>
+              <p className="mt-1">当前部署只读写 {regionLabel} 对应的数据源与存储。</p>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* 危险操作区域 */}
       <Card className="border-red-200">
         <CardHeader>
           <CardTitle className="text-red-600">危险区域</CardTitle>
@@ -91,10 +88,8 @@ export default function SettingsPage() {
         <CardContent>
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">清空所有数据</p>
-              <p className="text-sm text-gray-500">
-                删除所有广告、版本和文件数据
-              </p>
+              <p className="font-medium">清空当前区域数据</p>
+              <p className="text-sm text-gray-500">仅影响当前后台所连接的广告、版本和文件数据</p>
             </div>
             <Button variant="destructive" disabled>
               暂不支持

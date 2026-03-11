@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isChinaRegion } from "@/lib/config/region";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
-import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
-import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
+import { getUserMonthlyUsage } from "@/lib/ai/token-counter";
+import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
 import {
   getPlanMediaLimits,
   getWalletStats,
@@ -29,11 +29,7 @@ export async function GET(req: NextRequest) {
     }
 
     const userId = authResult.userId;
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
-    let used = 0;
-    let limit = 50; // 默认免费额度
     let plan = "free";
 
     if (isChinaRegion()) {
@@ -45,7 +41,6 @@ export async function GET(req: NextRequest) {
         })
         .database();
 
-      // 1. 获取订阅计划
       const subscriptionResult = await cloudbase
         .collection("subscriptions")
         .where({
@@ -59,36 +54,20 @@ export async function GET(req: NextRequest) {
       if (subscriptionResult.data && subscriptionResult.data.length > 0) {
         const subscription = subscriptionResult.data[0];
         if (new Date(subscription.current_period_end) > new Date()) {
-          plan = "pro";
-          limit = 999999; // Pro 用户无限制或极高限制
+          plan = coercePlanId(subscription.plan || subscription.plan_id || "pro");
         }
       }
-
-      // 2. 统计本月使用量
-      const conversationsResult = await cloudbase
-        .collection("ai_conversations")
-        .where({
-          user_id: userId,
-        })
-        .get();
-
-      if (conversationsResult.data && Array.isArray(conversationsResult.data)) {
-        used = countAssistantMessagesInMonth(conversationsResult.data, startOfMonth);
-      }
     } else {
-      // 国际版
-      // 1. 获取订阅计划
       plan = await resolveIntlUserPlan(
         userId,
         (authResult.user as any)?.user_metadata || {}
       );
-      if (plan !== "free") {
-        limit = 999999;
-      }
-
-      // 2. 统计本月使用量
-      used = await countIntlAssistantMessagesSince(userId, startOfMonth);
     }
+
+    const planId = coercePlanId(plan);
+    const quotaSettings = await getPlanQuotaSettings(planId);
+    const limit = quotaSettings.tokenLimit;
+    const used = await getUserMonthlyUsage(userId);
 
     let multimodal: {
       image: { used: number; limit: number; remaining: number };
@@ -98,7 +77,7 @@ export async function GET(req: NextRequest) {
       await seedWalletForPlan(userId, (plan || "free").toLowerCase());
       const walletStats = await getWalletStats(userId);
       if (walletStats) {
-        const mediaLimits = getPlanMediaLimits((plan || "free").toLowerCase());
+        const mediaLimits = await getPlanMediaLimits((plan || "free").toLowerCase());
         multimodal = {
           image: {
             used: Math.max(0, mediaLimits.imageLimit - walletStats.monthly.image),

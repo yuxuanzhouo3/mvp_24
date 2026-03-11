@@ -4,10 +4,200 @@
  */
 
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { getDatabase } from "@/lib/cloudbase-service";
+import { isChinaRegion } from "@/lib/config/region";
 import { TokenUsage } from "./types";
 
 let tokenUsageTableMissing = false;
 let tokenUsageTableMissingWarned = false;
+
+type UsageByModel = Record<string, { tokens: number; cost: number; requests: number }>;
+
+interface UsageStats {
+  totalTokens: number;
+  totalCost: number;
+  totalRequests: number;
+  byModel: UsageByModel;
+}
+
+function createEmptyUsageStats(): UsageStats {
+  return {
+    totalTokens: 0,
+    totalCost: 0,
+    totalRequests: 0,
+    byModel: {},
+  };
+}
+
+function toFiniteNumber(value: unknown): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function parseRecordDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function isInDateRange(
+  createdAt: unknown,
+  startDate?: Date,
+  endDate?: Date
+): boolean {
+  if (!startDate && !endDate) return true;
+  const parsed = parseRecordDate(createdAt);
+  if (!parsed) return false;
+  const ts = parsed.getTime();
+  if (startDate && ts < startDate.getTime()) return false;
+  if (endDate && ts > endDate.getTime()) return false;
+  return true;
+}
+
+async function fetchCloudBaseTokenRecordsByUser(userId: string): Promise<any[]> {
+  const db = getDatabase();
+  const collection = db.collection("tokens");
+  const pageSize = 500;
+  const records: any[] = [];
+  let offset = 0;
+
+  while (true) {
+    const res = await collection
+      .where({ user_id: userId })
+      .skip(offset)
+      .limit(pageSize)
+      .get();
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    records.push(...rows);
+    if (rows.length < pageSize) {
+      break;
+    }
+    offset += pageSize;
+    if (offset > 50000) {
+      break;
+    }
+  }
+
+  return records;
+}
+
+async function fetchCloudBaseTokenRecordsBySession(sessionId: string): Promise<any[]> {
+  const db = getDatabase();
+  const collection = db.collection("tokens");
+  const pageSize = 500;
+  const records: any[] = [];
+  let offset = 0;
+
+  while (true) {
+    const res = await collection
+      .where({ conversation_id: sessionId })
+      .skip(offset)
+      .limit(pageSize)
+      .get();
+    const rows = Array.isArray(res?.data) ? res.data : [];
+    records.push(...rows);
+    if (rows.length < pageSize) {
+      break;
+    }
+    offset += pageSize;
+    if (offset > 50000) {
+      break;
+    }
+  }
+
+  return records;
+}
+
+function buildUsageStatsFromRecords(
+  records: any[],
+  startDate?: Date,
+  endDate?: Date
+): UsageStats {
+  const stats = createEmptyUsageStats();
+
+  for (const record of records) {
+    if (!isInDateRange(record?.created_at, startDate, endDate)) {
+      continue;
+    }
+
+    const modelRaw = typeof record?.model === "string" ? record.model.trim() : "";
+    const model = modelRaw || "unknown";
+    const totalTokens = toFiniteNumber(
+      record?.total_tokens ??
+        record?.totalTokens ??
+        toFiniteNumber(record?.input_tokens) + toFiniteNumber(record?.output_tokens)
+    );
+    const cost = toFiniteNumber(record?.cost ?? record?.cost_usd ?? record?.costUsd);
+
+    stats.totalRequests += 1;
+    stats.totalTokens += totalTokens;
+    stats.totalCost += cost;
+
+    if (!stats.byModel[model]) {
+      stats.byModel[model] = { tokens: 0, cost: 0, requests: 0 };
+    }
+    stats.byModel[model].tokens += totalTokens;
+    stats.byModel[model].cost += cost;
+    stats.byModel[model].requests += 1;
+  }
+
+  return stats;
+}
+
+async function recordUsageToCloudBase(usage: TokenUsage): Promise<boolean> {
+  try {
+    const db = getDatabase();
+    await db.collection("tokens").add({
+      user_id: usage.userId,
+      conversation_id: usage.sessionId,
+      model: usage.model,
+      input_tokens: usage.promptTokens,
+      output_tokens: usage.completionTokens,
+      total_tokens: usage.totalTokens,
+      cost: usage.costUsd,
+      region: "china",
+      created_at: usage.createdAt?.toISOString() || new Date().toISOString(),
+    });
+    return true;
+  } catch (error) {
+    console.error("Failed to record token usage in CloudBase:", error);
+    return false;
+  }
+}
+
+async function getCloudBaseUserUsageStats(
+  userId: string,
+  startDate?: Date,
+  endDate?: Date
+): Promise<UsageStats | null> {
+  try {
+    const records = await fetchCloudBaseTokenRecordsByUser(userId);
+    return buildUsageStatsFromRecords(records, startDate, endDate);
+  } catch (error) {
+    console.error("Error getting CloudBase usage stats:", error);
+    return null;
+  }
+}
+
+async function getCloudBaseSessionUsage(sessionId: string): Promise<any[] | null> {
+  try {
+    const records = await fetchCloudBaseTokenRecordsBySession(sessionId);
+    return records.sort((a, b) => {
+      const at = parseRecordDate(a?.created_at)?.getTime() || 0;
+      const bt = parseRecordDate(b?.created_at)?.getTime() || 0;
+      return at - bt;
+    });
+  } catch (error) {
+    console.error("Error getting CloudBase session usage:", error);
+    return null;
+  }
+}
 
 function isTokenUsageTableMissingError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -113,6 +303,10 @@ export function getModelPricing(model: string) {
  * @returns 是否成功
  */
 export async function recordUsage(usage: TokenUsage): Promise<boolean> {
+  if (isChinaRegion()) {
+    return recordUsageToCloudBase(usage);
+  }
+
   if (tokenUsageTableMissing) {
     return false;
   }
@@ -163,13 +357,12 @@ export async function getUserUsageStats(
   startDate?: Date,
   endDate?: Date
 ) {
+  if (isChinaRegion()) {
+    return getCloudBaseUserUsageStats(userId, startDate, endDate);
+  }
+
   if (tokenUsageTableMissing) {
-    return {
-      totalTokens: 0,
-      totalCost: 0,
-      totalRequests: 0,
-      byModel: {} as Record<string, { tokens: number; cost: number; requests: number }>,
-    };
+    return createEmptyUsageStats();
   }
 
   try {
@@ -199,27 +392,15 @@ export async function getUserUsageStats(
             "[token-counter] token_usage table is missing; usage stats disabled. Please apply migration 20250126000000_add_token_usage.sql."
           );
         }
-        return {
-          totalTokens: 0,
-          totalCost: 0,
-          totalRequests: 0,
-          byModel: {} as Record<string, { tokens: number; cost: number; requests: number }>,
-        };
+        return createEmptyUsageStats();
       }
       console.error("Failed to get usage stats:", error);
       return null;
     }
 
     // 计算总计
-    const stats = {
-      totalTokens: 0,
-      totalCost: 0,
-      totalRequests: data?.length || 0,
-      byModel: {} as Record<
-        string,
-        { tokens: number; cost: number; requests: number }
-      >,
-    };
+    const stats = createEmptyUsageStats();
+    stats.totalRequests = data?.length || 0;
 
     if (data) {
       for (const record of data) {
@@ -270,6 +451,10 @@ export async function getUserMonthlyUsage(userId: string): Promise<number> {
  * @returns 使用详情列表
  */
 export async function getSessionUsage(sessionId: string) {
+  if (isChinaRegion()) {
+    return getCloudBaseSessionUsage(sessionId);
+  }
+
   if (tokenUsageTableMissing) {
     return [];
   }

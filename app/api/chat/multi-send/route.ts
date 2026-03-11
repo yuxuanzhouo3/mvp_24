@@ -11,16 +11,15 @@ import {
   CollaborationMode,
 } from "@/lib/ai/multi-agent-orchestrator";
 import { validateAgents, getAgentById } from "@/lib/ai/ai-agents.config";
-import { recordUsage } from "@/lib/ai/token-counter";
+import { getUserMonthlyUsage, recordUsage } from "@/lib/ai/token-counter";
 import { captureException } from "@/lib/sentry";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { saveGptMessage as saveCloudBaseMessage } from "@/lib/cloudbase-db";
-import { countAssistantMessagesInMonth } from "@/lib/usage/count-assistant-messages";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
+import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { createMessageId } from "@/lib/chat/message-id";
-import { countIntlAssistantMessagesSince } from "@/lib/chat/count-intl-assistant-messages";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 
 export const runtime = "nodejs";
@@ -152,54 +151,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 检查免费用户限额
-    if (userPlan === "free") {
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const planId = coercePlanId(userPlan);
+    const quotaSettings = await getPlanQuotaSettings(planId);
 
-      let assistantMessageCount = 0;
-
-      if (isChinaRegion()) {
-        // 国内版：从 CloudBase 的 ai_conversations 集合计数
-        try {
-          const cloudbase = require("@cloudbase/node-sdk")
-            .init({
-              env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
-              secretId: process.env.CLOUDBASE_SECRET_ID,
-              secretKey: process.env.CLOUDBASE_SECRET_KEY,
-            })
-            .database();
-
-          // 查询用户的所有会话（不按时间过滤会话，按消息时间过滤）
-          const conversationsResult = await cloudbase
-            .collection("ai_conversations")
-            .where({
-              user_id: userId,
-            })
-            .get();
-
-          // 使用统一的计数函数
-          if (conversationsResult.data && Array.isArray(conversationsResult.data)) {
-            assistantMessageCount = countAssistantMessagesInMonth(conversationsResult.data, startOfMonth);
-          }
-        } catch (err) {
-          console.error("[CloudBase] Error checking usage limit:", err);
-        }
-      } else {
-        // 国际版：从 Supabase 的 gpt_sessions 表计数
-        try {
-          assistantMessageCount = await countIntlAssistantMessagesSince(userId, startOfMonth);
-        } catch (err) {
-          console.error("Error checking usage limit:", err);
-        }
+    if (quotaSettings.tokenLimit > 0) {
+      let usedTokens = 0;
+      try {
+        usedTokens = await getUserMonthlyUsage(userId);
+      } catch (err) {
+        console.error("[chat/multi-send] Failed to check token quota:", err);
       }
 
-      if (assistantMessageCount >= 50) {
+      if (usedTokens >= quotaSettings.tokenLimit) {
         return Response.json(
           {
-            error: "Monthly quota exceeded",
-            message: "Free tier limit is 50 messages per month. Please upgrade to continue.",
-            quota: { limit: 50, used: assistantMessageCount },
+            error: "Monthly token quota exceeded",
+            message: "You have reached your monthly token limit. Please upgrade or wait for the next cycle.",
+            quota: { limit: quotaSettings.tokenLimit, used: usedTokens },
             upgradeUrl: "/payment",
           },
           { status: 429 }
@@ -349,19 +317,26 @@ export async function POST(req: NextRequest) {
         }
 
         // 记录Token使用
-        if (!isChinaRegion()) {
-          const agent = getAgentById(response.agentId);
-          if (agent) {
-            await recordUsage({
-              userId,
-              sessionId,
-              model: response.model || agent.model,
-              promptTokens: Math.floor(response.tokens * 0.4),
-              completionTokens: Math.floor(response.tokens * 0.6),
-              totalTokens: response.tokens,
-              costUsd: response.cost,
-            });
-          }
+        const agent = getAgentById(response.agentId);
+        if (agent) {
+          const promptTokens =
+            typeof (response as any).promptTokens === "number"
+              ? Math.max(0, Number((response as any).promptTokens))
+              : Math.floor(response.tokens * 0.5);
+          const completionTokens =
+            typeof (response as any).completionTokens === "number"
+              ? Math.max(0, Number((response as any).completionTokens))
+              : Math.max(0, response.tokens - promptTokens);
+
+          await recordUsage({
+            userId,
+            sessionId,
+            model: response.model || agent.model,
+            promptTokens,
+            completionTokens,
+            totalTokens: response.tokens,
+            costUsd: response.cost,
+          });
         }
       }
     }

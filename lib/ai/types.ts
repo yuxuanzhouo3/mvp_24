@@ -42,6 +42,12 @@ export interface StreamChunk {
   content: string; // 当前块的内容
   done: boolean; // 是否完成
   tokens?: number; // 可选：总token数（仅在done=true时）
+  usage?: {
+    prompt?: number;
+    completion?: number;
+    total?: number;
+    source?: "provider" | "estimated";
+  };
   finish_reason?: string | null; // 可选：完成原因
 }
 

@@ -59,3 +59,5 @@ test-models.mjs
 .turbo/
 .vercel
 multigptandroid-intl/
+
+release.keystore

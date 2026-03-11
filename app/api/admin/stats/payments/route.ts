@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { getAdminSession } from "@/lib/admin/session";
+import { resolveAdminRegionAccess } from "@/lib/admin/region";
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,7 +17,15 @@ export async function GET(req: NextRequest) {
 
     // 获取查询参数
     const searchParams = req.nextUrl.searchParams;
-    const region = searchParams.get("region") || "all";
+    const requestedRegion = searchParams.get("region");
+    const regionAccess = resolveAdminRegionAccess(requestedRegion);
+    if (!regionAccess.ok) {
+      return NextResponse.json(
+        { success: false, error: regionAccess.error },
+        { status: 403 }
+      );
+    }
+    const region = regionAccess.region;
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
 
@@ -34,7 +43,7 @@ export async function GET(req: NextRequest) {
     };
 
     // 查询 INTL（Supabase）支付数据
-    if (region === "all" || region === "INTL") {
+    if (region === "INTL") {
       try {
         console.log("[Stats API] 开始查询 INTL 支付数据，日期范围:", dateStart, "到", dateEnd);
         
@@ -78,7 +87,7 @@ export async function GET(req: NextRequest) {
     }
 
     // 查询 CN（CloudBase）支付数据
-    if (region === "all" || region === "CN") {
+    if (region === "CN") {
       try {
         const db = getDatabase();
         
@@ -144,16 +153,7 @@ export async function GET(req: NextRequest) {
     }
 
     // 合计数据
-    if (region === "all") {
-      const intlRevenue = parseFloat(result.intl.totalRevenue || "0");
-      const cnRevenue = parseFloat(result.cn.totalRevenue || "0");
-      result.data = {
-        totalRevenue: (intlRevenue + cnRevenue).toFixed(2),
-        completedPayments: (result.intl.completedPayments || 0) + (result.cn.completedPayments || 0),
-        totalOrders: (result.intl.totalOrders || 0) + (result.cn.totalOrders || 0),
-        updateTime: now.toISOString(),
-      };
-    } else if (region === "INTL") {
+    if (region === "INTL") {
       result.data = result.intl;
     } else if (region === "CN") {
       result.data = result.cn;

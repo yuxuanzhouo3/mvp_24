@@ -1,66 +1,57 @@
-import { NextRequest, NextResponse } from "next/server";
-import { isChinaRegion } from "@/lib/config/region";
-import { getDatabase } from "@/lib/cloudbase-service";
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { extractTokenFromHeader, verifyAuthToken } from "@/lib/auth-utils";
 import {
   getFreeDailyLimit,
-  getFreeMonthlyPhotoLimit,
-  getFreeMonthlyVideoAudioLimit,
   getFreeContextMsgLimit,
   getBasicDailyLimit,
-  getBasicMonthlyPhotoLimit,
-  getBasicMonthlyVideoAudioLimit,
   getBasicContextMsgLimit,
   getProDailyLimit,
-  getProMonthlyPhotoLimit,
-  getProMonthlyVideoAudioLimit,
   getProContextMsgLimit,
   getEnterpriseDailyLimit,
-  getEnterpriseMonthlyPhotoLimit,
-  getEnterpriseMonthlyVideoAudioLimit,
   getEnterpriseContextMsgLimit,
   getCurrentYearMonth,
   getModelCategory,
 } from "@/utils/model-limits";
+import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
 import { getPlanInfo } from "@/utils/plan-utils";
 import { checkDailyExternalQuota, getWalletStats, seedWalletForPlan } from "@/services/wallet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getLimits(planLower: string) {
-  switch ((planLower || "").toLowerCase()) {
+async function getLimits(planLower: string) {
+  const planId = coercePlanId(planLower);
+  const planQuotas = await getPlanQuotaSettings(planId);
+
+  switch (planId) {
     case "basic":
       return {
         dailyLimit: getBasicDailyLimit(),
         contextLimit: getBasicContextMsgLimit(),
-        photoLimit: getBasicMonthlyPhotoLimit(),
-        videoLimit: getBasicMonthlyVideoAudioLimit(),
+        photoLimit: planQuotas.imageLimit,
+        videoLimit: planQuotas.videoAudioLimit,
         label: "basic",
       };
     case "pro":
       return {
         dailyLimit: getProDailyLimit(),
         contextLimit: getProContextMsgLimit(),
-        photoLimit: getProMonthlyPhotoLimit(),
-        videoLimit: getProMonthlyVideoAudioLimit(),
+        photoLimit: planQuotas.imageLimit,
+        videoLimit: planQuotas.videoAudioLimit,
         label: "pro",
       };
     case "enterprise":
       return {
         dailyLimit: getEnterpriseDailyLimit(),
         contextLimit: getEnterpriseContextMsgLimit(),
-        photoLimit: getEnterpriseMonthlyPhotoLimit(),
-        videoLimit: getEnterpriseMonthlyVideoAudioLimit(),
+        photoLimit: planQuotas.imageLimit,
+        videoLimit: planQuotas.videoAudioLimit,
         label: "enterprise",
       };
     default:
       return {
         dailyLimit: getFreeDailyLimit(),
         contextLimit: getFreeContextMsgLimit(),
-        photoLimit: getFreeMonthlyPhotoLimit(),
-        videoLimit: getFreeMonthlyVideoAudioLimit(),
+        photoLimit: planQuotas.imageLimit,
+        videoLimit: planQuotas.videoAudioLimit,
         label: "free",
       };
   }
@@ -90,7 +81,7 @@ export async function GET(req: NextRequest) {
       const userDoc = userResult?.data?.[0] || userResult?.data || authResult.user || {};
 
       const planInfo = getPlanInfo(userDoc, null);
-      const limits = getLimits(planInfo.planLower);
+      const limits = await getLimits(planInfo.planLower);
 
       let walletStats = await getWalletStats(userId);
       if (!walletStats) {
@@ -199,7 +190,7 @@ export async function GET(req: NextRequest) {
       .maybeSingle();
 
     const planInfo = getPlanInfo(authMeta, walletRow || null);
-    const limits = getLimits(planInfo.planLower);
+    const limits = await getLimits(planInfo.planLower);
 
     if (!walletRow) {
       await seedWalletForPlan(userId, planInfo.planLower || "free");

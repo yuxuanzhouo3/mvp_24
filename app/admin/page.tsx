@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
+import { getCurrentAdminRegion } from "@/lib/admin/region";
 
 export default function AdminPage() {
-  // 默认重定向到广告管理
-  redirect("/admin/ads");
+  redirect(
+    getCurrentAdminRegion() === "CN"
+      ? "/admin/dashboard/cn"
+      : "/admin/dashboard/intl"
+  );
 }

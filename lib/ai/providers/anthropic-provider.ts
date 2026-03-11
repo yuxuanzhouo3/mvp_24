@@ -176,8 +176,18 @@ export class AnthropicProvider extends BaseAIProvider {
       });
 
       let totalContent = "";
+      let promptTokens = 0;
+      let completionTokens = 0;
 
       for await (const event of stream) {
+        if (event.type === "message_start") {
+          const inputTokens = (event as any)?.message?.usage?.input_tokens;
+          if (typeof inputTokens === "number" && inputTokens >= 0) {
+            promptTokens = inputTokens;
+          }
+          continue;
+        }
+
         if (event.type === "content_block_start") {
           continue;
         }
@@ -193,26 +203,36 @@ export class AnthropicProvider extends BaseAIProvider {
         }
 
         if (event.type === "message_delta") {
-          yield {
-            content: "",
-            done: false,
-          };
+          const outputTokens = (event as any)?.usage?.output_tokens;
+          if (typeof outputTokens === "number" && outputTokens >= 0) {
+            completionTokens = outputTokens;
+          }
+          continue;
         }
 
         if (event.type === "message_stop") {
-          const tokens = this.countTokens([
+          const estimatedTokens = this.countTokens([
             ...messages,
             { role: "assistant", content: totalContent },
           ]);
+          const providerTotal = promptTokens + completionTokens;
+          const tokens = providerTotal > 0 ? providerTotal : estimatedTokens;
 
           yield {
             content: "",
             done: true,
             tokens,
+            usage: {
+              prompt: promptTokens || undefined,
+              completion: completionTokens || undefined,
+              total: tokens,
+              source: providerTotal > 0 ? "provider" : "estimated",
+            },
             finish_reason: "stop",
           };
 
           this.logRequest(model, tokens);
+          return;
         }
       }
     } catch (error) {
