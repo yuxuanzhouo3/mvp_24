@@ -4,19 +4,10 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const SERVER_ACTION_BODY_LIMIT = 1000 * 1024 * 1024;
+const SERVER_ACTION_BODY_LIMIT = 100 * 1024 * 1024;
 
 const nextConfig = {
-  output: "standalone",
-  compiler: {
-    removeConsole: process.env.NODE_ENV === "production",
-  },
   experimental: {
-    // When `proxy.ts` is present, Next may buffer the request body so it can be
-    // read both in the proxy and in the underlying route handler / server action.
-    // The default buffer limit is 10MB; exceeding it truncates the body and can
-    // break multipart parsing (e.g. "Unexpected end of form").
-    proxyClientMaxBodySize: SERVER_ACTION_BODY_LIMIT,
     serverActions: {
       bodySizeLimit: SERVER_ACTION_BODY_LIMIT,
     },
