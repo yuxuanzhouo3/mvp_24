@@ -55,8 +55,8 @@ export function SubscriptionModal() {
               </DialogTitle>
               <DialogDescription className="text-blue-100 text-base">
                 {language === 'zh' 
-                  ? "升级 Pro 会员，解锁无限对话额度" 
-                  : "Upgrade to Pro for unlimited conversations"}
+                  ? "升级套餐或充值 Credits，继续使用 AI 服务" 
+                  : "Upgrade or recharge Credits to continue using AI"}
               </DialogDescription>
             </div>
           </div>
@@ -70,10 +70,10 @@ export function SubscriptionModal() {
               </div>
               <div>
                 <p className="font-medium text-gray-900">
-                  {language === 'zh' ? "无限对话次数" : "Unlimited Messages"}
+                  {language === 'zh' ? "更多 Credits 月额度" : "More Monthly Credits"}
                 </p>
                 <p className="text-sm text-gray-500">
-                  {language === 'zh' ? "不再受每月 50 条的限制" : "No more 50/mo limits"}
+                  {language === 'zh' ? "统一按 Credits 计费，适配文本与多模态" : "Unified Credits billing for text and multimodal"}
                 </p>
               </div>
             </div>

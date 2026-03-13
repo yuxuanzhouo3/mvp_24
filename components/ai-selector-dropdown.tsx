@@ -1,11 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, RefObject, TouchEvent } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Search, X, Check, Sparkles } from "lucide-react";
-import type { CSSProperties, RefObject, TouchEvent } from "react";
+import { Check, Search, Sparkles, Star, X } from "lucide-react";
+import { useLanguage } from "@/components/language-provider";
+import { useUser } from "@/components/user-context";
+import {
+  getStoredModelFavorites,
+  MODEL_FAVORITES_EVENT,
+  toggleStoredModelFavorite,
+} from "@/lib/ai/model-favorites";
 
 interface AIAgent {
   id: string;
@@ -15,6 +22,9 @@ interface AIAgent {
   description: string;
   capabilities: string[];
   icon?: string;
+  pricingLevel?: "free" | "low" | "medium" | "high";
+  unitPrice?: number;
+  openrouterRank?: number;
 }
 
 interface AISelectorDropdownProps {
@@ -25,6 +35,9 @@ interface AISelectorDropdownProps {
   triggerRef?: RefObject<HTMLElement | null>;
 }
 
+const SWIPE_CLOSE_DISTANCE = 90;
+const SWIPE_CLOSE_VELOCITY = 0.7;
+
 export function AISelectorDropdown({
   availableAIs,
   selectedAIs,
@@ -32,13 +45,21 @@ export function AISelectorDropdown({
   onClose,
   triggerRef,
 }: AISelectorDropdownProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sheetDragOffsetY, setSheetDragOffsetY] = useState(0);
-  const [sheetDragging, setSheetDragging] = useState(false);
+  const { language } = useLanguage();
+  const { user } = useUser();
   const dropdownRef = useRef<HTMLDivElement>(null);
   const touchStartYRef = useRef<number | null>(null);
   const touchLastYRef = useRef(0);
   const touchStartTimeRef = useRef(0);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
+  const [pricingFilter, setPricingFilter] = useState<
+    "all" | "free" | "low" | "medium" | "high"
+  >("all");
+  const [sheetDragOffsetY, setSheetDragOffsetY] = useState(0);
+  const [sheetDragging, setSheetDragging] = useState(false);
+
   const smartGradientTextClass =
     "bg-[linear-gradient(90deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] bg-clip-text text-transparent";
   const smartGradientSoftClass =
@@ -47,12 +68,34 @@ export function AISelectorDropdown({
     "bg-[linear-gradient(90deg,#2f8cff2e_0%,#7a5cff2e_35%,#ff2d952b_70%,#ff8a1f2b_100%)]";
   const smartGradientLockedClass =
     "bg-[linear-gradient(90deg,#2f8cff1f_0%,#7a5cff1f_35%,#ff2d951d_70%,#ff8a1f1d_100%)]";
+
   const isSmartModel = (ai: AIAgent) =>
     ai.model === "smart-auto" || ai.id.includes("smart-model");
-  const SWIPE_CLOSE_DISTANCE = 90;
-  const SWIPE_CLOSE_VELOCITY = 0.7;
 
-  // 点击外部关闭
+  const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
+
+  const getPricingBadgeLabel = (ai: AIAgent) => {
+    if (ai.pricingLevel === "low") return language === "zh" ? "低价" : "Low";
+    if (ai.pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
+    if (ai.pricingLevel === "high") return language === "zh" ? "高价" : "High";
+    return language === "zh" ? "最低价" : "Lowest Price";
+  };
+
+  useEffect(() => {
+    const syncFavorites = () => setFavoriteIds(getStoredModelFavorites(user?.id));
+    syncFavorites();
+    window.addEventListener(
+      MODEL_FAVORITES_EVENT,
+      syncFavorites as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        MODEL_FAVORITES_EVENT,
+        syncFavorites as EventListener,
+      );
+    };
+  }, [user?.id]);
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -73,77 +116,89 @@ export function AISelectorDropdown({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [onClose, triggerRef]);
 
-  // 过滤AI
-  const filteredAIs = availableAIs.filter((ai) =>
-    ai.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const sortedAIs = useMemo(() => {
+    return [...availableAIs].sort((a, b) => {
+      const favoriteA = favoriteIdSet.has(a.id) || favoriteIdSet.has(a.model) ? 1 : 0;
+      const favoriteB = favoriteIdSet.has(b.id) || favoriteIdSet.has(b.model) ? 1 : 0;
+      if (favoriteA !== favoriteB) return favoriteB - favoriteA;
 
-  // 按类别分组
-  const groupedAIs = filteredAIs.reduce((groups, ai) => {
-    if (isSmartModel(ai)) {
-      const smartCategory = "智能推荐";
-      if (!groups[smartCategory]) {
-        groups[smartCategory] = [];
-      }
-      groups[smartCategory].push(ai);
-      return groups;
-    }
+      const rankA =
+        typeof a.openrouterRank === "number"
+          ? a.openrouterRank
+          : Number.MAX_SAFE_INTEGER;
+      const rankB =
+        typeof b.openrouterRank === "number"
+          ? b.openrouterRank
+          : Number.MAX_SAFE_INTEGER;
+      if (rankA !== rankB) return rankA - rankB;
 
-    // 根据描述或名称判断分类
-    let category = "其他模型";
-    const desc = ai.description.toLowerCase();
-    const name = ai.name.toLowerCase();
-    
-    if (desc.includes("旗舰") || desc.includes("最强") || name.includes("max") || name.includes("pro")) {
-      category = "旗舰模型";
-    } else if (desc.includes("思考") || desc.includes("thinking") || name.includes("thinking")) {
-      category = "深度思考";
-    } else if (desc.includes("性价比") || desc.includes("平衡") || name.includes("plus")) {
-      category = "平衡模型";
-    } else if (desc.includes("快速") || desc.includes("flash") || desc.includes("turbo") || name.includes("flash") || name.includes("turbo")) {
-      category = "快速模型";
-    } else if (desc.includes("代码") || desc.includes("coding") || desc.includes("百万") || desc.includes("128k")) {
-      category = "特殊场景";
-    }
+      return String(a.name || a.model).localeCompare(String(b.name || b.model));
+    });
+  }, [availableAIs, favoriteIdSet]);
 
-    if (!groups[category]) {
-      groups[category] = [];
-    }
-    groups[category].push(ai);
-    return groups;
-  }, {} as Record<string, AIAgent[]>);
+  const filteredAIs = useMemo(() => {
+    const keyword = searchQuery.trim().toLowerCase();
+    return sortedAIs.filter((ai) => {
+      const matchesSearch =
+        keyword.length === 0 ||
+        ai.name.toLowerCase().includes(keyword) ||
+        ai.model.toLowerCase().includes(keyword) ||
+        ai.description.toLowerCase().includes(keyword) ||
+        ai.provider.toLowerCase().includes(keyword) ||
+        ai.capabilities.some((capability) =>
+          capability.toLowerCase().includes(keyword),
+        );
 
-  // 排序分类
-  const categoryOrder = ["智能推荐", "旗舰模型", "深度思考", "平衡模型", "快速模型", "特殊场景", "其他模型"];
-  const sortedCategories = Object.keys(groupedAIs).sort((a, b) => {
-    const indexA = categoryOrder.indexOf(a);
-    const indexB = categoryOrder.indexOf(b);
-    return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB);
-  });
+      const matchesPricing =
+        pricingFilter === "all" ||
+        (!isSmartModel(ai) && ai.pricingLevel === pricingFilter);
 
-  // 切换选择 - 直接生效
+      return matchesSearch && matchesPricing;
+    });
+  }, [pricingFilter, searchQuery, sortedAIs]);
+
+  const sections = useMemo(() => {
+    const favorites = filteredAIs.filter((ai) => favoriteIdSet.has(ai.id) || favoriteIdSet.has(ai.model));
+    const rest = filteredAIs.filter((ai) => !favoriteIdSet.has(ai.id) && !favoriteIdSet.has(ai.model));
+
+    return [
+      {
+        key: "favorites",
+        title: language === "zh" ? "我的收藏" : "Favorites",
+        items: favorites,
+      },
+      {
+        key: "popular",
+        title: language === "zh" ? "按热门排序" : "Sorted by Popularity",
+        items: rest,
+      },
+    ].filter((section) => section.items.length > 0);
+  }, [favoriteIdSet, filteredAIs, language]);
+
+  const toggleFavorite = (ai: AIAgent) => {
+    setFavoriteIds(toggleStoredModelFavorite(ai.id || ai.model, user?.id));
+  };
+
   const toggleAI = (ai: AIAgent) => {
-    const isSelected = selectedAIs.some((s) => s.id === ai.id);
-    const isSmart = isSmartModel(ai);
-    let newSelection: AIAgent[];
+    const alreadySelected = selectedAIs.some((selected) => selected.id === ai.id);
+    const smart = isSmartModel(ai);
 
-    if (isSelected) {
-      newSelection = selectedAIs.filter((s) => s.id !== ai.id);
-    } else if (isSmart) {
-      // 智能模型独占：选中后只能保留它一个
-      newSelection = [ai];
-    } else {
-      // 兜底：移除可能残留的智能模型（例如旧会话数据）
-      const withoutSmart = selectedAIs.filter((s) => !isSmartModel(s));
-      // 检查是否已达到最大选择数量
-      if (withoutSmart.length >= 4) {
-        return; // 不允许选择更多
-      }
-      newSelection = [...withoutSmart, ai];
+    if (alreadySelected) {
+      onSelectionChange(selectedAIs.filter((selected) => selected.id !== ai.id));
+      return;
     }
 
-    // 立即更新选择
-    onSelectionChange(newSelection);
+    if (smart) {
+      onSelectionChange([ai]);
+      return;
+    }
+
+    const withoutSmart = selectedAIs.filter((selected) => !isSmartModel(selected));
+    if (withoutSmart.length >= 4) {
+      return;
+    }
+
+    onSelectionChange([...withoutSmart, ai]);
   };
 
   const handleSheetTouchStart = (event: TouchEvent<HTMLDivElement>) => {
@@ -166,9 +221,7 @@ export function AISelectorDropdown({
     touchLastYRef.current = touch.clientY;
     const delta = Math.max(0, touch.clientY - startY);
     setSheetDragOffsetY(Math.min(delta, 320));
-    if (delta > 0) {
-      event.preventDefault();
-    }
+    if (delta > 0) event.preventDefault();
   };
 
   const resetSheetDrag = () => {
@@ -200,16 +253,11 @@ export function AISelectorDropdown({
   return (
     <Card
       ref={dropdownRef}
-      className={`fixed bottom-0 sm:bottom-24 left-0 sm:left-1/2 sm:-translate-x-1/2 right-0 sm:right-auto mb-0 sm:mb-8 sm:w-[500px] shadow-2xl z-[1000] h-[85vh] sm:h-[600px] max-h-[85vh] flex flex-col bg-white/95 backdrop-blur-md border-t sm:border border-gray-200 rounded-t-3xl sm:rounded-2xl overflow-hidden translate-y-[var(--ai-sheet-drag-y)] sm:translate-y-0 ${
+      className={`fixed bottom-0 sm:bottom-24 left-0 sm:left-1/2 sm:-translate-x-1/2 right-0 sm:right-auto mb-0 sm:mb-8 sm:w-[520px] shadow-2xl z-[1000] h-[85vh] sm:h-[620px] max-h-[85vh] flex flex-col bg-white/95 backdrop-blur-md border-t sm:border border-gray-200 rounded-t-3xl sm:rounded-2xl overflow-hidden translate-y-[var(--ai-sheet-drag-y)] sm:translate-y-0 ${
         sheetDragging ? "" : "transition-transform duration-200 ease-out"
       }`}
-      style={
-        {
-          "--ai-sheet-drag-y": `${sheetDragOffsetY}px`,
-        } as CSSProperties
-      }
+      style={{ "--ai-sheet-drag-y": `${sheetDragOffsetY}px` } as CSSProperties}
     >
-      {/* 移动端拉手 */}
       <div
         className="sm:hidden flex justify-center pt-3 pb-1"
         onTouchStart={handleSheetTouchStart}
@@ -220,12 +268,15 @@ export function AISelectorDropdown({
         <div className="w-12 h-1.5 bg-gray-200 rounded-full"></div>
       </div>
 
-      {/* 头部 */}
       <div className="flex items-center justify-between p-4 border-b bg-gray-50/50">
         <div>
-          <h3 className="text-sm font-bold text-gray-900">选择 AI 模型</h3>
+          <h3 className="text-sm font-bold text-gray-900">
+            {language === "zh" ? "选择 AI 模型" : "Choose AI Model"}
+          </h3>
           <p className="text-[10px] text-gray-500 mt-0.5">
-            最多可选 4 个模型并行对话（智能模型仅可单独选择）
+            {language === "zh"
+              ? "按收藏和热门度排序，最多可选 4 个模型；智能模型会独占选择。"
+              : "Sorted by favorites and popularity. Select up to 4 models; smart mode is exclusive."}
           </p>
         </div>
         <Button
@@ -238,15 +289,18 @@ export function AISelectorDropdown({
         </Button>
       </div>
 
-      {/* 搜索框 */}
-      <div className="p-3 bg-white">
+      <div className="p-3 bg-white space-y-3 border-b">
         <div className="relative group">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
           <Input
             type="text"
-            placeholder="搜索模型名称或功能..."
+            placeholder={
+              language === "zh"
+                ? "搜索模型名称、能力或提供商..."
+                : "Search model, capability, or provider..."
+            }
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(event) => setSearchQuery(event.target.value)}
             className="pl-9 pr-9 h-10 bg-gray-100 border-transparent focus:bg-white focus:border-blue-500 rounded-xl transition-all text-sm"
           />
           {searchQuery && (
@@ -260,147 +314,178 @@ export function AISelectorDropdown({
             </Button>
           )}
         </div>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant={pricingFilter === "all" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("all")}>{language === "zh" ? "全部价格" : "All Prices"}</Button>
+          <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("free")}>{language === "zh" ? "最低价" : "Lowest Price"}</Button>
+          <Button variant={pricingFilter === "low" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("low")}>{language === "zh" ? "低价" : "Low"}</Button>
+          <Button variant={pricingFilter === "medium" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("medium")}>{language === "zh" ? "中价" : "Medium"}</Button>
+          <Button variant={pricingFilter === "high" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("high")}>{language === "zh" ? "高价" : "High"}</Button>
+        </div>
       </div>
 
-      {/* AI列表 */}
       <div className="flex-1 overflow-y-auto min-h-0 bg-white">
         <div className="p-2 space-y-4 min-h-[300px]">
-          {sortedCategories.length === 0 ? (
+          {sections.length === 0 ? (
             <div className="text-center py-12">
               <div className="bg-gray-100 w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3">
                 <Search className="h-6 w-6 text-gray-400" />
               </div>
-              <p className="text-sm text-gray-500">没有找到匹配的模型</p>
+              <p className="text-sm text-gray-500">
+                {language === "zh" ? "没有找到匹配的模型" : "No matching models found"}
+              </p>
             </div>
           ) : (
-            sortedCategories.map((category) => {
-              const ais = groupedAIs[category];
-              return (
-                <div key={category} className="space-y-1">
-                  {/* 分类标题 */}
-                  <div className="px-3 py-1 text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-                    {category}
-                    <div className="h-[1px] flex-1 bg-gray-100"></div>
-                  </div>
+            sections.map((section) => (
+              <div key={section.key} className="space-y-1">
+                <div className="px-3 py-1 text-[11px] font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                  {section.title}
+                  <div className="h-[1px] flex-1 bg-gray-100"></div>
+                </div>
 
-                  {/* AI列表 */}
-                  <div className="grid grid-cols-1 gap-1">
-                    {ais.map((ai) => {
-                      const isSelected = selectedAIs.some((s) => s.id === ai.id);
-                      const isSmart = isSmartModel(ai);
-                      const selectedNonSmartCount = selectedAIs.filter(
-                        (item) => !isSmartModel(item)
-                      ).length;
-                      const isDisabledByLimit =
-                        !isSelected && !isSmart && selectedNonSmartCount >= 4;
-                      const isDisabled = isDisabledByLimit;
-                      return (
-                        <div
-                          key={ai.id}
-                          className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
-                            isSmart
-                              ? isDisabled
-                                ? `cursor-not-allowed opacity-40 ${smartGradientLockedClass} border border-fuchsia-100`
-                                : `cursor-pointer active:scale-[0.98] border ${
-                                    isSelected
-                                      ? `${smartGradientStrongClass} border-fuchsia-300 ring-2 ring-fuchsia-200 shadow-lg shadow-fuchsia-100/80`
-                                      : `${smartGradientSoftClass} border-violet-200 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-100/80`
-                                  }`
-                              : isDisabled
-                                ? "cursor-not-allowed opacity-40"
-                                : "cursor-pointer hover:bg-blue-50/50 active:scale-[0.98]"
-                          } ${!isSmart && isSelected ? "bg-blue-50 ring-1 ring-blue-200" : ""}`}
-                          onClick={() => !isDisabled && toggleAI(ai)}
-                        >
-                          {isSmart && (
-                            <div className="absolute top-2 right-2 flex items-center gap-1 rounded-full bg-white/85 border border-violet-200 px-1.5 py-0.5">
-                              <Sparkles className="h-3 w-3 text-fuchsia-500" />
-                              <span className={`text-[9px] font-bold tracking-wide ${smartGradientTextClass}`}>
-                                AUTO
-                              </span>
-                            </div>
-                          )}
+                <div className="grid grid-cols-1 gap-1">
+                  {section.items.map((ai) => {
+                    const selected = selectedAIs.some((item) => item.id === ai.id);
+                    const smart = isSmartModel(ai);
+                    const selectedNonSmartCount = selectedAIs.filter(
+                      (item) => !isSmartModel(item),
+                    ).length;
+                    const disabledByLimit =
+                      !selected && !smart && selectedNonSmartCount >= 4;
+                    const disabled = disabledByLimit;
+                    const favorite = favoriteIdSet.has(ai.id) || favoriteIdSet.has(ai.model);
 
-                          <div className={`flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center border transition-colors ${
-                            isSmart
-                              ? isSelected
-                                ? "bg-[linear-gradient(135deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] border-transparent"
-                                : "bg-white/85 border-violet-200"
-                              : isSelected
-                                ? "bg-blue-500 border-blue-500"
-                                : "bg-white border-gray-300 group-hover:border-blue-400"
-                          }`}>
-                            {isSelected && (
-                              <Check className={`h-3.5 w-3.5 ${isSmart ? "text-white" : "text-white"}`} />
-                            )}
+                    return (
+                      <div
+                        key={ai.id}
+                        className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+                          smart
+                            ? disabled
+                              ? `cursor-not-allowed opacity-40 ${smartGradientLockedClass} border border-fuchsia-100`
+                              : `cursor-pointer active:scale-[0.98] border ${
+                                  selected
+                                    ? `${smartGradientStrongClass} border-fuchsia-300 ring-2 ring-fuchsia-200 shadow-lg shadow-fuchsia-100/80`
+                                    : `${smartGradientSoftClass} border-violet-200 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-100/80`
+                                }`
+                            : disabled
+                              ? "cursor-not-allowed opacity-40"
+                              : `cursor-pointer active:scale-[0.98] hover:bg-blue-50/50 ${selected ? "bg-blue-50 ring-1 ring-blue-200" : ""}`
+                        }`}
+                        onClick={() => !disabled && toggleAI(ai)}
+                      >
+                        {smart && (
+                          <div className="absolute top-2 right-2 flex items-center gap-1 rounded-full bg-white/85 border border-violet-200 px-1.5 py-0.5">
+                            <Sparkles className="h-3 w-3 text-fuchsia-500" />
+                            <span className={`text-[9px] font-bold tracking-wide ${smartGradientTextClass}`}>
+                              {language === "zh" ? "自动" : "AUTO"}
+                            </span>
                           </div>
-                          
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              {isSmart ? (
-                                <Sparkles className="h-4 w-4 text-fuchsia-500 drop-shadow-[0_0_6px_rgba(217,70,239,0.45)]" />
-                              ) : (
-                                ai.icon && <span className="text-base leading-none">{ai.icon}</span>
-                              )}
-                              <span
-                                className={`text-sm font-semibold truncate ${
-                                  isSmart
-                                    ? smartGradientTextClass
-                                    : isSelected
-                                      ? "text-blue-700"
-                                      : "text-gray-700"
-                                }`}
-                              >
-                                {ai.name}
-                              </span>
-                            </div>
-                            <p
-                              className={`text-[11px] mt-0.5 line-clamp-1 ${
-                                isSmart ? "text-slate-600" : "text-gray-500"
-                              }`}
+                        )}
+
+                        <div className={`flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center border transition-colors ${
+                          smart
+                            ? selected
+                              ? "bg-[linear-gradient(135deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] border-transparent"
+                              : "bg-white/85 border-violet-200"
+                            : selected
+                              ? "bg-blue-500 border-blue-500"
+                              : "bg-white border-gray-300 group-hover:border-blue-400"
+                        }`}>
+                          {selected && <Check className="h-3.5 w-3.5 text-white" />}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleFavorite(ai);
+                              }}
+                              className="rounded p-0.5 text-gray-400 hover:text-amber-500"
+                              title={
+                                favorite
+                                  ? language === "zh"
+                                    ? "取消收藏"
+                                    : "Unfavorite"
+                                  : language === "zh"
+                                    ? "收藏模型"
+                                    : "Favorite model"
+                              }
                             >
+                              <Star className={`h-3.5 w-3.5 ${favorite ? "fill-amber-400 text-amber-500" : ""}`} />
+                            </button>
+
+                            {smart ? (
+                              <Sparkles className="h-4 w-4 text-fuchsia-500 drop-shadow-[0_0_6px_rgba(217,70,239,0.45)]" />
+                            ) : (
+                              ai.icon && <span className="text-base leading-none">{ai.icon}</span>
+                            )}
+
+                            <span className={`text-sm font-semibold truncate ${smart ? smartGradientTextClass : selected ? "text-blue-700" : "text-gray-800"}`}>
+                              {ai.name}
+                            </span>
+                          </div>
+
+                          <div className="mt-0.5 flex items-center gap-2 min-w-0">
+                            <p className={`min-w-0 flex-1 text-[11px] line-clamp-1 ${smart ? "text-slate-600" : "text-gray-500"}`}>
                               {ai.description}
                             </p>
+                            {typeof ai.openrouterRank === "number" && ai.openrouterRank > 0 && (
+                              <span className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
+                                #{ai.openrouterRank}
+                              </span>
+                            )}
+                            {!smart && ai.pricingLevel && (
+                              <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-600">
+                                {getPricingBadgeLabel(ai)}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-1 text-[10px] text-gray-400 truncate">
+                            {ai.model}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })
+              </div>
+            ))
           )}
         </div>
       </div>
 
-      {/* 底部统计 */}
       <div className="p-4 border-t bg-gray-50/80 backdrop-blur-sm">
         <div className="flex items-center justify-between">
           <div className="flex flex-col">
             <div className="text-xs font-medium text-gray-600">
-              已选择 <span className="text-blue-600 font-bold">{selectedAIs.length}</span> / 4
+              {language === "zh" ? "已选择 " : "Selected "}
+              <span className="text-blue-600 font-bold">{selectedAIs.length}</span> / 4
             </div>
             {selectedAIs.length > 0 && (
-              <button 
+              <button
                 onClick={() => onSelectionChange([])}
                 className="text-[10px] text-gray-400 hover:text-red-500 transition-colors text-left"
               >
-                清空选择
+                {language === "zh" ? "清空选择" : "Clear selection"}
               </button>
             )}
           </div>
+
           <div className="flex items-center gap-2">
             {selectedAIs.length >= 4 && (
               <div className="hidden xs:block text-[10px] px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full font-medium">
-                已达上限
+                {language === "zh" ? "已达上限" : "Limit reached"}
               </div>
             )}
-            <Button 
-              size="sm" 
+            <Button
+              size="sm"
               className="h-9 px-6 rounded-xl bg-blue-600 hover:bg-blue-700 text-sm font-bold shadow-lg shadow-blue-200 transition-all active:scale-95"
               onClick={onClose}
             >
-              确定
+              {language === "zh" ? "确定" : "Done"}
             </Button>
           </div>
         </div>

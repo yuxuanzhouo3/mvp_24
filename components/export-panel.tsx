@@ -18,6 +18,7 @@ import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { useGeo } from "@/components/geo-provider";
 import { getAuthClient } from "@/lib/auth/client";
+import { detectPlatform } from "@/lib/platform-detection";
 import { toast } from "sonner";
 
 interface ChatSession {
@@ -363,6 +364,54 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     return `${text.slice(0, maxLength)}...`;
   };
 
+  const copyTextToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+
+      try {
+        return document.execCommand("copy");
+      } catch {
+        return false;
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+  };
+
+  const createExportDownloadLink = async (accessToken: string) => {
+    const response = await fetch("/api/chat/export", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        sessionIds: selectedSessions,
+        format: exportFormat,
+        language,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Create export link failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data?.url || typeof data.url !== "string") {
+      throw new Error("Export link is missing");
+    }
+
+    return data.url;
+  };
+
   const handleExport = async () => {
     if (selectedSessions.length === 0) {
       toast.error(t.export.selectSessionsFirst);
@@ -372,6 +421,49 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     let pdfWindow: Window | null = null;
 
     try {
+      const platform = detectPlatform();
+
+      if (platform.isWechatMiniProgram) {
+        // 获取认证 token - 根据区域使用正确的认证客户端
+        const authClient = getAuthClient();
+        const { data: sessionData, error: sessionError } =
+          await authClient.getSession();
+
+        if (sessionError || !sessionData.session) {
+          console.error("获取会话失败:", sessionError);
+          toast.error("请先登录");
+          return;
+        }
+
+        const accessToken = sessionData.session.access_token;
+        if (!accessToken) {
+          console.error("没有访问令牌");
+          toast.error("请先登录");
+          return;
+        }
+
+        toast.loading(t.exportMessages.exporting);
+        const downloadLink = await createExportDownloadLink(accessToken);
+        const copied = await copyTextToClipboard(downloadLink);
+        toast.dismiss();
+
+        if (copied) {
+          toast.success(
+            language === "zh"
+              ? "已复制下载链接，请到浏览器打开"
+              : "Download link copied. Open it in your browser."
+          );
+        } else {
+          toast.error(
+            language === "zh"
+              ? "复制失败，请手动复制下载链接后到浏览器打开"
+              : "Copy failed. Manually copy the download link and open it in your browser."
+          );
+          alert(downloadLink);
+        }
+        return;
+      }
+
       if (exportFormat === "pdf") {
         pdfWindow = window.open("", "_blank");
         if (!pdfWindow) {
@@ -971,9 +1063,11 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
 
   // 降级方案：复制到剪贴板
   const fallbackCopyToClipboard = (text: string) => {
-    navigator.clipboard
-      .writeText(text)
-      .then(() => {
+    copyTextToClipboard(text)
+      .then((copied) => {
+        if (!copied) {
+          throw new Error("copy failed");
+        }
         toast.success(
           language === "zh"
             ? "已复制到剪贴板！可粘贴到任意平台分享"

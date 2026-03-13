@@ -87,7 +87,17 @@ type MarketReward = {
   revokedAt: string | null
 }
 
-type MarketTabKey = "overview" | "trends" | "channels" | "inviters" | "relations" | "rewards"
+type ReferralStat = {
+  inviter_id: string
+  inviter_email: string
+  inviter_name: string
+  invited_count: number
+  total_payments: number
+  total_gross_amount: number
+  total_profit: number
+}
+
+type MarketTabKey = "overview" | "trends" | "channels" | "inviters" | "relations" | "rewards" | "payment-stats"
 
 const MARKET_TABS: Array<{ key: MarketTabKey; label: string }> = [
   { key: "overview", label: "总览" },
@@ -96,6 +106,7 @@ const MARKET_TABS: Array<{ key: MarketTabKey; label: string }> = [
   { key: "inviters", label: "Top 邀请人" },
   { key: "relations", label: "邀请关系" },
   { key: "rewards", label: "奖励明细" },
+  { key: "payment-stats", label: "支付统计" },
 ]
 
 function formatDate(value?: string | null) {
@@ -114,7 +125,7 @@ function StatCard({ title, value }: { title: string; value: number | string }) {
   )
 }
 
-export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL" }) {
+export function MarketDashboardClient({ region }: { region: "CN" | "INTL" }) {
   const router = useRouter()
 
   const [tab, setTab] = useState<MarketTabKey>("overview")
@@ -126,6 +137,9 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
   const [inviters, setInviters] = useState<MarketTopInviter[]>([])
   const [relations, setRelations] = useState<MarketRelation[]>([])
   const [rewards, setRewards] = useState<MarketReward[]>([])
+  const [paymentStats, setPaymentStats] = useState<ReferralStat[]>([])
+  const [selectedInviter, setSelectedInviter] = useState<string | null>(null)
+  const [inviterDetail, setInviterDetail] = useState<any>(null)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -140,6 +154,7 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
         invitersResp,
         relationsResp,
         rewardsResp,
+        paymentStatsResp,
       ] = await Promise.all([
         fetch(`/api/market/admin/overview?${regionQuery}`, { cache: "no-store" }),
         fetch(`/api/market/admin/trends?days=14&${regionQuery}`, { cache: "no-store" }),
@@ -147,9 +162,10 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
         fetch(`/api/market/admin/top-inviters?limit=20&${regionQuery}`, { cache: "no-store" }),
         fetch(`/api/market/admin/relations?page=1&limit=20&${regionQuery}`, { cache: "no-store" }),
         fetch(`/api/market/admin/rewards?page=1&limit=20&${regionQuery}`, { cache: "no-store" }),
+        fetch("/api/admin/referral-stats", { cache: "no-store" }),
       ])
 
-      if ([overviewResp, trendsResp, channelsResp, invitersResp, relationsResp, rewardsResp].some((resp) => resp.status === 401)) {
+      if ([overviewResp, trendsResp, channelsResp, invitersResp, relationsResp, rewardsResp, paymentStatsResp].some((resp) => resp.status === 401)) {
         router.replace("/market/login")
         return
       }
@@ -160,6 +176,7 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
       const invitersJson = await invitersResp.json().catch(() => ({}))
       const relationsJson = await relationsResp.json().catch(() => ({}))
       const rewardsJson = await rewardsResp.json().catch(() => ({}))
+      const paymentStatsJson = await paymentStatsResp.json().catch(() => ({}))
 
       if (!overviewResp.ok || !overviewJson?.success) throw new Error(overviewJson?.error || "Failed to load overview")
       if (!trendsResp.ok || !trendsJson?.success) throw new Error(trendsJson?.error || "Failed to load trends")
@@ -174,6 +191,7 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
       setInviters(Array.isArray(invitersJson.inviters) ? invitersJson.inviters : [])
       setRelations(Array.isArray(relationsJson.rows) ? relationsJson.rows : [])
       setRewards(Array.isArray(rewardsJson.rows) ? rewardsJson.rows : [])
+      setPaymentStats(Array.isArray(paymentStatsJson.stats) ? paymentStatsJson.stats : [])
     } catch (err: any) {
       setError(err?.message || "Failed to load market dashboard")
     } finally {
@@ -449,6 +467,101 @@ export function MarketDashboardClient({ region }: { region: "CN" | "INTL" | "ALL
                         </TableRow>
                       ))
                     )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {tab === "payment-stats" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>邀请支付统计</CardTitle>
+                <CardDescription>每个邀请人带来的用户支付贡献（按利润排序）</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>邀请人</TableHead>
+                      <TableHead>被邀请人数</TableHead>
+                      <TableHead>支付次数</TableHead>
+                      <TableHead>总支付额</TableHead>
+                      <TableHead>总利润</TableHead>
+                      <TableHead>操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paymentStats.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground">暂无数据</TableCell>
+                      </TableRow>
+                    ) : (
+                      paymentStats.map((row) => (
+                        <TableRow key={row.inviter_id}>
+                          <TableCell className="max-w-[220px] truncate">{row.inviter_name}</TableCell>
+                          <TableCell>{row.invited_count}</TableCell>
+                          <TableCell>{row.total_payments}</TableCell>
+                          <TableCell>{row.total_gross_amount}</TableCell>
+                          <TableCell className="font-semibold">{row.total_profit}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                setSelectedInviter(row.inviter_id)
+                                const resp = await fetch(`/api/admin/referral-stats/${row.inviter_id}`, { cache: "no-store" })
+                                const data = await resp.json()
+                                setInviterDetail(data)
+                              }}
+                            >
+                              查看详情
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {selectedInviter && inviterDetail?.success && (
+            <Card className="mt-4">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>{inviterDetail.summary.inviter.name} 的被邀请人详情</CardTitle>
+                    <CardDescription>
+                      共邀请 {inviterDetail.summary.total_invited} 人，总支付 {inviterDetail.summary.total_payments} 次，
+                      总支付额 {inviterDetail.summary.total_gross_amount}，总利润 {inviterDetail.summary.total_profit}
+                    </CardDescription>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => setSelectedInviter(null)}>关闭</Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>被邀请人</TableHead>
+                      <TableHead>邀请时间</TableHead>
+                      <TableHead>支付次数</TableHead>
+                      <TableHead>总支付额</TableHead>
+                      <TableHead>总利润</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {inviterDetail.invited_users.map((user: any) => (
+                      <TableRow key={user.user_id}>
+                        <TableCell className="max-w-[220px] truncate">{user.user_name}</TableCell>
+                        <TableCell>{formatDate(user.invited_at)}</TableCell>
+                        <TableCell>{user.total_payments}</TableCell>
+                        <TableCell>{user.total_gross_amount}</TableCell>
+                        <TableCell className="font-semibold">{user.total_profit}</TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </CardContent>

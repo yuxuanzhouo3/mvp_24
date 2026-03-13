@@ -1,5 +1,6 @@
 import { appendSessionMessages } from "../chat-session-store";
 import { createMessageId } from "./message-id";
+import type { MultimodalAttachmentPayload } from "@/lib/chat/multimodal-types";
 
 export interface MultiAIResponsePayload {
   agentId: string;
@@ -28,6 +29,7 @@ export async function saveIntlMultiAISessionTurn(params: {
   userMessageId?: string;
   assistantMessageId?: string;
   userMessage: string;
+  userAttachments?: MultimodalAttachmentPayload[];
   userModelInput?: string;
   aiResponses: MultiAIResponsePayload[];
   collaborationMode?: MultiAICollaborationMode;
@@ -39,6 +41,7 @@ export async function saveIntlMultiAISessionTurn(params: {
     userMessageId,
     assistantMessageId,
     userMessage,
+    userAttachments,
     userModelInput,
     aiResponses,
     collaborationMode,
@@ -59,12 +62,14 @@ export async function saveIntlMultiAISessionTurn(params: {
     typeof userModelInput === "string" && userModelInput.trim().length > 0
       ? userModelInput.trim()
       : "";
-  const userMessageContent = normalizedUserModelInput
-    ? {
-        content: userMessage,
-        modelInput: normalizedUserModelInput,
-      }
-    : userMessage;
+  const userMessageContent =
+    normalizedUserModelInput || (Array.isArray(userAttachments) && userAttachments.length > 0)
+      ? {
+          content: userMessage,
+          ...(normalizedUserModelInput ? { modelInput: normalizedUserModelInput } : {}),
+          ...(Array.isArray(userAttachments) && userAttachments.length > 0 ? { attachments: userAttachments } : {}),
+        }
+      : userMessage;
 
   const userMessagePayload = {
     id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),

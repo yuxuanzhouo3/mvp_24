@@ -94,7 +94,7 @@ export class MultiAgentOrchestrator {
         );
 
         // 调用AI
-        const provider = aiRouter.getProviderForModel(runtimeModel);
+        const provider = await aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
           model: runtimeModel,
           temperature: agent.temperature,
@@ -186,7 +186,7 @@ export class MultiAgentOrchestrator {
           userMessage,
           "parallel"
         );
-        const provider = aiRouter.getProviderForModel(runtimeModel);
+        const provider = await aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
           model: runtimeModel,
           temperature: agent.temperature,
@@ -286,7 +286,7 @@ export class MultiAgentOrchestrator {
           debatePrompt,
           "debate"
         );
-        const provider = aiRouter.getProviderForModel(runtimeModel);
+        const provider = await aiRouter.getProviderForModel(runtimeModel);
         const result = await provider.chat(messages, {
           model: runtimeModel,
           temperature: agent.temperature || 0.7,
@@ -375,7 +375,7 @@ ${analysisText}
       synthesisPrompt,
       "synthesis"
     );
-    const provider = aiRouter.getProviderForModel(synthesisModel);
+    const provider = await aiRouter.getProviderForModel(synthesisModel);
     const result = await provider.chat(messages, {
       model: synthesisModel,
       temperature: 0.7,
@@ -431,7 +431,7 @@ ${analysisText}
         availableModels: aiRouter.getAllModels(),
         fallbackModel: aiRouter.getDefaultModel(),
       }).model;
-      const provider = aiRouter.getProviderForModel(runtimeModel);
+      const provider = await aiRouter.getProviderForModel(runtimeModel);
       const stream = provider.chatStream(messages, {
         model: runtimeModel,
         temperature: agent.temperature,

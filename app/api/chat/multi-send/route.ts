@@ -10,17 +10,27 @@ import {
   multiAgentOrchestrator,
   CollaborationMode,
 } from "@/lib/ai/multi-agent-orchestrator";
+import { aiRouter } from "@/lib/ai/router";
 import { validateAgents, getAgentById } from "@/lib/ai/ai-agents.config";
-import { getUserMonthlyUsage, recordUsage } from "@/lib/ai/token-counter";
+import { recordUsage } from "@/lib/ai/token-counter";
 import { captureException } from "@/lib/sentry";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { saveGptMessage as saveCloudBaseMessage } from "@/lib/cloudbase-db";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
-import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
+import { coercePlanId } from "@/lib/plan-quota-settings";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { createMessageId } from "@/lib/chat/message-id";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
+import { resolveSmartModel } from "@/lib/ai/smart-model-router";
+import { buildCatalogAgent, getDefaultRuntimeModel, listEnabledRuntimeModelKeys, listEnabledRuntimeModels } from "@/lib/ai/runtime-models";
+import {
+  authorizeCreditUsage,
+  estimateTextMetrics,
+  releaseCreditUsageReservation,
+  settleCreditUsage,
+} from "@/lib/billing/engine";
+import type { AIMessage } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
 
@@ -29,8 +39,10 @@ export const runtime = "nodejs";
  * 多AI协作聊天
  */
 export async function POST(req: NextRequest) {
+  const reservedRequestIds: string[] = [];
+  let currentUserId = "";
+
   try {
-    // 鉴权
     const authHeader = req.headers.get("authorization");
     const { token, error: tokenError } = extractTokenFromHeader(authHeader);
 
@@ -47,15 +59,15 @@ export async function POST(req: NextRequest) {
     }
 
     const userId = authResult.userId;
+    currentUserId = userId;
 
-    // 解析请求
     const body = await req.json();
     const {
       sessionId,
       message,
-      agentIds, // 选中的多个AI的ID数组
-      mode = "parallel", // 协作模式: sequential, parallel, debate, synthesis
-      rounds = 2, // 辩论模式的轮数
+      agentIds,
+      mode = "parallel",
+      rounds = 2,
     } = body as {
       sessionId: string;
       message: string;
@@ -64,7 +76,6 @@ export async function POST(req: NextRequest) {
       rounds?: number;
     };
 
-    // 验证参数
     if (!sessionId || !message || !agentIds || agentIds.length === 0) {
       return Response.json(
         { error: "sessionId, message, and agentIds are required" },
@@ -79,11 +90,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 获取用户订阅
     let userPlan = "free";
 
     if (isChinaRegion()) {
-      // 国内版：从 CloudBase 获取用户订阅状态
       const cloudbase = require("@cloudbase/node-sdk")
         .init({
           env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
@@ -93,7 +102,6 @@ export async function POST(req: NextRequest) {
         .database();
 
       try {
-        // 查询用户的订阅记录
         const subscriptionResult = await cloudbase
           .collection("subscriptions")
           .where({
@@ -104,11 +112,7 @@ export async function POST(req: NextRequest) {
           .limit(1)
           .get();
 
-        // 如果有有效的订阅且未过期
-        if (
-          subscriptionResult.data &&
-          subscriptionResult.data.length > 0
-        ) {
+        if (subscriptionResult.data && subscriptionResult.data.length > 0) {
           const subscription = subscriptionResult.data[0];
           const expireTime = new Date(subscription.current_period_end);
           if (expireTime > new Date()) {
@@ -120,14 +124,12 @@ export async function POST(req: NextRequest) {
         userPlan = "free";
       }
     } else {
-      // 国际版：从 Supabase 获取用户订阅状态
       userPlan = await resolveIntlUserPlan(
         userId,
         (authResult.user as any)?.user_metadata || {}
       );
     }
 
-    // 验证AI可用性
     const validation = validateAgents(agentIds, userPlan);
 
     if (validation.invalid.length > 0) {
@@ -152,35 +154,11 @@ export async function POST(req: NextRequest) {
     }
 
     const planId = coercePlanId(userPlan);
-    const quotaSettings = await getPlanQuotaSettings(planId);
 
-    if (quotaSettings.tokenLimit > 0) {
-      let usedTokens = 0;
-      try {
-        usedTokens = await getUserMonthlyUsage(userId);
-      } catch (err) {
-        console.error("[chat/multi-send] Failed to check token quota:", err);
-      }
-
-      if (usedTokens >= quotaSettings.tokenLimit) {
-        return Response.json(
-          {
-            error: "Monthly token quota exceeded",
-            message: "You have reached your monthly token limit. Please upgrade or wait for the next cycle.",
-            quota: { limit: quotaSettings.tokenLimit, used: usedTokens },
-            upgradeUrl: "/payment",
-          },
-          { status: 429 }
-        );
-      }
-    }
-
-    // 验证会话所有权
     let session: any;
     let sessionError: any;
 
     if (isChinaRegion()) {
-      // 国内版：从 CloudBase 获取
       const cloudbase = require("@cloudbase/node-sdk")
         .init({
           env: process.env.NEXT_PUBLIC_WECHAT_CLOUDBASE_ID,
@@ -191,21 +169,12 @@ export async function POST(req: NextRequest) {
 
       const result = await cloudbase
         .collection("ai_conversations")
-        .doc(sessionId)
+        .where({ user_id: userId, _id: sessionId })
+        .limit(1)
         .get();
-
-      if (result.data && result.data.length > 0) {
-        const conv = result.data[0];
-        if (conv.user_id === userId) {
-          session = conv;
-        } else {
-          sessionError = { message: "Access denied" };
-        }
-      } else {
-        sessionError = { message: "Session not found" };
-      }
+      session = result.data?.[0];
+      sessionError = !session ? new Error("Session not found") : null;
     } else {
-      // 国际版：从 Supabase 获取
       const result = await supabaseAdmin
         .from("gpt_sessions")
         .select("id, user_id")
@@ -220,7 +189,125 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    // 保存用户消息到 gpt_sessions.messages
+    const availableModels = await listEnabledRuntimeModelKeys();
+    const routerDefaultModel = await getDefaultRuntimeModel();
+    const billingBatchId = `multi:${sessionId}:${Date.now()}:${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+    const groupedEstimates = new Map<
+      string,
+      { requestId: string; metrics: Record<string, number> }
+    >();
+    let synthesisEstimate:
+      | { modelKey: string; metrics: Record<string, number> }
+      | null = null;
+
+    const addEstimate = (
+      runtimeModel: string,
+      messagesForEstimate: AIMessage[],
+      multiplier: number,
+      maxTokens?: number
+    ) => {
+      const estimated = await estimateTextMetrics({
+        messages: messagesForEstimate,
+        modelKey: runtimeModel,
+        maxTokens,
+      });
+      const current = groupedEstimates.get(runtimeModel) || {
+        requestId: `${billingBatchId}:${runtimeModel}`,
+        metrics: { input_tokens: 0, output_tokens: 0, request_count: 0 },
+      };
+      current.metrics.input_tokens += (estimated.input_tokens || 0) * multiplier;
+      current.metrics.output_tokens += (estimated.output_tokens || 0) * multiplier;
+      current.metrics.request_count += Math.max(1, multiplier);
+      groupedEstimates.set(runtimeModel, current);
+      return estimated;
+    };
+
+    for (const agentId of validation.valid) {
+      const agent = getAgentById(agentId);
+      if (!agent) continue;
+      const runtimeModel = resolveSmartModel({
+        requestedModel: agent.model,
+        message,
+        collaborationMode: mode,
+        availableModels,
+        fallbackModel: routerDefaultModel,
+      }).model;
+      const messagesForEstimate: AIMessage[] = [
+        { role: "system", content: agent.systemPrompt || "" },
+        { role: "user", content: message },
+      ];
+      const multiplier = mode === "debate" ? Math.max(1, rounds) : 1;
+      addEstimate(runtimeModel, messagesForEstimate, multiplier, agent.maxTokens);
+    }
+
+    if (mode === "synthesis") {
+      const synthesizer = getAgentById(agentIds[0]);
+      if (synthesizer) {
+        const synthesisModel = resolveSmartModel({
+          requestedModel: synthesizer.model,
+          message,
+          collaborationMode: mode,
+          availableModels,
+          fallbackModel: routerDefaultModel,
+        }).model;
+        const metrics = addEstimate(
+          synthesisModel,
+          [
+            { role: "system", content: synthesizer.systemPrompt || "" },
+            { role: "user", content: message },
+          ],
+          1,
+          synthesizer.maxTokens
+        );
+        synthesisEstimate = { modelKey: synthesisModel, metrics };
+      }
+    }
+
+    for (const [modelKey, estimate] of groupedEstimates.entries()) {
+      const reservation = await authorizeCreditUsage({
+        userId,
+        sessionId,
+        requestId: estimate.requestId,
+        planId,
+        modelKey,
+        metrics: estimate.metrics,
+        metadata: {
+          route: "chat/multi-send",
+          mode,
+        },
+      });
+
+      if (!reservation.success) {
+        for (const requestId of reservedRequestIds) {
+          await releaseCreditUsageReservation({
+            userId,
+            requestId,
+            reason: "multi_authorize_failed",
+          }).catch(() => undefined);
+        }
+
+        return Response.json(
+          {
+            error: "Insufficient credits",
+            message: reservation.error || "Not enough credits",
+            credits: {
+              required: reservation.computation?.credits || 0,
+              balance: reservation.wallet
+                ? reservation.wallet.monthlyGrantBalance +
+                  reservation.wallet.rechargeBalance +
+                  reservation.wallet.bonusBalance
+                : 0,
+            },
+          },
+          { status: 402 }
+        );
+      }
+
+      reservedRequestIds.push(estimate.requestId);
+    }
+
     if (isChinaRegion()) {
       await saveCloudBaseMessage({
         session_id: sessionId,
@@ -229,7 +316,6 @@ export async function POST(req: NextRequest) {
         content: message,
       });
     } else {
-      // 国际版：保存到 gpt_sessions.messages
       const userMsg = {
         id: createMessageId("msg"),
         content: message,
@@ -245,47 +331,38 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 执行多AI协作
     let result;
 
     switch (mode) {
       case "sequential":
-        result = await multiAgentOrchestrator.sequential(
-          validation.valid,
-          message
-        );
+        result = await multiAgentOrchestrator.sequential(validation.valid, message);
         break;
-
       case "parallel":
-        result = await multiAgentOrchestrator.parallel(
-          validation.valid,
-          message
-        );
+        result = await multiAgentOrchestrator.parallel(validation.valid, message);
         break;
-
       case "debate":
-        result = await multiAgentOrchestrator.debate(
-          validation.valid,
-          message,
-          rounds
-        );
+        result = await multiAgentOrchestrator.debate(validation.valid, message, rounds);
         break;
-
       case "synthesis":
-        result = await multiAgentOrchestrator.synthesis(
-          validation.valid,
-          message
-        );
+        result = await multiAgentOrchestrator.synthesis(validation.valid, message);
         break;
-
       default:
-        return Response.json(
-          { error: "Invalid collaboration mode" },
-          { status: 400 }
-        );
+        return Response.json({ error: "Invalid collaboration mode" }, { status: 400 });
     }
 
-    // 保存所有AI响应到数据库
+    const groupedActual = new Map<
+      string,
+      { requestId: string; metrics: Record<string, number>; hasActual: boolean }
+    >();
+
+    for (const [modelKey, estimate] of groupedEstimates.entries()) {
+      groupedActual.set(modelKey, {
+        requestId: estimate.requestId,
+        metrics: { input_tokens: 0, output_tokens: 0, request_count: 0 },
+        hasActual: false,
+      });
+    }
+
     for (const response of result.responses) {
       if (!response.error) {
         if (isChinaRegion()) {
@@ -297,7 +374,6 @@ export async function POST(req: NextRequest) {
             tokens_used: response.tokens,
           });
         } else {
-          // 国际版：保存到 gpt_sessions.messages
           const aiMsg = {
             id: createMessageId("msg"),
             content: response.content,
@@ -316,7 +392,6 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        // 记录Token使用
         const agent = getAgentById(response.agentId);
         if (agent) {
           const promptTokens =
@@ -327,21 +402,32 @@ export async function POST(req: NextRequest) {
             typeof (response as any).completionTokens === "number"
               ? Math.max(0, Number((response as any).completionTokens))
               : Math.max(0, response.tokens - promptTokens);
+          const runtimeModel = response.model || agent.model;
 
           await recordUsage({
             userId,
             sessionId,
-            model: response.model || agent.model,
+            model: runtimeModel,
             promptTokens,
             completionTokens,
             totalTokens: response.tokens,
             costUsd: response.cost,
           });
+
+          const current = groupedActual.get(runtimeModel) || {
+            requestId: `${billingBatchId}:${runtimeModel}`,
+            metrics: { input_tokens: 0, output_tokens: 0, request_count: 0 },
+            hasActual: false,
+          };
+          current.metrics.input_tokens += promptTokens;
+          current.metrics.output_tokens += completionTokens;
+          current.metrics.request_count += 1;
+          current.hasActual = true;
+          groupedActual.set(runtimeModel, current);
         }
       }
     }
 
-    // 如果有综合结论，也保存
     if (result.synthesis) {
       if (isChinaRegion()) {
         await saveCloudBaseMessage({
@@ -351,7 +437,6 @@ export async function POST(req: NextRequest) {
           content: `[综合结论]\n${result.synthesis}`,
         });
       } else {
-        // 国际版：保存到 gpt_sessions.messages
         const synthesisMsg = {
           id: createMessageId("msg"),
           content: result.synthesis,
@@ -367,9 +452,41 @@ export async function POST(req: NextRequest) {
           messages: [synthesisMsg],
         });
       }
+
+      if (synthesisEstimate) {
+        const current = groupedActual.get(synthesisEstimate.modelKey) || {
+          requestId: `${billingBatchId}:${synthesisEstimate.modelKey}`,
+          metrics: { input_tokens: 0, output_tokens: 0, request_count: 0 },
+          hasActual: false,
+        };
+        current.metrics.input_tokens += synthesisEstimate.metrics.input_tokens || 0;
+        current.metrics.output_tokens += synthesisEstimate.metrics.output_tokens || 0;
+        current.metrics.request_count += 1;
+        current.hasActual = true;
+        groupedActual.set(synthesisEstimate.modelKey, current);
+      }
     }
 
-    // 更新会话时间
+    for (const [modelKey, actual] of groupedActual.entries()) {
+      if (actual.hasActual) {
+        await settleCreditUsage({
+          userId,
+          sessionId,
+          requestId: actual.requestId,
+          planId,
+          modelKey,
+          metrics: actual.metrics,
+          metadata: { route: "chat/multi-send", mode },
+        });
+      } else {
+        await releaseCreditUsageReservation({
+          userId,
+          requestId: actual.requestId,
+          reason: "multi_call_not_used",
+        });
+      }
+    }
+
     if (isChinaRegion()) {
       const cloudbase = require("@cloudbase/node-sdk")
         .init({
@@ -391,7 +508,7 @@ export async function POST(req: NextRequest) {
     }
 
     const successfulResponses = result.responses.filter(
-      (item) => !item.error && String(item.content || "").trim().length > 0
+      (item: any) => !item.error && String(item.content || "").trim().length > 0
     );
     if (successfulResponses.length > 0) {
       await grantReferralFirstUseReward({
@@ -399,15 +516,17 @@ export async function POST(req: NextRequest) {
         toolId: successfulResponses[0]?.agentId || null,
         region: isChinaRegion() ? "CN" : "INTL",
       }).catch((rewardError) => {
-        console.warn("[Multi-Send API] Failed to grant referral first-use reward:", rewardError);
+        console.warn(
+          "[Multi-Send API] Failed to grant referral first-use reward:",
+          rewardError
+        );
       });
     }
 
-    // 返回结果
     return Response.json({
       success: true,
       mode: result.mode,
-      responses: result.responses.map((r) => ({
+      responses: result.responses.map((r: any) => ({
         agentId: r.agentId,
         agentName: r.agentName,
         model: r.model,
@@ -421,11 +540,19 @@ export async function POST(req: NextRequest) {
         totalAgents: result.responses.length,
         totalTokens: result.totalTokens,
         totalCost: result.totalCost,
-        successCount: result.responses.filter((r) => !r.error).length,
-        errorCount: result.responses.filter((r) => r.error).length,
+        successCount: result.responses.filter((r: any) => !r.error).length,
+        errorCount: result.responses.filter((r: any) => r.error).length,
       },
     });
   } catch (error) {
+    for (const requestId of reservedRequestIds) {
+      if (!currentUserId) continue;
+      await releaseCreditUsageReservation({
+        userId: currentUserId,
+        requestId,
+        reason: error instanceof Error ? error.message : "multi_send_error",
+      }).catch(() => undefined);
+    }
     console.error("Multi-agent chat error:", error);
     captureException(error);
     return Response.json(
@@ -437,6 +564,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
 
 /**
  * GET /api/chat/multi-send
@@ -499,7 +627,9 @@ export async function GET(req: NextRequest) {
     const { getEnabledAgents, COLLABORATION_MODES } = await import(
       "@/lib/ai/ai-agents.config"
     );
-    const agents = getEnabledAgents();
+    const agents = isChinaRegion()
+      ? getEnabledAgents()
+      : (await listEnabledRuntimeModels("INTL")).map((entry, index) => buildCatalogAgent(entry, index));
 
     // 标记哪些AI需要付费
     const agentsWithAccess = agents.map((agent) => ({

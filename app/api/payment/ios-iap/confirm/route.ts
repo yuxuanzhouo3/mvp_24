@@ -275,6 +275,8 @@ export async function POST(request: NextRequest) {
         transactionId,
         provider: "apple",
         region: "INTL",
+        billingCycle,
+        rewardDays: billedDays,
       }).catch((rewardError) => {
         logWarn("Failed to grant referral first-payment reward for Apple IAP replay", {
           operationId,
@@ -391,6 +393,8 @@ export async function POST(request: NextRequest) {
       transactionId,
       provider: "apple",
       region: "INTL",
+      billingCycle,
+      rewardDays: billedDays,
     }).catch((rewardError) => {
       logWarn("Failed to grant referral first-payment reward for Apple IAP", {
         operationId,

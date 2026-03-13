@@ -1,0 +1,101 @@
+rank,slug,name,input_usd_per_token,output_usd_per_token,input_usd_per_1m_tokens,output_usd_per_1m_tokens,input_basis,output_basis,pricing_note,output_modalities
+1,minimax/minimax-m2.5,MiniMax: MiniMax M2.5,0.00000027,0.00000095,0.27,0.95,pricing.prompt,pricing.completion,base,text
+2,stepfun/step-3.5-flash,StepFun: Step 3.5 Flash (free),0,0,0,0,pricing.prompt,pricing.completion,base,text
+3,google/gemini-3-flash-preview,Google: Gemini 3 Flash Preview,0.0000005,0.000003,0.5,3,pricing.prompt,pricing.completion,base,text
+4,deepseek/deepseek-v3.2,DeepSeek: DeepSeek V3.2,0.00000025,0.0000004,0.25,0.4,pricing.prompt,pricing.completion,base,text
+5,anthropic/claude-opus-4.6,Anthropic: Claude Opus 4.6,0.00001,0.0000375,10,37.5,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+6,anthropic/claude-sonnet-4.6,Anthropic: Claude Sonnet 4.6,0.000006,0.0000225,6,22.5,pricing.line_items[1].input_tokens_above_threshold,pricing.line_items[2].output_tokens_above_threshold,highest-tier,text
+7,moonshotai/kimi-k2.5,MoonshotAI: Kimi K2.5,0.00000045,0.0000022,0.45,2.2,pricing.prompt,pricing.completion,base,text
+8,x-ai/grok-4.1-fast,xAI: Grok 4.1 Fast,0.0000004,0.000001,0.4,1,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+9,openai/gpt-oss-120b,OpenAI: gpt-oss-120b,0.000000039,0.00000019,0.039,0.19,pricing.prompt,pricing.completion,base,text
+10,google/gemini-2.5-flash,Google: Gemini 2.5 Flash,0.0000003,0.0000025,0.3,2.5,pricing.prompt,pricing.completion,base,text
+11,arcee-ai/trinity-large-preview,Arcee AI: Trinity Large Preview (free),0,0,0,0,pricing.prompt,pricing.completion,base,text
+12,anthropic/claude-sonnet-4.5,Anthropic: Claude Sonnet 4.5,0.000006,0.0000225,6,22.5,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+13,google/gemini-2.5-flash-lite,Google: Gemini 2.5 Flash Lite,0.0000001,0.0000004,0.1,0.4,pricing.prompt,pricing.completion,base,text
+14,openai/gpt-5-nano,OpenAI: GPT-5 Nano,0.00000005,0.0000004,0.05,0.4,pricing.prompt,pricing.completion,base,text
+15,z-ai/glm-5,Z.ai: GLM 5,0.00000072,0.0000023,0.72,2.3,pricing.prompt,pricing.completion,base,text
+16,google/gemini-3.1-pro-preview,Google: Gemini 3.1 Pro Preview,0.000004,0.000018,4,18,pricing.line_items[1].input_tokens_above_threshold,pricing.line_items[2].output_tokens_above_threshold,highest-tier,text
+17,anthropic/claude-haiku-4.5,Anthropic: Claude Haiku 4.5,0.000001,0.000005,1,5,pricing.prompt,pricing.completion,base,text
+18,google/gemini-2.0-flash-001,Google: Gemini 2.0 Flash,0.0000001,0.0000004,0.1,0.4,pricing.prompt,pricing.completion,base,text
+19,openai/gpt-4o-mini,OpenAI: GPT-4o-mini,0.00000015,0.0000006,0.15,0.6,pricing.prompt,pricing.completion,base,text
+20,openai/gpt-5.2,OpenAI: GPT-5.2,0.00000175,0.000014,1.75,14,pricing.prompt,pricing.completion,base,text
+21,openai/gpt-5.4,OpenAI: GPT-5.4,0.000005,0.0000225,5,22.5,pricing.line_items[1].input_tokens_above_threshold,pricing.line_items[2].output_tokens_above_threshold,highest-tier,text
+22,openai/gpt-5.3-codex,OpenAI: GPT-5.3-Codex,0.00000175,0.000014,1.75,14,pricing.prompt,pricing.completion,base,text
+23,x-ai/grok-4-fast,xAI: Grok 4 Fast,0.0000004,0.000001,0.4,1,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+24,google/gemini-3.1-flash-lite-preview,Google: Gemini 3.1 Flash Lite Preview,0.00000025,0.0000015,0.25,1.5,pricing.prompt,pricing.completion,base,text
+25,openai/gpt-5-mini,OpenAI: GPT-5 Mini,0.00000025,0.000002,0.25,2,pricing.prompt,pricing.completion,base,text
+26,xiaomi/mimo-v2-flash,Xiaomi: MiMo-V2-Flash,0.00000009,0.00000029,0.09,0.29,pricing.prompt,pricing.completion,base,text
+27,qwen/qwen3-235b-a22b-2507,Qwen: Qwen3 235B A22B Instruct 2507,0.000000071,0.0000001,0.071,0.1,pricing.prompt,pricing.completion,base,text
+28,openai/gpt-4.1-mini,OpenAI: GPT-4.1 Mini,0.0000004,0.0000016,0.4,1.6,pricing.prompt,pricing.completion,base,text
+29,meta-llama/llama-3.1-8b-instruct,Meta: Llama 3.1 8B Instruct,0.00000002,0.00000005,0.02,0.05,pricing.prompt,pricing.completion,base,text
+30,google/gemini-2.5-pro,Google: Gemini 2.5 Pro,0.0000025,0.000015,2.5,15,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+31,openai/gpt-oss-20b,OpenAI: gpt-oss-20b,0.00000003,0.00000014,0.03,0.14,pricing.prompt,pricing.completion,base,text
+32,z-ai/glm-4.7,Z.ai: GLM 4.7,0.00000038,0.00000198,0.38,1.98,pricing.prompt,pricing.completion,base,text
+33,anthropic/claude-opus-4.5,Anthropic: Claude Opus 4.5,0.000005,0.000025,5,25,pricing.prompt,pricing.completion,base,text
+34,google/gemini-3-pro-preview,Google: Gemini 3 Pro Preview,0.000004,0.000018,4,18,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+35,anthropic/claude-sonnet-4,Anthropic: Claude Sonnet 4,0.000006,0.0000225,6,22.5,pricing.line_items[1].input_tokens_above_threshold,pricing.line_items[2].output_tokens_above_threshold,highest-tier,text
+36,mistralai/mistral-nemo,Mistral: Mistral Nemo,0.00000002,0.00000004,0.02,0.04,pricing.prompt,pricing.completion,base,text
+37,google/gemini-2.5-flash-lite-preview-09-2025,Google: Gemini 2.5 Flash Lite Preview 09-2025,0.0000001,0.0000004,0.1,0.4,pricing.prompt,pricing.completion,base,text
+38,deepseek/deepseek-chat-v3-0324,DeepSeek: DeepSeek V3 0324,0.0000002,0.00000077,0.2,0.77,pricing.prompt,pricing.completion,base,text
+39,qwen/qwen3.5-35b-a3b,Qwen: Qwen3.5-35B-A3B,0.00000025,0.000002,0.25,2,pricing_json.alibaba:prompt_tokens,pricing_json.alibaba:completion_tokens,highest-tier,text
+40,qwen/qwen3.5-397b-a17b,Qwen: Qwen3.5 397B A17B,0.0000006,0.0000036,0.6,3.6,pricing_json.alibaba:prompt_tokens,pricing_json.alibaba:completion_tokens,highest-tier,text
+41,deepseek/deepseek-chat-v3.1,DeepSeek: DeepSeek V3.1,0.00000015,0.00000075,0.15,0.75,pricing.prompt,pricing.completion,base,text
+42,z-ai/glm-4.5-air,Z.ai: GLM 4.5 Air (free),0,0,0,0,pricing.prompt,pricing.completion,base,text
+43,openai/gpt-4.1,OpenAI: GPT-4.1,0.000002,0.000008,2,8,pricing.prompt,pricing.completion,base,text
+44,qwen/qwen3.5-flash-02-23,Qwen: Qwen3.5-Flash,0.0000001,0.0000004,0.1,0.4,pricing.prompt,pricing.completion,base,text
+45,qwen/qwen3-32b,Qwen: Qwen3 32B,0.00000008,0.00000024,0.08,0.24,pricing.prompt,pricing.completion,base,text
+46,qwen/qwen3-coder-next,Qwen: Qwen3 Coder Next,0.00000012,0.00000075,0.12,0.75,pricing.prompt,pricing.completion,base,text
+47,qwen/qwen3-vl-235b-a22b-instruct,Qwen: Qwen3 VL 235B A22B Instruct,0.0000002,0.00000088,0.2,0.88,pricing.prompt,pricing.completion,base,text
+48,qwen/qwen3-embedding-8b,Qwen: Qwen3 Embedding 8B,0.00000001,0,0.01,0,pricing.prompt,pricing.completion,base,embeddings
+49,openai/gpt-5.1-chat,OpenAI: GPT-5.1 Chat,0.00000125,0.00001,1.25,10,pricing.prompt,pricing.completion,base,text
+50,openai/gpt-5.2-codex,OpenAI: GPT-5.2-Codex,0.00000175,0.000014,1.75,14,pricing.prompt,pricing.completion,base,text
+51,openai/text-embedding-3-small,OpenAI: Text Embedding 3 Small,0.00000002,0,0.02,0,pricing.prompt,pricing.completion,base,embeddings
+52,qwen/qwen3.5-plus-02-15,Qwen: Qwen3.5 Plus 2026-02-15,0.0000005,0.000003,0.5,3,variable_pricings[0].prompt,variable_pricings[0].completions,highest-tier,text
+53,openai/gpt-5.1,OpenAI: GPT-5.1,0.00000125,0.00001,1.25,10,pricing.prompt,pricing.completion,base,text
+54,google/gemini-3.1-pro-preview-customtools,Google: Gemini 3.1 Pro Preview Custom Tools,0.000004,0.000018,4,18,pricing.line_items[1].input_tokens_above_threshold,pricing.line_items[2].output_tokens_above_threshold,highest-tier,text
+55,meta-llama/llama-3.3-70b-instruct,Meta: Llama 3.3 70B Instruct,0.0000001,0.00000032,0.1,0.32,pricing.prompt,pricing.completion,base,text
+56,nvidia/nemotron-3-nano-30b-a3b,NVIDIA: Nemotron 3 Nano 30B A3B (free),0,0,0,0,pricing.prompt,pricing.completion,base,text
+57,z-ai/glm-4.7-flash,Z.ai: GLM 4.7 Flash,0.00000006,0.0000004,0.06,0.4,pricing.prompt,pricing.completion,base,text
+58,minimax/minimax-m2.1,MiniMax: MiniMax M2.1,0.00000027,0.00000095,0.27,0.95,pricing.prompt,pricing.completion,base,text
+59,mistralai/mistral-small-3.2-24b-instruct,Mistral: Mistral Small 3.2 24B,0.00000006,0.00000018,0.06,0.18,pricing.prompt,pricing.completion,base,text
+60,google/gemma-3-27b-it,Google: Gemma 3 27B,0.00000003,0.00000011,0.03,0.11,pricing.prompt,pricing.completion,base,text
+61,google/gemini-2.0-flash-lite-001,Google: Gemini 2.0 Flash Lite,0.000000075,0.0000003,0.075,0.3,pricing.prompt,pricing.completion,base,text
+62,meta-llama/llama-4-maverick,Meta: Llama 4 Maverick,0.00000015,0.0000006,0.15,0.6,pricing.prompt,pricing.completion,base,text
+63,openai/gpt-4.1-nano,OpenAI: GPT-4.1 Nano,0.0000001,0.0000004,0.1,0.4,pricing.prompt,pricing.completion,base,text
+64,qwen/qwen3-vl-235b-a22b-thinking,Qwen: Qwen3 VL 235B A22B Thinking,0,0,0,0,pricing.prompt,pricing.completion,base,text
+65,moonshotai/kimi-k2-0905,MoonshotAI: Kimi K2 0905,0.0000004,0.000002,0.4,2,pricing.prompt,pricing.completion,base,text
+66,openai/gpt-5,OpenAI: GPT-5,0.00000125,0.00001,1.25,10,pricing.prompt,pricing.completion,base,text
+67,deepseek/deepseek-v3.2-exp,DeepSeek: DeepSeek V3.2 Exp,0.00000027,0.00000041,0.27,0.41,pricing.prompt,pricing.completion,base,text
+68,stepfun/step-3.5-flash,StepFun: Step 3.5 Flash,0.0000001,0.0000003,0.1,0.3,pricing.prompt,pricing.completion,base,text
+69,z-ai/glm-4.5-air,Z.ai: GLM 4.5 Air,0.00000013,0.00000085,0.13,0.85,pricing.prompt,pricing.completion,base,text
+70,qwen/qwen3-coder,Qwen: Qwen3 Coder 480B A35B,0.00000022,0.000001,0.22,1,pricing.prompt,pricing.completion,base,text
+71,anthropic/claude-3.5-haiku,Anthropic: Claude 3.5 Haiku,0.0000008,0.000004,0.8,4,pricing.prompt,pricing.completion,base,text
+72,deepseek/deepseek-chat,DeepSeek: DeepSeek V3,0.00000032,0.00000089,0.32,0.89,pricing.prompt,pricing.completion,base,text
+73,deepseek/deepseek-v3.1-terminus,DeepSeek: DeepSeek V3.1 Terminus,0.00000021,0.00000079,0.21,0.79,pricing.prompt,pricing.completion,base,text
+74,qwen/qwen3-vl-8b-instruct,Qwen: Qwen3 VL 8B Instruct,0.00000008,0.0000005,0.08,0.5,pricing.prompt,pricing.completion,base,text
+75,meta-llama/llama-4-scout,Meta: Llama 4 Scout,0.00000008,0.0000003,0.08,0.3,pricing.prompt,pricing.completion,base,text
+76,openai/gpt-4o-mini-2024-07-18,OpenAI: GPT-4o-mini (2024-07-18),0.00000015,0.0000006,0.15,0.6,pricing.prompt,pricing.completion,base,text
+77,qwen/qwen3-235b-a22b-thinking-2507,Qwen: Qwen3 235B A22B Thinking 2507,0.00000011,0.0000006,0.11,0.6,pricing.prompt,pricing.completion,base,text
+78,anthropic/claude-3.7-sonnet,Anthropic: Claude 3.7 Sonnet,0.000003,0.000015,3,15,pricing.prompt,pricing.completion,base,text
+79,anthropic/claude-3.5-sonnet,Anthropic: Claude 3.5 Sonnet,0.000006,0.00003,6,30,pricing.prompt,pricing.completion,base,text
+80,openai/gpt-4o,OpenAI: GPT-4o,0.0000025,0.00001,2.5,10,pricing.prompt,pricing.completion,base,text
+81,x-ai/grok-code-fast-1,xAI: Grok Code Fast 1,0.0000002,0.0000015,0.2,1.5,pricing.prompt,pricing.completion,base,text
+82,openai/gpt-5-chat,OpenAI: GPT-5 Chat,0.00000125,0.00001,1.25,10,pricing.prompt,pricing.completion,base,text
+83,deepseek/deepseek-r1-0528,DeepSeek: R1 0528,0.00000045,0.00000215,0.45,2.15,pricing.prompt,pricing.completion,base,text
+84,z-ai/glm-4.6,Z.ai: GLM 4.6,0.00000039,0.0000019,0.39,1.9,pricing.prompt,pricing.completion,base,text
+85,qwen/qwen3-30b-a3b-instruct-2507,Qwen: Qwen3 30B A3B Instruct 2507,0.00000009,0.0000003,0.09,0.3,pricing.prompt,pricing.completion,base,text
+86,qwen/qwen3.5-122b-a10b,Qwen: Qwen3.5-122B-A10B,0.0000004,0.0000032,0.4,3.2,pricing_json.alibaba:prompt_tokens,pricing_json.alibaba:completion_tokens,highest-tier,text
+87,mistralai/mistral-small-creative,Mistral: Mistral Small Creative,0.0000001,0.0000003,0.1,0.3,pricing.prompt,pricing.completion,base,text
+88,meta-llama/llama-3.1-70b-instruct,Meta: Llama 3.1 70B Instruct,0.0000004,0.0000004,0.4,0.4,pricing.prompt,pricing.completion,base,text
+89,google/gemma-3-12b-it,Google: Gemma 3 12B,0.00000004,0.00000013,0.04,0.13,pricing.prompt,pricing.completion,base,text
+90,openai/gpt-5.2-chat,OpenAI: GPT-5.2 Chat,0.00000175,0.000014,1.75,14,pricing.prompt,pricing.completion,base,text
+91,arcee-ai/trinity-mini,Arcee AI: Trinity Mini (free),0,0,0,0,pricing.prompt,pricing.completion,base,text
+92,qwen/qwen3-next-80b-a3b-instruct,Qwen: Qwen3 Next 80B A3B Instruct,0.00000009,0.0000011,0.09,1.1,pricing.prompt,pricing.completion,base,text
+93,moonshotai/kimi-k2-thinking,MoonshotAI: Kimi K2 Thinking,0.00000047,0.000002,0.47,2,pricing.prompt,pricing.completion,base,text
+94,openai/text-embedding-3-large,OpenAI: Text Embedding 3 Large,0.00000013,0,0.13,0,pricing.prompt,pricing.completion,base,embeddings
+95,mistralai/ministral-14b-2512,Mistral: Ministral 3 14B 2512,0.0000002,0.0000002,0.2,0.2,pricing.prompt,pricing.completion,base,text
+96,openai/gpt-oss-safeguard-20b,OpenAI: gpt-oss-safeguard-20b,0.000000075,0.0000003,0.075,0.3,pricing.prompt,pricing.completion,base,text
+97,moonshotai/kimi-k2,MoonshotAI: Kimi K2 0711,0.00000055,0.0000022,0.55,2.2,pricing.prompt,pricing.completion,base,text
+98,nvidia/nemotron-3-nano-30b-a3b,NVIDIA: Nemotron 3 Nano 30B A3B,0.00000005,0.0000002,0.05,0.2,pricing.prompt,pricing.completion,base,text
+99,openai/gpt-5.3-chat,OpenAI: GPT-5.3 Chat,0.00000175,0.000014,1.75,14,pricing.prompt,pricing.completion,base,text
+100,mistralai/mistral-small-24b-instruct-2501,Mistral: Mistral Small 3,0.00000005,0.00000008,0.05,0.08,pricing.prompt,pricing.completion,base,text

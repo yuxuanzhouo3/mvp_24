@@ -22,9 +22,9 @@ interface SubscriptionPlansProps {
   currency?: string;
   onSwitchToPayment?: () => void;
   membershipExpiresAt?: string | null;
+  priceOverrides?: Record<string, { monthly: number; yearly: number }>;
 }
 
-// 订阅计划层级定义（从低到高）
 const PLAN_HIERARCHY: Record<string, number> = {
   free: 0,
   basic: 1,
@@ -38,14 +38,14 @@ export function SubscriptionPlans({
   currency = "USD",
   onSwitchToPayment,
   membershipExpiresAt,
+  priceOverrides,
 }: SubscriptionPlansProps) {
   const { user } = useUser();
   const { language } = useLanguage();
   const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("monthly");
   const isZh = language === "zh";
 
-  // 获取用户当前订阅计划
-  const userCurrentPlan = (user?.subscription_plan || "free").toLowerCase();
+  const userCurrentPlan = String(currentPlan || user?.subscription_plan || "free").toLowerCase();
   const userCurrentLevel = PLAN_HIERARCHY[userCurrentPlan] ?? 0;
   const displayMembershipExpiresAt = membershipExpiresAt || user?.membership_expires_at;
   const membershipExpiryDate = displayMembershipExpiresAt
@@ -62,7 +62,6 @@ export function SubscriptionPlans({
     hasStatusActive && (!hasValidExpiryDate || !isMembershipExpired)
   );
 
-  // 检查计划是否可以选择
   const canSelectPlan = (planId: string): boolean => {
     if (planId === "free") return true;
     if (hasActiveSubscription && userCurrentPlan === "pro") {
@@ -82,7 +81,6 @@ export function SubscriptionPlans({
     return isZh ? "请先取消当前计划" : "Cancel current first";
   };
 
-  // 获取计划图标
   const getPlanIcon = (planId: string) => {
     switch (planId.toLowerCase()) {
       case "basic":
@@ -96,37 +94,35 @@ export function SubscriptionPlans({
     }
   };
 
-  // 获取计划特性列表（解析双语格式）
   const getPlanFeatures = (plan: PricingPlan): string[] => {
-    return plan.features.map(feature => {
-      // 格式: "English text|中文文本"
+    return plan.features.map((feature) => {
       const parts = feature.split("|");
       return isZh && parts.length > 1 ? parts[1] : parts[0];
     });
   };
 
-  // 获取计划名称
   const getPlanName = (plan: PricingPlan) => {
     return isZh && plan.nameZh ? plan.nameZh : plan.name;
   };
 
-  // 获取计划描述
   const getPlanDescription = (planId: string) => {
     const descriptions: Record<string, { zh: string; en: string }> = {
       basic: {
         zh: "适合个人用户日常使用",
-        en: "Perfect for personal daily use"
+        en: "Perfect for personal daily use",
       },
       pro: {
         zh: "适合专业用户和创作者",
-        en: "Ideal for professionals and creators"
+        en: "Ideal for professionals and creators",
       },
       enterprise: {
         zh: "适合团队和企业级需求",
-        en: "For teams and enterprise needs"
+        en: "For teams and enterprise needs",
       },
     };
-    return descriptions[planId.toLowerCase()]?.[language] || "";
+    return isZh
+      ? descriptions[planId.toLowerCase()]?.zh || ""
+      : descriptions[planId.toLowerCase()]?.en || "";
   };
 
   const formatPrice = (price: number, curr: string) => {
@@ -137,9 +133,20 @@ export function SubscriptionPlans({
     }).format(price);
   };
 
+  const getResolvedPlanPrice = (planId: string) => {
+    const override = priceOverrides?.[planId.toLowerCase()];
+    const overrideAmount =
+      billingCycle === "monthly" ? override?.monthly : override?.yearly;
+
+    if (typeof overrideAmount === "number" && Number.isFinite(overrideAmount)) {
+      return overrideAmount;
+    }
+
+    return getPlanPrice(planId, billingCycle, currency === "CNY");
+  };
+
   return (
     <div className="space-y-6">
-      {/* 当前会员到期时间显示 */}
       {user && displayMembershipExpiresAt && (
         <Card
           className={
@@ -163,7 +170,7 @@ export function SubscriptionPlans({
                       : "font-medium text-blue-800"
                   }
                 >
-                  {isZh ? "会员到期时间" : "Membership expires"}:{" "}
+                  {isZh ? "会员到期时间" : "Membership expires"}: {" "}
                   {new Date(displayMembershipExpiresAt).toLocaleDateString(
                     isZh ? "zh-CN" : "en-US",
                     { year: "numeric", month: "long", day: "numeric" }
@@ -181,8 +188,8 @@ export function SubscriptionPlans({
                       ? "会员已过期，请续费恢复会员权益"
                       : "Membership expired, please renew to restore benefits"
                     : isZh
-                    ? "续费可延长会员时间"
-                    : "Renew to extend membership"}
+                      ? "续费可延长会员时间"
+                      : "Renew to extend membership"}
                 </p>
               </div>
             </div>
@@ -190,7 +197,6 @@ export function SubscriptionPlans({
         </Card>
       )}
 
-      {/* 计费周期切换 */}
       <div className="flex justify-center gap-4">
         <Button
           variant={billingCycle === "monthly" ? "default" : "outline"}
@@ -210,13 +216,11 @@ export function SubscriptionPlans({
         </Button>
       </div>
 
-      {/* 订阅计划卡片 */}
       <div className="grid gap-6 md:grid-cols-3 max-w-6xl mx-auto">
         {pricingPlans.map((plan) => {
           const isCurrentPlan =
-            userCurrentPlan === plan.id.toLowerCase() &&
-            hasActiveSubscription;
-          const price = getPlanPrice(plan.id, billingCycle, isZh);
+            userCurrentPlan === plan.id.toLowerCase() && hasActiveSubscription;
+          const price = getResolvedPlanPrice(plan.id);
           const isPopular = plan.popular;
 
           return (
@@ -254,13 +258,16 @@ export function SubscriptionPlans({
               <CardContent className="text-center">
                 <div className="mb-4">
                   <span className="text-3xl font-bold">
-                    {formatPrice(price, isZh ? "CNY" : "USD")}
+                    {formatPrice(price, currency)}
                   </span>
                   <span className="text-muted-foreground">
                     /{isZh
-                      ? (billingCycle === "monthly" ? "月" : "年")
-                      : (billingCycle === "monthly" ? "mo" : "yr")
-                    }
+                      ? billingCycle === "monthly"
+                        ? "月"
+                        : "年"
+                      : billingCycle === "monthly"
+                        ? "mo"
+                        : "yr"}
                   </span>
                   {billingCycle === "annual" && (
                     <div className="text-sm text-green-600 mt-1 font-semibold">
@@ -284,7 +291,10 @@ export function SubscriptionPlans({
                   className="w-full"
                   variant={isPopular ? "default" : "outline"}
                   onClick={() => {
-                    onSelectPlan(plan.id, billingCycle === "annual" ? "yearly" : "monthly");
+                    onSelectPlan(
+                      plan.id,
+                      billingCycle === "annual" ? "yearly" : "monthly"
+                    );
                     if (onSwitchToPayment && price > 0) {
                       setTimeout(() => onSwitchToPayment(), 100);
                     }
@@ -294,8 +304,12 @@ export function SubscriptionPlans({
                   {!canSelectPlan(plan.id)
                     ? getDisabledPlanReason(plan.id)
                     : isCurrentPlan
-                    ? (isZh ? "续费" : "Renew")
-                    : (isZh ? "选择此计划" : "Choose Plan")}
+                      ? isZh
+                        ? "续费"
+                        : "Renew"
+                      : isZh
+                        ? "选择此计划"
+                        : "Choose Plan"}
                 </Button>
               </CardFooter>
             </Card>

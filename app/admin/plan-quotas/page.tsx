@@ -18,9 +18,10 @@ import { RefreshCw, Save } from "lucide-react";
 
 interface PlanQuotaSettings {
   planId: "free" | "basic" | "pro" | "enterprise";
-  tokenLimit: number;
   imageLimit: number;
   videoAudioLimit: number;
+  monthlyCreditGrant: number;
+  dailyCreditCap: number;
   updatedAt?: string | null;
 }
 
@@ -73,7 +74,11 @@ export default function PlanQuotasPage() {
 
   const handleChange = (
     planId: PlanQuotaSettings["planId"],
-    key: "tokenLimit" | "imageLimit" | "videoAudioLimit",
+    key:
+      | "imageLimit"
+      | "videoAudioLimit"
+      | "monthlyCreditGrant"
+      | "dailyCreditCap",
     value: string
   ) => {
     setRows((prev) =>
@@ -155,7 +160,7 @@ export default function PlanQuotasPage() {
         <CardHeader>
           <CardTitle>套餐额度配置</CardTitle>
           <CardDescription>
-            对话 Token 为月度上限；视频与音频共享同一额度。
+            Credits 为唯一月额度；图片与视频/音频为多模态次数配额。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -163,7 +168,8 @@ export default function PlanQuotasPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>套餐</TableHead>
-                <TableHead>对话 Token / 月</TableHead>
+                <TableHead>统一 Credits / 月</TableHead>
+                <TableHead>Credits 日上限</TableHead>
                 <TableHead>图片次数 / 月</TableHead>
                 <TableHead>视频/音频次数 / 月</TableHead>
                 <TableHead>最近更新</TableHead>
@@ -181,9 +187,23 @@ export default function PlanQuotasPage() {
                       <Input
                         type="number"
                         min={0}
-                        value={row.tokenLimit}
+                        value={row.monthlyCreditGrant}
                         onChange={(e) =>
-                          handleChange(row.planId, "tokenLimit", e.target.value)
+                          handleChange(
+                            row.planId,
+                            "monthlyCreditGrant",
+                            e.target.value
+                          )
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={row.dailyCreditCap}
+                        onChange={(e) =>
+                          handleChange(row.planId, "dailyCreditCap", e.target.value)
                         }
                       />
                     </TableCell>
@@ -220,7 +240,7 @@ export default function PlanQuotasPage() {
 
               {!loading && orderedRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-sm text-gray-500">
+                  <TableCell colSpan={6} className="text-center text-sm text-gray-500">
                     暂无数据
                   </TableCell>
                 </TableRow>

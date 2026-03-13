@@ -18,6 +18,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import type { AIResponse, AIAgent, Message } from "./types";
+import type { MultimodalAttachmentPayload } from "@/lib/chat/multimodal-types";
 import { topoLayers, type TaskGraphSpec } from "@/types/task-graph";
 
 interface FavoritePayload {
@@ -100,6 +101,69 @@ export function WorkspaceMessageList({
     "bg-[linear-gradient(90deg,#2f8cff14_0%,#7a5cff14_35%,#ff2d9514_70%,#ff8a1f14_100%)] border-violet-200";
   const smartAvatarClass =
     "bg-[linear-gradient(145deg,#64b5ff_0%,#9f8bff_35%,#ff78bc_70%,#ffb36b_100%)] border border-white/70 ring-1 ring-white/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_8px_20px_-12px_rgba(99,102,241,0.45)]";
+  const isAttachmentPlaceholderOnly = (value: string) => {
+    const normalized = value.trim();
+    return normalized.startsWith("[附件]") || normalized.startsWith("[Attachments]");
+  };
+
+  const renderUserAttachments = (attachments: MultimodalAttachmentPayload[] | undefined) => {
+    if (!Array.isArray(attachments) || attachments.length === 0) return null;
+
+    return (
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {attachments.map((attachment) => {
+          const hasVisualPreview =
+            (attachment.kind === "image" || attachment.kind === "video") &&
+            typeof attachment.dataUrl === "string" &&
+            attachment.dataUrl.startsWith("data:");
+          const hasAudioPreview =
+            attachment.kind === "audio" &&
+            typeof attachment.dataUrl === "string" &&
+            attachment.dataUrl.startsWith("data:audio/");
+
+          return (
+            <div key={attachment.id} className="overflow-hidden rounded-lg border border-white/20 bg-white/10">
+              {hasVisualPreview && (
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className="h-40 w-full object-cover"
+                />
+              )}
+              {hasAudioPreview && (
+                <div className="p-2">
+                  <audio controls preload="metadata" className="w-full h-10">
+                    <source src={attachment.dataUrl} type={attachment.mimeType || "audio/mpeg"} />
+                  </audio>
+                </div>
+              )}
+              <div className="p-2">
+                <div className="truncate text-sm font-medium text-white">{attachment.name}</div>
+                <div className="mt-1 text-xs text-white/75">
+                  {attachment.kind === "image"
+                    ? language === "zh"
+                      ? "图片"
+                      : "Image"
+                    : attachment.kind === "video"
+                      ? language === "zh"
+                        ? "视频"
+                        : "Video"
+                      : attachment.kind === "audio"
+                        ? language === "zh"
+                          ? "音频"
+                          : "Audio"
+                        : language === "zh"
+                          ? "文件"
+                          : "File"}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   const isSmartAssistantMessage = (msg: Message) => {
     const rawAgentId = (msg as any)?.agentId;
     const rawAgentName = (msg as any)?.agentName;
@@ -181,9 +245,13 @@ export function WorkspaceMessageList({
             <div className="flex items-start gap-2 sm:gap-3 justify-end">
               <div className="inline-block max-w-xs sm:max-w-2xl lg:max-w-3xl group">
                 <Card className="inline-block p-3 sm:p-4 bg-blue-500 text-white">
-                  <p className="text-sm whitespace-pre-wrap break-words">
-                    {typeof message.content === "string" ? message.content : ""}
-                  </p>
+                  {typeof message.content === "string" &&
+                  (!isAttachmentPlaceholderOnly(message.content) || !message.attachments || message.attachments.length === 0) ? (
+                    <p className="text-sm whitespace-pre-wrap break-words">
+                      {message.content}
+                    </p>
+                  ) : null}
+                  {renderUserAttachments(message.attachments)}
                 </Card>
 
                 <div className="flex justify-end mt-1">

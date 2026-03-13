@@ -7,6 +7,7 @@ import {
   type MembershipRegion,
 } from "@/lib/market/membership-reward";
 import { ensureUserWallet } from "@/services/wallet-supabase";
+import { getDaysByBillingCycle, type BillingCycle } from "@/lib/payment-config";
 
 export type MarketRegion = "CN" | "INTL" | "ALL";
 
@@ -28,13 +29,116 @@ const REFERRAL_INVITER_SIGNUP_BONUS = 0;
 const REFERRAL_INVITED_SIGNUP_BONUS = 0;
 const REFERRAL_INVITER_FIRST_USE_BONUS = 7;
 const REFERRAL_INVITED_FIRST_USE_BONUS = 3;
-const REFERRAL_INVITER_FIRST_PAYMENT_BONUS = 30;
-const REFERRAL_INVITED_FIRST_PAYMENT_BONUS = 7;
+const REFERRAL_INVITER_FIRST_PAYMENT_BONUS = getDaysByBillingCycle("monthly");
+const REFERRAL_INVITED_FIRST_PAYMENT_BONUS = getDaysByBillingCycle("monthly");
 
 const FIRST_PAYMENT_REWARD_TYPES = new Set([
   "first_payment_inviter",
   "first_payment_invited",
 ]);
+
+function normalizeRewardBillingCycle(raw: unknown): BillingCycle {
+  const value = String(raw || "").trim().toLowerCase();
+  return value === "yearly" || value === "annual" || value === "year"
+    ? "yearly"
+    : "monthly";
+}
+
+function inferBillingCycleFromDays(days: number): BillingCycle {
+  return days >= getDaysByBillingCycle("yearly") ? "yearly" : "monthly";
+}
+
+function getBasicMembershipRewardDays(billingCycle: BillingCycle): number {
+  return getDaysByBillingCycle(billingCycle);
+}
+
+async function loadPaymentForReferralReward(
+  region: MembershipRegion,
+  transactionId: string
+): Promise<any | null> {
+  if (!transactionId) return null;
+
+  if (region === "INTL") {
+    const { data: byTransaction, error: transactionError } = await supabaseAdmin
+      .from("payments")
+      .select("*")
+      .eq("transaction_id", transactionId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (transactionError && transactionError.code !== "PGRST116") {
+      throw new Error(transactionError.message);
+    }
+    if (byTransaction) return byTransaction;
+
+    const { data: byOutTradeNo, error: outTradeError } = await supabaseAdmin
+      .from("payments")
+      .select("*")
+      .eq("out_trade_no", transactionId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (outTradeError && outTradeError.code !== "PGRST116") {
+      throw new Error(outTradeError.message);
+    }
+    return byOutTradeNo || null;
+  }
+
+  const db = getDatabase();
+  const byTransaction = await db
+    .collection("payments")
+    .where({ transaction_id: transactionId })
+    .limit(1)
+    .get();
+  const transactionRow = Array.isArray(byTransaction?.data) ? byTransaction.data[0] : null;
+  if (transactionRow) return transactionRow;
+
+  const byOutTradeNo = await db
+    .collection("payments")
+    .where({ out_trade_no: transactionId })
+    .limit(1)
+    .get();
+  return Array.isArray(byOutTradeNo?.data) ? byOutTradeNo.data[0] || null : null;
+}
+
+async function resolveFirstPaymentRewardContext(input: {
+  region: MembershipRegion;
+  transactionId: string;
+  rewardDays?: number | null;
+  billingCycle?: BillingCycle | null;
+}) {
+  const explicitDays = Math.trunc(Number(input.rewardDays || 0));
+  if (Number.isFinite(explicitDays) && explicitDays > 0) {
+    const cycle = input.billingCycle || inferBillingCycleFromDays(explicitDays);
+    return {
+      billingCycle: normalizeRewardBillingCycle(cycle),
+      rewardDays: explicitDays,
+    };
+  }
+
+  const payment = await loadPaymentForReferralReward(input.region, input.transactionId).catch(
+    () => null
+  );
+  const metadata = payment?.metadata && typeof payment.metadata === "object" ? payment.metadata : {};
+  const paymentDays = Math.trunc(Number(metadata?.days || 0));
+  const billingCycle = normalizeRewardBillingCycle(
+    input.billingCycle || metadata?.billingCycle || metadata?.billing_cycle || null
+  );
+
+  if (Number.isFinite(paymentDays) && paymentDays > 0) {
+    return {
+      billingCycle: inferBillingCycleFromDays(paymentDays),
+      rewardDays: paymentDays,
+    };
+  }
+
+  return {
+    billingCycle,
+    rewardDays: getBasicMembershipRewardDays(billingCycle),
+  };
+}
 
 export interface ReferralLinkRecord {
   id: string;
@@ -73,6 +177,8 @@ export interface ReferralStats {
   invitedFirstUseBonus: number;
   inviterFirstPaymentBonus: number;
   invitedFirstPaymentBonus: number;
+  basicMonthlyRewardDays: number;
+  basicYearlyRewardDays: number;
 }
 
 export interface UserInviteCenterData {
@@ -92,6 +198,8 @@ export interface UserInviteCenterData {
   invitedFirstUseBonus: number;
   inviterFirstPaymentBonus: number;
   invitedFirstPaymentBonus: number;
+  basicMonthlyRewardDays: number;
+  basicYearlyRewardDays: number;
 }
 
 export interface ResolvedReferralOwner {
@@ -1501,6 +1609,7 @@ async function grantMembershipReward(input: {
   referenceId: string;
   relatedTransactionId?: string | null;
   meta?: Record<string, any>;
+  planId?: string | null;
 }) {
   const existing = await findRewardByReference(input.region, input.referenceId);
 
@@ -1532,6 +1641,7 @@ async function grantMembershipReward(input: {
     referenceId: input.referenceId,
     reason: input.rewardType,
     relatedTransactionId: input.relatedTransactionId || null,
+    planId: input.planId || null,
   });
 
   if (!grantResult.success) {
@@ -1806,6 +1916,7 @@ export async function grantReferralFirstUseReward(input: {
     rewardType: "first_use_inviter",
     amount: REFERRAL_INVITER_FIRST_USE_BONUS,
     referenceId: inviterReferenceId,
+    planId: "basic",
     meta: {
       invitedUserId,
       firstToolId,
@@ -1819,6 +1930,7 @@ export async function grantReferralFirstUseReward(input: {
     rewardType: "first_use_invited",
     amount: REFERRAL_INVITED_FIRST_USE_BONUS,
     referenceId: invitedReferenceId,
+    planId: "basic",
     meta: {
       inviterUserId,
       firstToolId,
@@ -1917,6 +2029,8 @@ export async function grantReferralFirstPaymentReward(input: {
   transactionId?: string | null;
   provider?: string | null;
   region?: MarketRegion;
+  rewardDays?: number | null;
+  billingCycle?: BillingCycle | null;
 }): Promise<ReferralFirstPaymentRewardResult> {
   const invitedUserId = normalizeUserId(input.invitedUserId);
   if (!invitedUserId) {
@@ -1973,17 +2087,28 @@ export async function grantReferralFirstPaymentReward(input: {
     };
   }
 
+  const rewardContext = await resolveFirstPaymentRewardContext({
+    region: latestRelation.region,
+    transactionId,
+    rewardDays: input.rewardDays,
+    billingCycle: input.billingCycle || null,
+  });
+
   const inviterReward = await grantMembershipReward({
     region: latestRelation.region,
     relationId: latestRelation.id,
     userId: inviterUserId,
     rewardType: "first_payment_inviter",
-    amount: REFERRAL_INVITER_FIRST_PAYMENT_BONUS,
+    amount: rewardContext.rewardDays,
     referenceId: firstPaymentReferenceInviter,
     relatedTransactionId: transactionId,
+    planId: "basic",
     meta: {
       provider: String(input.provider || "").trim() || null,
       invitedUserId,
+      rewardPlanId: "basic",
+      rewardBillingCycle: rewardContext.billingCycle,
+      rewardDays: rewardContext.rewardDays,
     },
   });
 
@@ -1992,12 +2117,16 @@ export async function grantReferralFirstPaymentReward(input: {
     relationId: latestRelation.id,
     userId: invitedUserId,
     rewardType: "first_payment_invited",
-    amount: REFERRAL_INVITED_FIRST_PAYMENT_BONUS,
+    amount: rewardContext.rewardDays,
     referenceId: firstPaymentReferenceInvited,
     relatedTransactionId: transactionId,
+    planId: "basic",
     meta: {
       provider: String(input.provider || "").trim() || null,
       inviterUserId,
+      rewardPlanId: "basic",
+      rewardBillingCycle: rewardContext.billingCycle,
+      rewardDays: rewardContext.rewardDays,
     },
   });
 
@@ -2375,6 +2504,8 @@ export async function getReferralStatsByUser(
     invitedFirstUseBonus: REFERRAL_INVITED_FIRST_USE_BONUS,
     inviterFirstPaymentBonus: REFERRAL_INVITER_FIRST_PAYMENT_BONUS,
     invitedFirstPaymentBonus: REFERRAL_INVITED_FIRST_PAYMENT_BONUS,
+    basicMonthlyRewardDays: getBasicMembershipRewardDays("monthly"),
+    basicYearlyRewardDays: getBasicMembershipRewardDays("yearly"),
   };
 }
 
@@ -2452,6 +2583,8 @@ async function getInviteSummaryByRegion(input: {
     invitedFirstUseBonus: REFERRAL_INVITED_FIRST_USE_BONUS,
     inviterFirstPaymentBonus: REFERRAL_INVITER_FIRST_PAYMENT_BONUS,
     invitedFirstPaymentBonus: REFERRAL_INVITED_FIRST_PAYMENT_BONUS,
+    basicMonthlyRewardDays: getBasicMembershipRewardDays("monthly"),
+    basicYearlyRewardDays: getBasicMembershipRewardDays("yearly"),
   };
 }
 

@@ -6,6 +6,7 @@ export interface MultimodalAttachmentPayload {
   mimeType: string;
   size: number;
   kind: MultimodalAttachmentKind;
+  durationSeconds?: number;
   dataUrl?: string;
   textContent?: string;
 }

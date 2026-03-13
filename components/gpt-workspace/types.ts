@@ -1,4 +1,5 @@
 import type { TaskGraphExecutionRun, TaskGraphSpec } from "@/types/task-graph";
+import type { MultimodalAttachmentPayload } from "@/lib/chat/multimodal-types";
 
 export interface AIResponse {
   agentId: string;
@@ -18,6 +19,7 @@ export interface Message {
   id: string;
   role: "user" | "assistant";
   content: string | AIResponse[];
+  attachments?: MultimodalAttachmentPayload[];
   isMultiAI?: boolean;
   collaborationMode?: CollaborationMode;
   taskGraph?: { spec: TaskGraphSpec; run?: TaskGraphExecutionRun };

@@ -12,6 +12,7 @@ export interface ApplyMembershipDaysInput {
   referenceId: string;
   reason: string;
   relatedTransactionId?: string | null;
+  planId?: string | null;
 }
 
 export interface ApplyMembershipDaysResult {
@@ -25,6 +26,56 @@ function addDays(base: Date, days: number) {
   const next = new Date(base);
   next.setUTCDate(next.getUTCDate() + days);
   return next;
+}
+
+const PLAN_RANK: Record<string, number> = {
+  free: 0,
+  basic: 1,
+  pro: 2,
+  enterprise: 3,
+};
+
+function normalizeMembershipPlanId(raw: unknown, fallback = "pro") {
+  const value = String(raw || "").trim().toLowerCase();
+  if (["basic", "基础版"].includes(value)) return "basic";
+  if (["pro", "专业版"].includes(value)) return "pro";
+  if (["enterprise", "企业版"].includes(value)) return "enterprise";
+  if (["free", "免费版"].includes(value)) return "free";
+  return fallback;
+}
+
+function toMembershipPlanLabel(planId: string) {
+  switch (normalizeMembershipPlanId(planId, "free")) {
+    case "basic":
+      return "Basic";
+    case "pro":
+      return "Pro";
+    case "enterprise":
+      return "Enterprise";
+    default:
+      return "Free";
+  }
+}
+
+function pickLatestDate(values: unknown[]): Date | null {
+  let latest: Date | null = null;
+  for (const value of values) {
+    const parsed = parseIsoDate(value);
+    if (!parsed) continue;
+    if (!latest || parsed.getTime() > latest.getTime()) {
+      latest = parsed;
+    }
+  }
+  return latest;
+}
+
+function resolveEffectivePlanId(currentPlanId: string, requestedPlanId: string, active: boolean) {
+  const normalizedCurrent = normalizeMembershipPlanId(currentPlanId, "free");
+  const normalizedRequested = normalizeMembershipPlanId(requestedPlanId, "pro");
+  if (!active) return "free";
+  return (PLAN_RANK[normalizedCurrent] || 0) > (PLAN_RANK[normalizedRequested] || 0)
+    ? normalizedCurrent
+    : normalizedRequested;
 }
 
 function parseIsoDate(value: unknown): Date | null {
@@ -65,18 +116,56 @@ async function syncIntlMembership(input: ApplyMembershipDaysInput): Promise<Appl
 
   try {
     const wallet = await ensureUserWallet(userId);
-    const currentExp = parseIsoDate(wallet?.plan_exp || null);
+    const { data: latestSubscriptionAny } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id, plan_id, current_period_end")
+      .eq("user_id", userId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    let existingMetadata: Record<string, any> = {};
+    try {
+      const { data: userRes } = await supabaseAdmin.auth.admin.getUserById(userId);
+      existingMetadata =
+        (userRes?.user?.user_metadata as Record<string, any> | undefined) || {};
+    } catch {
+      existingMetadata = {};
+    }
+
+    const currentExp = pickLatestDate([
+      wallet?.plan_exp || null,
+      latestSubscriptionAny?.current_period_end || null,
+      existingMetadata.membership_expires_at || null,
+      existingMetadata.plan_exp || null,
+    ]);
     const nextExp = computeNextMembershipExpiry(currentExp, daysDelta);
     const active = nextExp > new Date();
     const nowIso = new Date().toISOString();
     const nextExpIso = nextExp.toISOString();
+    const currentPlanId =
+      currentExp && currentExp.getTime() > Date.now()
+        ? normalizeMembershipPlanId(
+            wallet?.plan ||
+              wallet?.subscription_tier ||
+              latestSubscriptionAny?.plan_id ||
+              existingMetadata.subscription_plan ||
+              "free",
+            "free"
+          )
+        : "free";
+    const requestedPlanId = normalizeMembershipPlanId(input.planId, "pro");
+    const effectivePlanId = resolveEffectivePlanId(currentPlanId, requestedPlanId, active);
+    const effectivePlanLabel = toMembershipPlanLabel(effectivePlanId);
+    const isLegacyProFlag =
+      active && effectivePlanId !== "free" && effectivePlanId !== "basic";
 
     await supabaseAdmin
       .from("user_wallets")
       .update({
-        plan: active ? "Pro" : "Free",
-        subscription_tier: active ? "Pro" : "Free",
-        pro: active,
+        plan: effectivePlanLabel,
+        subscription_tier: effectivePlanLabel,
+        pro: isLegacyProFlag,
         plan_exp: active ? nextExpIso : null,
         pending_downgrade: null,
         updated_at: nowIso,
@@ -87,7 +176,7 @@ async function syncIntlMembership(input: ApplyMembershipDaysInput): Promise<Appl
       .from("subscriptions")
       .select("id")
       .eq("user_id", userId)
-      .eq("plan_id", "pro")
+      .eq("plan_id", effectivePlanId)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -101,6 +190,7 @@ async function syncIntlMembership(input: ApplyMembershipDaysInput): Promise<Appl
         .from("subscriptions")
         .update({
           status: active ? "active" : "expired",
+          plan_id: effectivePlanId,
           current_period_end: nextExpIso,
           transaction_id: transactionId,
           provider: "referral",
@@ -111,7 +201,7 @@ async function syncIntlMembership(input: ApplyMembershipDaysInput): Promise<Appl
     } else if (active) {
       await supabaseAdmin.from("subscriptions").insert({
         user_id: userId,
-        plan_id: "pro",
+        plan_id: effectivePlanId,
         status: "active",
         current_period_start: nowIso,
         current_period_end: nextExpIso,
@@ -125,17 +215,14 @@ async function syncIntlMembership(input: ApplyMembershipDaysInput): Promise<Appl
     }
 
     try {
-      const { data: userRes } = await supabaseAdmin.auth.admin.getUserById(userId);
-      const existingMetadata =
-        (userRes?.user?.user_metadata as Record<string, any> | undefined) || {};
-
       await supabaseAdmin.auth.admin.updateUserById(userId, {
         user_metadata: {
           ...existingMetadata,
-          pro: active,
-          subscription_plan: active ? "pro" : "free",
+          pro: isLegacyProFlag,
+          subscription_plan: active ? effectivePlanId : "free",
           subscription_status: active ? "active" : "inactive",
           membership_expires_at: active ? nextExpIso : null,
+          plan_exp: active ? nextExpIso : null,
           updated_at: nowIso,
         },
       });
@@ -170,19 +257,45 @@ async function syncCnMembership(input: ApplyMembershipDaysInput): Promise<ApplyM
   try {
     const db = getDatabase();
     const wallet = await ensureCloudBaseUserWallet(userId);
-    const currentExp = parseIsoDate(wallet?.plan_exp || null);
+    const latestAnyResult = await db
+      .collection("subscriptions")
+      .where({ user_id: userId })
+      .orderBy("updated_at", "desc")
+      .limit(1)
+      .get();
+    const latestSubscriptionAny = latestAnyResult?.data?.[0] || null;
+    const currentExp = pickLatestDate([
+      wallet?.plan_exp || null,
+      latestSubscriptionAny?.current_period_end || null,
+      null,
+    ]);
     const nextExp = computeNextMembershipExpiry(currentExp, daysDelta);
     const active = nextExp > new Date();
     const nowIso = new Date().toISOString();
     const nextExpIso = nextExp.toISOString();
+    const currentPlanId =
+      currentExp && currentExp.getTime() > Date.now()
+        ? normalizeMembershipPlanId(
+            wallet?.plan ||
+              wallet?.subscription_tier ||
+              latestSubscriptionAny?.plan_id ||
+              "free",
+            "free"
+          )
+        : "free";
+    const requestedPlanId = normalizeMembershipPlanId(input.planId, "pro");
+    const effectivePlanId = resolveEffectivePlanId(currentPlanId, requestedPlanId, active);
+    const effectivePlanLabel = toMembershipPlanLabel(effectivePlanId);
+    const isLegacyProFlag =
+      active && effectivePlanId !== "free" && effectivePlanId !== "basic";
 
     await db
       .collection("user_wallets")
       .where({ user_id: userId })
       .update({
-        plan: active ? "Pro" : "Free",
-        subscription_tier: active ? "Pro" : "Free",
-        pro: active,
+        plan: effectivePlanLabel,
+        subscription_tier: effectivePlanLabel,
+        pro: isLegacyProFlag,
         plan_exp: active ? nextExpIso : null,
         pending_downgrade: null,
         updated_at: nowIso,
@@ -190,7 +303,7 @@ async function syncCnMembership(input: ApplyMembershipDaysInput): Promise<ApplyM
 
     const latestSubResult = await db
       .collection("subscriptions")
-      .where({ user_id: userId, plan_id: "pro" })
+      .where({ user_id: userId, plan_id: effectivePlanId })
       .orderBy("updated_at", "desc")
       .limit(1)
       .get();
@@ -203,6 +316,7 @@ async function syncCnMembership(input: ApplyMembershipDaysInput): Promise<ApplyM
     if (latestSubscription?._id) {
       await db.collection("subscriptions").doc(latestSubscription._id).update({
         status: active ? "active" : "expired",
+        plan_id: effectivePlanId,
         current_period_end: nextExpIso,
         transaction_id: transactionId,
         provider: "referral",
@@ -212,7 +326,7 @@ async function syncCnMembership(input: ApplyMembershipDaysInput): Promise<ApplyM
     } else if (active) {
       await db.collection("subscriptions").add({
         user_id: userId,
-        plan_id: "pro",
+        plan_id: effectivePlanId,
         status: "active",
         current_period_start: nowIso,
         current_period_end: nextExpIso,
@@ -226,8 +340,10 @@ async function syncCnMembership(input: ApplyMembershipDaysInput): Promise<ApplyM
     }
 
     await db.collection("web_users").doc(userId).update({
-      pro: active,
-      membership_expires_at: active ? nextExpIso : nowIso,
+      pro: isLegacyProFlag,
+      subscription_plan: active ? effectivePlanId : "free",
+      subscription_status: active ? "active" : "inactive",
+      membership_expires_at: active ? nextExpIso : null,
       updated_at: nowIso,
     });
 

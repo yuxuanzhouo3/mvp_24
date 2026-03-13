@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { isChinaRegion } from "@/lib/config/region";
 import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
-import { getUserMonthlyUsage } from "@/lib/ai/token-counter";
-import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
+import { coercePlanId } from "@/lib/plan-quota-settings";
+import { getUserCreditOverview } from "@/lib/billing/engine";
 import {
   getPlanMediaLimits,
   getWalletStats,
@@ -29,7 +29,6 @@ export async function GET(req: NextRequest) {
     }
 
     const userId = authResult.userId;
-
     let plan = "free";
 
     if (isChinaRegion()) {
@@ -65,14 +64,13 @@ export async function GET(req: NextRequest) {
     }
 
     const planId = coercePlanId(plan);
-    const quotaSettings = await getPlanQuotaSettings(planId);
-    const limit = quotaSettings.tokenLimit;
-    const used = await getUserMonthlyUsage(userId);
+    const creditOverview = await getUserCreditOverview(userId, planId);
 
     let multimodal: {
       image: { used: number; limit: number; remaining: number };
       videoAudio: { used: number; limit: number; remaining: number };
     } | null = null;
+
     try {
       await seedWalletForPlan(userId, (plan || "free").toLowerCase());
       const walletStats = await getWalletStats(userId);
@@ -97,10 +95,21 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       {
-        used,
-        limit,
+        used: creditOverview.spentThisMonth,
+        limit: creditOverview.monthlyGrant,
         plan,
-        remaining: Math.max(0, limit - used),
+        remaining: creditOverview.availableCredits,
+        credits: {
+          balance: creditOverview.availableCredits,
+          monthlyGrant: creditOverview.monthlyGrant,
+          dailyCap: creditOverview.dailyCreditCap,
+          spentThisMonth: creditOverview.spentThisMonth,
+          spentToday: creditOverview.spentToday,
+          remainingThisMonth: creditOverview.remainingThisMonth,
+          monthlyGrantBalance: creditOverview.wallet.monthlyGrantBalance,
+          rechargeBalance: creditOverview.wallet.rechargeBalance,
+          bonusBalance: creditOverview.wallet.bonusBalance,
+        },
         multimodal,
       },
       {

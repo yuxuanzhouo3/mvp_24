@@ -307,6 +307,7 @@ export async function saveMultiAIMessage(messageData: {
   user_message_id?: string;
   assistant_message_id?: string;
   user_message: string;
+  user_attachments?: Array<Record<string, unknown>>;
   user_model_input?: string;
   ai_responses: Array<{
     agentId: string;
@@ -328,12 +329,16 @@ export async function saveMultiAIMessage(messageData: {
       messageData.user_model_input.trim().length > 0
         ? messageData.user_model_input.trim()
         : "";
-    const userMessageContent = normalizedUserModelInput
-      ? {
-          content: messageData.user_message,
-          modelInput: normalizedUserModelInput,
-        }
-      : messageData.user_message;
+    const userMessageContent =
+      normalizedUserModelInput || (Array.isArray(messageData.user_attachments) && messageData.user_attachments.length > 0)
+        ? {
+            content: messageData.user_message,
+            ...(normalizedUserModelInput ? { modelInput: normalizedUserModelInput } : {}),
+            ...(Array.isArray(messageData.user_attachments) && messageData.user_attachments.length > 0
+              ? { attachments: messageData.user_attachments }
+              : {}),
+          }
+        : messageData.user_message;
 
     const messages = [
       {

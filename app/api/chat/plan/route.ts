@@ -5,6 +5,7 @@ import { isChinaRegion } from "@/lib/config/region";
 import { aiRouter } from "@/lib/ai/router";
 import type { AIMessage } from "@/lib/ai/types";
 import { getAgentById } from "@/lib/ai/ai-agents.config";
+import { getDefaultRuntimeModel, listEnabledRuntimeModelKeys } from "@/lib/ai/runtime-models";
 import {
   normalizeTaskGraphSpec,
   TaskGraphSpecSchema,
@@ -33,12 +34,13 @@ function extractFirstJsonObject(text: string): unknown {
   return null;
 }
 
-function pickPlannerModel(allowedAgentIds: string[]): string {
+async function pickPlannerModel(allowedAgentIds: string[]): Promise<string> {
+  const availableModels = new Set(await listEnabledRuntimeModelKeys());
   for (const id of allowedAgentIds) {
     const agent = getAgentById(id);
-    if (agent?.model && aiRouter.isModelAvailable(agent.model)) return agent.model;
+    if (agent?.model && availableModels.has(agent.model)) return agent.model;
   }
-  return aiRouter.getDefaultModel();
+  return getDefaultRuntimeModel();
 }
 
 function sanitizeSpec(spec: TaskGraphSpec, allowedAgentIds: string[]): TaskGraphSpec {
@@ -175,8 +177,8 @@ export async function POST(req: NextRequest) {
       })
       .slice(0, 12);
 
-    const plannerModel = pickPlannerModel(allowedAgentIds);
-    const provider = aiRouter.getProviderForModel(plannerModel);
+    const plannerModel = await pickPlannerModel(allowedAgentIds);
+    const provider = await aiRouter.getProviderForModel(plannerModel);
 
     const system = [
       "你是一个任务分解与编排器（Task Graph Planner）。",

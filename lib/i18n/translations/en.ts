@@ -351,8 +351,7 @@ export const en = {
       analysis: "Analysis",
       research: "Research",
       translation: "Translation",
-      general: "General",
-      recommended: "Recommended Combos",
+      general: "General",
     },
 
     capabilities: {
@@ -607,6 +606,28 @@ export const en = {
     sessionDeleted: "Session deleted",
     titleUpdated: "Title updated",
     messagesCleared: "Messages cleared",
+    sidebar: {
+      blockedMessage: "Current conversation is generating. Stop it before switching.",
+      expandSidebar: "Expand sidebar",
+      collapseSidebar: "Collapse sidebar",
+      favorites: "Favorites",
+      noFavorites: "No favorites yet",
+      emptyPreview: "(empty)",
+      removeFavorite: "Remove favorite",
+      collapseFavorites: "Collapse favorites",
+      showMoreFavorites: "Show more (+{count})",
+      deleteInProgress: "Deleting...",
+      confirmDelete: "Confirm delete",
+      notFoundOrNoAccess: "Conversation not found or no access",
+      sessionExpired: "Session expired. Please log in again.",
+      groups: {
+        today: "Today",
+        yesterday: "Yesterday",
+        last7Days: "Last 7 Days",
+        last30Days: "Last 30 Days",
+        earlier: "Earlier",
+      },
+    },
   },
 
   // ==================== Profile ====================

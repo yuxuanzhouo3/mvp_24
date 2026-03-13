@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface SmoothStreamTextProps {
   text: string;
@@ -8,69 +8,101 @@ interface SmoothStreamTextProps {
   className?: string;
 }
 
-const MIN_CHARS_PER_SECOND = 36;
-const MAX_CHARS_PER_SECOND = 220;
-const MAX_CHARS_PER_FRAME = 14;
+const MIN_GRAPHEMES_PER_SECOND = 30;
+const MAX_GRAPHEMES_PER_SECOND = 120;
+const BASE_MAX_GRAPHEMES_PER_FRAME = 6;
+
+function splitGraphemes(text: string) {
+  return Array.from(text || "");
+}
+
+function getMaxUnitsPerFrame(backlog: number) {
+  if (backlog > 240) return 24;
+  if (backlog > 120) return 16;
+  if (backlog > 60) return 10;
+  return BASE_MAX_GRAPHEMES_PER_FRAME;
+}
 
 export function SmoothStreamText({
   text,
   isStreaming,
   className,
 }: SmoothStreamTextProps) {
-  const [visibleText, setVisibleText] = useState(text);
+  const [visibleText, setVisibleText] = useState(() => text);
   const visibleTextRef = useRef(text);
+  const [initialUnits] = useState(() => splitGraphemes(text));
+  const targetUnitsRef = useRef<string[]>(initialUnits);
   const targetTextRef = useRef(text);
+  const visibleCountRef = useRef(initialUnits.length);
   const rafIdRef = useRef<number | null>(null);
   const lastFrameAtRef = useRef<number | null>(null);
-  const charBudgetRef = useRef(0);
+  const unitBudgetRef = useRef(0);
 
-  const setVisible = (next: string) => {
+  const setVisibleTextSync = useCallback((next: string) => {
     visibleTextRef.current = next;
     setVisibleText(next);
-  };
+  }, []);
 
-  const stopRaf = () => {
+  const stopRaf = useCallback(() => {
     if (rafIdRef.current !== null) {
       window.cancelAnimationFrame(rafIdRef.current);
       rafIdRef.current = null;
     }
     lastFrameAtRef.current = null;
-    charBudgetRef.current = 0;
-  };
+    unitBudgetRef.current = 0;
+  }, []);
 
-  const startRafIfNeeded = () => {
+  const syncVisibleToTarget = useCallback(() => {
+    visibleCountRef.current = targetUnitsRef.current.length;
+    setVisibleTextSync(targetTextRef.current);
+  }, [setVisibleTextSync]);
+
+  const appendVisibleUnits = useCallback((count: number) => {
+    if (count <= 0) return;
+    const start = visibleCountRef.current;
+    const end = Math.min(start + count, targetUnitsRef.current.length);
+    if (end <= start) return;
+
+    const chunk = targetUnitsRef.current.slice(start, end).join("");
+    visibleCountRef.current = end;
+    if (chunk.length) {
+      visibleTextRef.current += chunk;
+      setVisibleText(visibleTextRef.current);
+    }
+  }, []);
+
+  const startRafIfNeeded = useCallback(() => {
     if (rafIdRef.current !== null) return;
+
     const tick = (now: number) => {
       const previous = lastFrameAtRef.current ?? now;
-      const deltaMs = Math.min(64, Math.max(8, now - previous));
+      const deltaMs = Math.min(80, Math.max(8, now - previous));
       lastFrameAtRef.current = now;
 
-      const current = visibleTextRef.current;
-      const target = targetTextRef.current;
+      const current = visibleCountRef.current;
+      const target = targetUnitsRef.current.length;
+      const backlog = Math.max(0, target - current);
 
-      if (target.length < current.length || !target.startsWith(current)) {
-        setVisible(target);
-      } else if (current.length < target.length) {
-        const backlog = target.length - current.length;
+      if (backlog > 0) {
         const adaptiveSpeed = Math.min(
-          MAX_CHARS_PER_SECOND,
-          MIN_CHARS_PER_SECOND + backlog * 1.8
+          MAX_GRAPHEMES_PER_SECOND,
+          MIN_GRAPHEMES_PER_SECOND + Math.sqrt(backlog) * 12
         );
-        charBudgetRef.current += (deltaMs / 1000) * adaptiveSpeed;
-        const nextChars = Math.min(
+        unitBudgetRef.current += (deltaMs / 1000) * adaptiveSpeed;
+
+        const maxPerFrame = getMaxUnitsPerFrame(backlog);
+        const nextUnits = Math.min(
           backlog,
-          MAX_CHARS_PER_FRAME,
-          Math.floor(charBudgetRef.current)
+          maxPerFrame,
+          Math.max(1, Math.floor(unitBudgetRef.current))
         );
-        if (nextChars > 0) {
-          charBudgetRef.current -= nextChars;
-          setVisible(target.slice(0, current.length + nextChars));
+        if (nextUnits > 0) {
+          unitBudgetRef.current -= nextUnits;
+          appendVisibleUnits(nextUnits);
         }
       }
 
-      const shouldContinue =
-        visibleTextRef.current.length < targetTextRef.current.length;
-      if (shouldContinue) {
+      if (visibleCountRef.current < targetUnitsRef.current.length) {
         rafIdRef.current = window.requestAnimationFrame(tick);
       } else {
         rafIdRef.current = null;
@@ -79,47 +111,69 @@ export function SmoothStreamText({
     };
 
     rafIdRef.current = window.requestAnimationFrame(tick);
-  };
+  }, [appendVisibleUnits]);
 
   useEffect(() => {
-    targetTextRef.current = text;
-  }, [text]);
-
-  useEffect(() => {
-    if (text.length < visibleTextRef.current.length) {
-      stopRaf();
-      setVisible(text);
-      return;
-    }
-
     if (text.length === 0) {
       stopRaf();
-      setVisible("");
+      targetUnitsRef.current = [];
+      targetTextRef.current = "";
+      visibleCountRef.current = 0;
+      setVisibleTextSync("");
       return;
     }
 
-    if (!text.startsWith(visibleTextRef.current)) {
-      stopRaf();
-      setVisible(text);
-      return;
+    const prevText = targetTextRef.current;
+    if (text !== prevText) {
+      if (text.startsWith(prevText)) {
+        const delta = text.slice(prevText.length);
+        if (delta.length) {
+          targetUnitsRef.current = targetUnitsRef.current.concat(
+            splitGraphemes(delta)
+          );
+        }
+      } else {
+        targetUnitsRef.current = splitGraphemes(text);
+        targetTextRef.current = text;
+        stopRaf();
+        visibleCountRef.current = targetUnitsRef.current.length;
+        setVisibleTextSync(text);
+        return;
+      }
+      targetTextRef.current = text;
     }
 
     if (!isStreaming) {
       stopRaf();
-      setVisible(text);
+      syncVisibleToTarget();
       return;
     }
 
-    if (visibleTextRef.current.length < text.length || rafIdRef.current === null) {
+    if (visibleCountRef.current > targetUnitsRef.current.length) {
+      visibleCountRef.current = targetUnitsRef.current.length;
+      setVisibleTextSync(
+        targetUnitsRef.current.slice(0, visibleCountRef.current).join("")
+      );
+      return;
+    }
+
+    if (visibleCountRef.current < targetUnitsRef.current.length) {
       startRafIfNeeded();
     }
-  }, [isStreaming, text]);
+  }, [
+    isStreaming,
+    setVisibleTextSync,
+    startRafIfNeeded,
+    stopRaf,
+    syncVisibleToTarget,
+    text,
+  ]);
 
   useEffect(() => {
     return () => {
       stopRaf();
     };
-  }, []);
+  }, [stopRaf]);
 
   return (
     <>

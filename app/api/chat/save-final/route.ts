@@ -17,6 +17,7 @@ import { verifyAuthToken, extractTokenFromHeader } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { createMessageId } from "@/lib/chat/message-id";
+import type { MultimodalAttachmentPayload } from "@/lib/chat/multimodal-types";
 
 export const runtime = "nodejs";
 
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
       userMessageId,
       assistantMessageId,
       userMessage,
+      userAttachments,
       finalAnswer,
       finalAgentId,
       finalAgentName,
@@ -54,6 +56,7 @@ export async function POST(req: NextRequest) {
       userMessageId?: string;
       assistantMessageId?: string;
       userMessage: string;
+      userAttachments?: MultimodalAttachmentPayload[];
       finalAnswer: string;
       finalAgentId?: string;
       finalAgentName?: string;
@@ -101,7 +104,7 @@ export async function POST(req: NextRequest) {
         {
           id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),
           role: "user",
-          content: userMessage,
+          content: Array.isArray(userAttachments) && userAttachments.length > 0 ? { content: userMessage, attachments: userAttachments } : userMessage,
           timestamp,
           tokens_used: 0,
         },
@@ -136,7 +139,7 @@ export async function POST(req: NextRequest) {
         messages: [
           {
             id: userMessageId && userMessageId.trim() ? userMessageId : createMessageId("msg"),
-            content: userMessage,
+            content: Array.isArray(userAttachments) && userAttachments.length > 0 ? { content: userMessage, attachments: userAttachments } : userMessage,
             role: "user",
             timestamp,
             tokens_used: 0,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { SubscriptionPlans } from "@/components/payment/subscription-plans";
 import { AddonPackages } from "@/components/payment/addon-packages";
@@ -22,10 +22,10 @@ import { useUser } from "@/components/user-context";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
-import { getAmountByCurrency } from "@/lib/payment-config";
+import { getPlanById, getPlanPrice } from "@/constants/pricing";
 import { detectPlatform } from "@/lib/platform-detection";
 import { getAppleIapProductId } from "@/lib/apple-iap";
-import { getAddonPackageById, getAddonDescription, type ProductType } from "@/constants/addon-packages";
+import { getAddonPackageById, type ProductType } from "@/constants/addon-packages";
 import { useAppleIAPStatus } from "@/hooks/use-apple-iap-status";
 import { isAppleIAPEnabled } from "@/lib/config/apple-iap";
 
@@ -39,6 +39,12 @@ type SelectedPurchase = {
   addonPackageId?: string;
   imageCredits?: number;
   videoAudioCredits?: number;
+};
+
+type PaymentProductCatalog = {
+  currency: string;
+  subscriptions: Record<string, { monthly: number; yearly: number }>;
+  addons: Record<string, { amount: number; imageCredits: number; videoAudioCredits: number }>;
 };
 
 const encodeUtf8ToBase64 = (value: string) => {
@@ -100,12 +106,12 @@ export default function PaymentPage() {
       : null;
 
   // 辅助函数：构建包含debug参数的URL
-  const buildUrl = (path: string) => {
+  const buildUrl = useCallback((path: string) => {
     if (currentDebugParam) {
       return `${path}?debug=${currentDebugParam}`;
     }
     return path;
-  };
+  }, [currentDebugParam]);
 
   // 根据区域配置确定货币
   const getRegionAndCurrency = () => {
@@ -149,6 +155,7 @@ export default function PaymentPage() {
   const [activeTab, setActiveTab] = useState("plans");
   const [isIOSNativeApp, setIsIOSNativeApp] = useState(false);
   const [isIapProcessing, setIsIapProcessing] = useState(false);
+  const [productCatalog, setProductCatalog] = useState<PaymentProductCatalog | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -157,6 +164,28 @@ export default function PaymentPage() {
     const ua = (navigator.userAgent || "").toLowerCase();
     const hasGoNativeFlag = !!(w?.median || w?.gonative || ua.includes("median") || ua.includes("gonative"));
     setIsIOSNativeApp(platformInfo.type === "ios-app" && hasGoNativeFlag);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProductCatalog = async () => {
+      try {
+        const res = await fetch("/api/payment/products", { cache: "no-store" });
+        const json = await res.json().catch(() => null);
+        if (!cancelled && res.ok && json?.success && json?.data) {
+          setProductCatalog(json.data);
+        }
+      } catch (error) {
+        console.error("Failed to load payment products:", error);
+      }
+    };
+
+    loadProductCatalog();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // 支付宝（含手机网页/H5 + 套壳 WebView）：
@@ -281,22 +310,71 @@ export default function PaymentPage() {
     );
   }
 
+  const displayCurrency = productCatalog?.currency || currency;
+  const subscriptionPriceOverrides = productCatalog?.subscriptions || {};
+  const addonPriceOverrides = Object.fromEntries(
+    Object.entries(productCatalog?.addons || {}).map(([key, value]) => [key, value.amount])
+  ) as Record<string, number>;
+  const addonCreditsOverrides = Object.fromEntries(
+    Object.entries(productCatalog?.addons || {}).map(([key, value]) => [
+      key,
+      {
+        imageCredits: Math.max(0, Math.floor(Number(value?.imageCredits || 0))),
+        videoAudioCredits: Math.max(0, Math.floor(Number(value?.videoAudioCredits || 0))),
+      },
+    ])
+  ) as Record<string, { imageCredits: number; videoAudioCredits: number }>;
+
+  const getSubscriptionAmount = (
+    planId: string,
+    billingCycle: "monthly" | "yearly"
+  ) => {
+    const override = subscriptionPriceOverrides[planId.toLowerCase()];
+    const overrideAmount =
+      billingCycle === "monthly" ? override?.monthly : override?.yearly;
+
+    if (typeof overrideAmount === "number" && Number.isFinite(overrideAmount)) {
+      return overrideAmount;
+    }
+
+    return getPlanPrice(
+      planId,
+      billingCycle === "yearly" ? "annual" : "monthly",
+      displayCurrency === "CNY"
+    );
+  };
+
+  const getAddonAmount = (packageId: string) => {
+    const overrideAmount = addonPriceOverrides[packageId];
+    if (typeof overrideAmount === "number" && Number.isFinite(overrideAmount)) {
+      return overrideAmount;
+    }
+
+    const addonPkg = getAddonPackageById(packageId);
+    if (!addonPkg) return 0;
+    return displayCurrency === "CNY" ? addonPkg.priceZh : addonPkg.price;
+  };
+
   const handleSelectPlan = (
     planId: string,
     billingCycle: "monthly" | "yearly"
   ) => {
-    const amount = getAmountByCurrency(currency, billingCycle);
-
+    const plan = getPlanById(planId);
+    const amount = getSubscriptionAmount(planId, billingCycle);
+    const planName =
+      language === "zh"
+        ? plan?.nameZh || plan?.name || planId
+        : plan?.name || plan?.nameZh || planId;
     const description =
       language === "zh"
-        ? `专业版 - ${billingCycle === "monthly" ? "月付" : "年付"}`
-        : `Pro Plan - ${billingCycle === "monthly" ? "Monthly" : "Yearly"}`;
+        ? `${planName} - ${billingCycle === "monthly" ? "月付" : "年付"}`
+        : `${planName} - ${billingCycle === "monthly" ? "Monthly" : "Yearly"}`;
 
     setSelectedPlan({
       planId,
       billingCycle,
       amount,
-      currency,
+      currency: displayCurrency,
       description,
       productType: "SUBSCRIPTION",
     });
@@ -315,19 +393,31 @@ export default function PaymentPage() {
       return;
     }
 
-    const description = getAddonDescription(addonPkg, language === "zh");
-    const amount = currency === "CNY" ? addonPkg.priceZh : addonPkg.price;
+    const resolvedCredits = addonCreditsOverrides[addonPkg.id];
+    const imageCredits =
+      typeof resolvedCredits?.imageCredits === "number"
+        ? resolvedCredits.imageCredits
+        : addonPkg.imageCredits;
+    const videoAudioCredits =
+      typeof resolvedCredits?.videoAudioCredits === "number"
+        ? resolvedCredits.videoAudioCredits
+        : addonPkg.videoAudioCredits;
+    const description =
+      language === "zh"
+        ? `${addonPkg.nameZh} - ${imageCredits}张图 + ${videoAudioCredits}个视频/音频`
+        : `${addonPkg.name} - ${imageCredits} images + ${videoAudioCredits} video/audio`;
+    const amount = getAddonAmount(addonPkg.id);
 
     setSelectedPlan({
       planId: addonPkg.id,
       billingCycle: "monthly",
       amount,
-      currency,
+      currency: displayCurrency,
       description,
       productType: "ADDON",
       addonPackageId: addonPkg.id,
-      imageCredits: addonPkg.imageCredits,
-      videoAudioCredits: addonPkg.videoAudioCredits,
+      imageCredits,
+      videoAudioCredits,
     });
     setPaymentResult(null);
     setActiveTab("payment");
@@ -668,7 +758,8 @@ export default function PaymentPage() {
             <SubscriptionPlans
               onSelectPlan={handleSelectPlan}
               currentPlan={currentPlan}
-              currency={currency}
+              currency={displayCurrency}
+              priceOverrides={subscriptionPriceOverrides}
               onSwitchToPayment={() => setActiveTab("payment")}
               membershipExpiresAt={effectiveMembershipExpiresAt}
             />
@@ -678,7 +769,9 @@ export default function PaymentPage() {
           <TabsContent value="addons">
             <AddonPackages
               onSelectPackage={handleSelectAddon}
-              currency={currency}
+              currency={displayCurrency}
+              priceOverrides={addonPriceOverrides}
+              creditsOverrides={addonCreditsOverrides}
             />
           </TabsContent>
 

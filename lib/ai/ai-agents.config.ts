@@ -39,6 +39,7 @@ function convertToLegacyFormat(agent: AIAgent): AIAgentConfig {
     anthropic: "bg-orange-500",
     deepseek: "bg-gray-600",
     qwen: "bg-blue-500",
+    mistral: "bg-purple-500",
   };
 
   return {
@@ -66,12 +67,46 @@ function convertToLegacyFormat(agent: AIAgent): AIAgentConfig {
   };
 }
 
-const CHINA_AI_AGENTS_LIBRARY: AIAgentConfig[] = chinaAIConfig.agents.map(
-  convertToLegacyFormat
-);
-const GLOBAL_AI_AGENTS_LIBRARY: AIAgentConfig[] = globalAIConfig.agents.map(
-  convertToLegacyFormat
-);
+function inferProvider(model: string): string {
+  const lower = model.toLowerCase();
+  if (lower.includes("claude") || lower.startsWith("anthropic/")) return "anthropic";
+  if (lower.includes("gpt") || lower.startsWith("openai/")) return "openai";
+  if (lower.includes("gemini") || lower.startsWith("google/")) return "google";
+  if (lower.includes("mistral") || lower.includes("codestral") || lower.includes("devstral")) {
+    return "openrouter";
+  }
+  if (lower.includes("deepseek")) return "deepseek";
+  if (lower.includes("qwen") || lower.includes("qwq") || lower.includes("kimi")) return "qwen";
+  return model.includes("/") ? model.split("/")[0] || "openrouter" : "openrouter";
+}
+
+function buildDynamicFallbackAgent(id: string): AIAgentConfig | undefined {
+  const model = String(id || "").trim();
+  if (!model) return undefined;
+  const provider = inferProvider(model);
+  return {
+    id: model,
+    name: model,
+    provider,
+    model,
+    description: "Imported model",
+    role: model,
+    color: "bg-gray-500",
+    systemPrompt: `You are ${model}.`,
+    temperature: 0.7,
+    maxTokens: 4096,
+    capabilities: {
+      analysis: true,
+    },
+    tags: ["analysis"],
+    enabled: true,
+    isPremium: false,
+    order: 999,
+  };
+}
+
+const CHINA_AI_AGENTS_LIBRARY: AIAgentConfig[] = chinaAIConfig.agents.map(convertToLegacyFormat);
+const GLOBAL_AI_AGENTS_LIBRARY: AIAgentConfig[] = globalAIConfig.agents.map(convertToLegacyFormat);
 
 export const AI_AGENTS_LIBRARY: AIAgentConfig[] = [
   ...CHINA_AI_AGENTS_LIBRARY,
@@ -88,7 +123,10 @@ export function getEnabledAgents(): AIAgentConfig[] {
 
 export function getAgentById(id: string): AIAgentConfig | undefined {
   const regionMatched = getRegionAgentLibrary().find((a) => a.id === id);
-  return regionMatched || AI_AGENTS_LIBRARY.find((a) => a.id === id);
+  if (regionMatched) return regionMatched;
+  const globalMatched = AI_AGENTS_LIBRARY.find((a) => a.id === id);
+  if (globalMatched) return globalMatched;
+  return buildDynamicFallbackAgent(id);
 }
 
 export function validateAgents(agentIds: string[], userPlan: string) {

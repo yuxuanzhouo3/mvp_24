@@ -29,6 +29,8 @@ import {
   setPendingFavoriteScroll,
   useMessageFavorites,
 } from "@/hooks/use-message-favorites";
+import { useLanguage } from "@/components/language-provider";
+import { interpolate, useTranslations } from "@/lib/i18n";
 
 interface ChatSession {
   id: string;
@@ -44,32 +46,32 @@ interface ChatHistorySidebarProps {
   isWorkspaceProcessing?: boolean;
 }
 
-type SessionGroupName = "今天" | "昨天" | "最近7天" | "最近30天" | "更早";
-type SessionGroups = Record<SessionGroupName, ChatSession[]>;
+type SessionGroupKey = "today" | "yesterday" | "last7Days" | "last30Days" | "earlier";
+type SessionGroups = Record<SessionGroupKey, ChatSession[]>;
 
 const FAVORITES_INITIAL_VISIBLE = 8;
-const SESSION_GROUP_ORDER: SessionGroupName[] = [
-  "今天",
-  "昨天",
-  "最近7天",
-  "最近30天",
-  "更早",
+const SESSION_GROUP_ORDER: SessionGroupKey[] = [
+  "today",
+  "yesterday",
+  "last7Days",
+  "last30Days",
+  "earlier",
 ];
-const DEFAULT_EXPANDED_GROUPS: Record<SessionGroupName, boolean> = {
-  今天: true,
-  昨天: true,
-  最近7天: true,
-  最近30天: false,
-  更早: false,
+const DEFAULT_EXPANDED_GROUPS: Record<SessionGroupKey, boolean> = {
+  today: true,
+  yesterday: true,
+  last7Days: true,
+  last30Days: false,
+  earlier: false,
 };
 
 function createEmptySessionGroups(): SessionGroups {
   return {
-    今天: [],
-    昨天: [],
-    最近7天: [],
-    最近30天: [],
-    更早: [],
+    today: [],
+    yesterday: [],
+    last7Days: [],
+    last30Days: [],
+    earlier: [],
   };
 }
 
@@ -88,15 +90,15 @@ function groupSessionsByTime(sessions: ChatSession[]): SessionGroups {
   for (const session of sessions) {
     const sessionDate = new Date(session.created_at);
     if (sessionDate >= today) {
-      groups["今天"].push(session);
+      groups.today.push(session);
     } else if (sessionDate >= yesterday) {
-      groups["昨天"].push(session);
+      groups.yesterday.push(session);
     } else if (sessionDate >= sevenDaysAgo) {
-      groups["最近7天"].push(session);
+      groups.last7Days.push(session);
     } else if (sessionDate >= thirtyDaysAgo) {
-      groups["最近30天"].push(session);
+      groups.last30Days.push(session);
     } else {
-      groups["更早"].push(session);
+      groups.earlier.push(session);
     }
   }
 
@@ -109,6 +111,8 @@ export function ChatHistorySidebar({
   onNewChat,
   isWorkspaceProcessing = false,
 }: ChatHistorySidebarProps) {
+  const { language } = useLanguage();
+  const t = useTranslations(language);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -126,7 +130,7 @@ export function ChatHistorySidebar({
   );
   const [isDeleting, setIsDeleting] = useState(false);
   const favorites = useMessageFavorites();
-  const blockedMessage = "当前对话生成中，请先停止再切换会话";
+  const blockedMessage = t.history.sidebar.blockedMessage;
 
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
   const visibleFavorites = useMemo(
@@ -164,13 +168,13 @@ export function ChatHistorySidebar({
       setSessions(data.sessions || []);
     } catch (error) {
       console.error("加载对话历史失败:", error);
-      toast.error("加载对话历史失败");
+      toast.error(t.history.loadFailed);
     } finally {
       if (showLoading) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [t.history.loadFailed]);
 
   useEffect(() => {
     void loadSessions();
@@ -222,7 +226,7 @@ export function ChatHistorySidebar({
     };
   }, []);
 
-  const toggleGroup = useCallback((group: SessionGroupName) => {
+  const toggleGroup = useCallback((group: SessionGroupKey) => {
     setExpandedGroups((prev) => ({
       ...prev,
       [group]: !prev[group],
@@ -241,7 +245,7 @@ export function ChatHistorySidebar({
       setIsDeleting(true);
       const { token, error: authError } = await getClientAuthToken();
       if (authError || !token) {
-        toast.error("请先登录");
+        toast.error(t.errors.loginRequired);
         return;
       }
 
@@ -257,23 +261,23 @@ export function ChatHistorySidebar({
         const message =
           payload?.error ||
           (res.status === 404
-            ? "对话不存在或无权限"
+            ? t.history.sidebar.notFoundOrNoAccess
             : res.status === 401
-              ? "登录状态已过期，请重新登录"
-              : "删除失败");
+              ? t.history.sidebar.sessionExpired
+              : t.history.deleteFailed);
         throw new Error(message);
       }
 
-      toast.success("删除成功");
+      toast.success(t.success.deleted);
       setDeleteTargetSessionId(null);
       await loadSessions();
     } catch (error) {
       console.error("删除失败:", error);
-      toast.error(error instanceof Error ? error.message : "删除失败");
+      toast.error(error instanceof Error ? error.message : t.history.deleteFailed);
     } finally {
       setIsDeleting(false);
     }
-  }, [deleteTargetSessionId, loadSessions]);
+  }, [deleteTargetSessionId, loadSessions, t.errors.loginRequired, t.history.deleteFailed, t.history.sidebar.notFoundOrNoAccess, t.history.sidebar.sessionExpired, t.success.deleted]);
 
   const safeSessionSelect = useCallback(
     (sessionId: string) => {
@@ -290,6 +294,14 @@ export function ChatHistorySidebar({
     onNewChat();
   }, [blockedMessage, isWorkspaceProcessing, onNewChat]);
 
+  const groupLabels: Record<SessionGroupKey, string> = {
+    today: t.history.sidebar.groups.today,
+    yesterday: t.history.sidebar.groups.yesterday,
+    last7Days: t.history.sidebar.groups.last7Days,
+    last30Days: t.history.sidebar.groups.last30Days,
+    earlier: t.history.sidebar.groups.earlier,
+  };
+
   return (
     <div
       className={`flex flex-col h-full border-r bg-white transition-all duration-300 ${
@@ -302,7 +314,11 @@ export function ChatHistorySidebar({
           variant="ghost"
           size="sm"
           className="h-8 w-8 p-0"
-          title={isCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+          title={
+            isCollapsed
+              ? t.history.sidebar.expandSidebar
+              : t.history.sidebar.collapseSidebar
+          }
         >
           {isCollapsed ? (
             <ChevronRight className="h-4 w-4" />
@@ -319,7 +335,7 @@ export function ChatHistorySidebar({
             variant="default"
             size="sm"
             className="w-8 h-8 p-0"
-            title="新对话"
+            title={t.sidebar.newConversation}
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -331,7 +347,7 @@ export function ChatHistorySidebar({
             size="sm"
           >
             <Plus className="h-4 w-4" />
-            新对话
+            {t.sidebar.newConversation}
           </Button>
         )}
       </div>
@@ -339,10 +355,12 @@ export function ChatHistorySidebar({
       {!isCollapsed && (
         <ScrollArea className="flex-1 px-2">
           {loading ? (
-            <div className="text-center py-8 text-sm text-gray-500">加载中...</div>
+            <div className="text-center py-8 text-sm text-gray-500">
+              {t.common.loading}
+            </div>
           ) : sessions.length === 0 ? (
             <div className="text-center py-8 text-sm text-gray-500">
-              暂无对话历史
+              {t.sidebar.noConversations}
             </div>
           ) : (
             <div className="space-y-2 pb-4 pr-2">
@@ -351,7 +369,9 @@ export function ChatHistorySidebar({
                   onClick={() => setFavoritesExpanded((value) => !value)}
                   className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
                 >
-                  <span className="min-w-0 truncate text-left">收藏对话</span>
+                  <span className="min-w-0 truncate text-left">
+                    {t.history.sidebar.favorites}
+                  </span>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className="text-xs text-gray-400 tabular-nums">
                       {favorites.items.length}
@@ -366,13 +386,15 @@ export function ChatHistorySidebar({
 
                 {favoritesExpanded &&
                   (favorites.items.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-gray-400">暂无收藏</div>
+                    <div className="px-3 py-2 text-xs text-gray-400">
+                      {t.history.sidebar.noFavorites}
+                    </div>
                   ) : (
                     <div className="space-y-1 mb-2">
                       {visibleFavorites.map((fav) => {
                         const sessionTitle =
                           sessions.find((session) => session.id === fav.sessionId)?.title ||
-                          "新对话";
+                          t.sidebar.newConversation;
 
                         return (
                           <div
@@ -392,7 +414,7 @@ export function ChatHistorySidebar({
                             <Star className="h-4 w-4 flex-shrink-0 text-blue-600" />
                             <div className="min-w-0 w-0 flex-1">
                               <div className="text-sm truncate text-gray-800">
-                                {fav.preview || "(空)"}
+                                {fav.preview || t.history.sidebar.emptyPreview}
                               </div>
                               <div className="text-[11px] truncate text-gray-500">
                                 {sessionTitle}
@@ -404,7 +426,7 @@ export function ChatHistorySidebar({
                                 e.stopPropagation();
                                 favorites.remove(fav.id);
                               }}
-                              title="取消收藏"
+                              title={t.history.sidebar.removeFavorite}
                             >
                               <Trash2 className="h-3 w-3 text-gray-500" />
                             </button>
@@ -419,10 +441,10 @@ export function ChatHistorySidebar({
                           onClick={() => setShowAllFavorites((value) => !value)}
                         >
                           {showAllFavorites
-                            ? "收起收藏"
-                            : `显示更多（+${
-                                favorites.items.length - FAVORITES_INITIAL_VISIBLE
-                              }）`}
+                            ? t.history.sidebar.collapseFavorites
+                            : interpolate(t.history.sidebar.showMoreFavorites, {
+                                count: favorites.items.length - FAVORITES_INITIAL_VISIBLE,
+                              })}
                         </Button>
                       )}
                     </div>
@@ -455,7 +477,7 @@ export function ChatHistorySidebar({
                             : "text-gray-700"
                         }`}
                       >
-                        {session.title || "新对话"}
+                        {session.title || t.sidebar.newConversation}
                       </span>
                       <button
                         className={`p-1 hover:bg-gray-200 rounded flex-shrink-0 transition-opacity ${
@@ -464,7 +486,7 @@ export function ChatHistorySidebar({
                             : "opacity-0 group-hover:opacity-100"
                         }`}
                         onClick={(e) => requestDelete(session.id, e)}
-                        title="删除对话"
+                        title={t.history.deleteSession}
                       >
                         <Trash2 className="h-3 w-3 text-gray-500" />
                       </button>
@@ -484,7 +506,7 @@ export function ChatHistorySidebar({
                         onClick={() => toggleGroup(group)}
                         className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-gray-500 hover:text-gray-700 transition-colors"
                       >
-                        <span>{group}</span>
+                        <span>{groupLabels[group]}</span>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-gray-400">
                             {groupSessions.length}
@@ -523,7 +545,7 @@ export function ChatHistorySidebar({
                                     : "text-gray-700"
                                 }`}
                               >
-                                {session.title || "新对话"}
+                                {session.title || t.sidebar.newConversation}
                               </span>
                               <button
                                 className={`p-1 hover:bg-gray-200 rounded flex-shrink-0 transition-opacity ${
@@ -532,7 +554,7 @@ export function ChatHistorySidebar({
                                     : "opacity-0 group-hover:opacity-100"
                                 }`}
                                 onClick={(e) => requestDelete(session.id, e)}
-                                title="删除对话"
+                                title={t.history.deleteSession}
                               >
                                 <Trash2 className="h-3 w-3 text-gray-500" />
                               </button>
@@ -559,15 +581,19 @@ export function ChatHistorySidebar({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除对话</AlertDialogTitle>
+            <AlertDialogTitle>{t.history.deleteSession}</AlertDialogTitle>
             <AlertDialogDescription>
-              删除后无法恢复，是否确认删除这个对话？
+              {t.history.deleteSessionConfirm}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeleting}>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={isDeleting}>
+              {t.common.cancel}
+            </AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteConfirm} disabled={isDeleting}>
-              {isDeleting ? "删除中..." : "确认删除"}
+              {isDeleting
+                ? t.history.sidebar.deleteInProgress
+                : t.history.sidebar.confirmDelete}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

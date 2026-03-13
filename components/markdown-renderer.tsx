@@ -5,6 +5,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, Check } from "lucide-react";
 import { useState } from "react";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 interface MarkdownRendererProps {
   content: string;
@@ -26,26 +28,23 @@ export function MarkdownRenderer({ content, className = "" }: MarkdownRendererPr
         remarkPlugins={[remarkGfm]}
         components={{
           // 代码块
-          code: (props: any) => {
-            const { inline, className: codeClassName, children, ...rest } = props;
-            const match = (codeClassName || "").match(/language-(\w+)/);
-            const language = match ? match[1] : "";
-            const code = String(children).replace(/\n$/, "");
-
-            if (inline) {
-              return (
-                <code
-                  className="bg-gray-100 dark:bg-gray-800 rounded px-2 py-1 text-red-600 dark:text-red-400 font-mono text-sm"
-                  {...rest}
-                >
-                  {children}
-                </code>
-              );
+          pre: ({ children }) => {
+            if (!React.isValidElement(children)) {
+              return <pre>{children}</pre>;
             }
 
+            const codeProps = children.props as {
+              className?: string;
+              children?: React.ReactNode;
+            };
+            const codeClassName = codeProps.className || "";
+            const match = codeClassName.match(/language-([\w-]+)/);
+            const language = match ? match[1].toLowerCase() : "text";
+            const code = String(codeProps.children || "").replace(/\n$/, "");
+
             return (
-              <div className="relative bg-gray-900 rounded-lg overflow-hidden mb-4">
-                {language && (
+              <div className="relative mb-4 overflow-hidden rounded-lg border border-[#2d2d30] bg-[#1e1e1e]">
+                {language && language !== "text" && (
                   <div className="absolute top-2 right-2 text-xs text-gray-400 bg-gray-800 px-2 py-1 rounded">
                     {language}
                   </div>
@@ -61,14 +60,39 @@ export function MarkdownRenderer({ content, className = "" }: MarkdownRendererPr
                     <Copy className="w-4 h-4" />
                   )}
                 </button>
-                <pre className="overflow-x-auto pt-10 pb-4 px-4">
-                  <code className={`text-sm text-gray-100 font-mono ${codeClassName}`}>
-                    {children}
-                  </code>
-                </pre>
+                <SyntaxHighlighter
+                  language={language}
+                  style={vscDarkPlus}
+                  customStyle={{
+                    margin: 0,
+                    padding: "2.75rem 1rem 1rem",
+                    background: "#1e1e1e",
+                    fontSize: "0.875rem",
+                    lineHeight: "1.6",
+                    overflowX: "auto",
+                  }}
+                  codeTagProps={{
+                    style: {
+                      fontFamily:
+                        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                    },
+                  }}
+                  wrapLongLines
+                  PreTag="div"
+                >
+                  {code}
+                </SyntaxHighlighter>
               </div>
             );
           },
+          code: ({ children, ...rest }: any) => (
+            <code
+              className="bg-gray-100 dark:bg-gray-800 rounded px-2 py-1 text-red-600 dark:text-red-400 font-mono text-sm"
+              {...rest}
+            >
+              {children}
+            </code>
+          ),
 
           // 标题
           h1: ({ children }) => (

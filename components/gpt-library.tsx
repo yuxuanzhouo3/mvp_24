@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -9,22 +9,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Search,
   Plus,
-  Star,
-  Brain,
-  Briefcase,
-  Palette,
   Code,
   BookOpen,
   TrendingUp,
   Zap,
   Sparkles,
   MessageSquare,
+  Palette,
+  Star,
 } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import { interpolate, useTranslations } from "@/lib/i18n";
-import { AVAILABLE_TEMPLATES, type Template, type TemplateStep } from "@/lib/templates";
+import { useUser } from "@/components/user-context";
+import { getStoredModelFavorites, toggleStoredModelFavorite, MODEL_FAVORITES_EVENT } from "@/lib/ai/model-favorites";
 
-// 使用新的 AI 配置 API 接口
 interface AIAgent {
   id: string;
   name: string;
@@ -35,6 +33,11 @@ interface AIAgent {
   maxTokens?: number;
   temperature?: number;
   icon?: string;
+  isFree?: boolean;
+  pricingLevel?: "free" | "low" | "medium" | "high";
+  unitPrice?: number;
+  openrouterRank?: number;
+  openrouterOrder?: string;
 }
 
 interface GPTLibraryProps {
@@ -54,15 +57,20 @@ export function GPTLibrary({
 }: GPTLibraryProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("all");
+  const [pricingFilter, setPricingFilter] = useState<"all" | "free" | "low" | "medium" | "high">("all");
   const { language } = useLanguage();
+  const { user } = useUser();
+  const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const t = useTranslations(language);
-
-  // 从新的 AI 配置 API 获取智能体
   const [enabledAgents, setEnabledAgents] = useState<AIAgent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [region, setRegion] = useState<string>("");
+  useEffect(() => {
+    const syncFavorites = () => setFavoriteIds(getStoredModelFavorites(user?.id));
+    syncFavorites();
+    window.addEventListener(MODEL_FAVORITES_EVENT, syncFavorites as EventListener);
+    return () => window.removeEventListener(MODEL_FAVORITES_EVENT, syncFavorites as EventListener);
+  }, [user?.id]);
 
-  // 从 API 加载 AI 配置（自动根据用户区域）
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -70,22 +78,14 @@ export function GPTLibrary({
         setLoading(true);
         const res = await fetch("/api/config/ai");
         if (!res.ok) {
-          console.error("Failed to load AI config:", res.statusText);
           if (mounted) setEnabledAgents([]);
           return;
         }
         const data = await res.json();
         if (mounted) {
-          setRegion(data.region || "");
           setEnabledAgents(data.agents || []);
-          console.log(
-            `✅ 加载 ${data.region} 区域配置，共 ${
-              data.agents?.length || 0
-            } 个 AI`
-          );
         }
-      } catch (err) {
-        console.error("Failed to load AI config:", err);
+      } catch {
         if (mounted) setEnabledAgents([]);
       } finally {
         if (mounted) setLoading(false);
@@ -96,17 +96,15 @@ export function GPTLibrary({
     };
   }, []);
 
-  // 根据AI能力返回图标ID
   function getIconIdForAgent(agent: AIAgent): string {
     if (agent.capabilities?.includes("coding")) return "code";
     if (agent.capabilities?.includes("creative")) return "palette";
-    if (agent.capabilities?.includes("analysis")) return "trending";
     if (agent.capabilities?.includes("research")) return "book";
+    if (agent.capabilities?.includes("analysis")) return "trending";
     if (agent.capabilities?.includes("translation")) return "message";
     return "sparkles";
   }
 
-  // 获取React组件对应的图标
   function getIconComponent(iconId: string) {
     const iconMap: Record<string, React.ComponentType<any>> = {
       code: Code,
@@ -119,27 +117,28 @@ export function GPTLibrary({
     return iconMap[iconId] || Sparkles;
   }
 
-  // 转换成UI需要的格式
-  const gptLibrary = enabledAgents.map((agent: AIAgent) => ({
-    ...agent,
-    iconId: getIconIdForAgent(agent),
-    category: getCategoryForAgent(agent),
-    color: getColorForProvider(agent.provider),
-    role: agent.name,
-    systemPrompt: `You are ${agent.name}, ${agent.description}`,
-    enabled: true,
-  }));
-
-  // 根据AI能力返回分类
   function getCategoryForAgent(agent: AIAgent): string {
     if (agent.capabilities?.includes("coding")) return "coding";
     if (agent.capabilities?.includes("creative")) return "creative";
-    if (agent.capabilities?.includes("analysis")) return "analysis";
     if (agent.capabilities?.includes("research")) return "research";
-    return "general";
+    if (agent.capabilities?.includes("analysis")) return "analysis";
+    return "analysis";
   }
 
-  // 根据 provider 返回颜色
+  function getPricingBadgeLabel(agent: AIAgent): string {
+    if (agent.pricingLevel === "low") return language === "zh" ? "低价" : "Low";
+    if (agent.pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
+    if (agent.pricingLevel === "high") return language === "zh" ? "高价" : "High";
+    return language === "zh" ? "最低价" : "Lowest Price";
+  }
+
+  function getPricingBadgeVariant(agent: AIAgent): "default" | "secondary" | "outline" {
+    if (agent.pricingLevel === "high") return "default";
+    if (agent.pricingLevel === "medium") return "outline";
+    if (agent.pricingLevel === "low") return "secondary";
+    return "secondary";
+  }
+
   function getColorForProvider(provider: string): string {
     const colors: Record<string, string> = {
       openai: "bg-green-500",
@@ -148,82 +147,68 @@ export function GPTLibrary({
       qwen: "bg-blue-500",
       ernie: "bg-purple-500",
       glm: "bg-indigo-500",
+      google: "bg-cyan-500",
+      openrouter: "bg-slate-600",
     };
     return colors[provider] || "bg-gray-500";
   }
 
-  function mapStepToCapabilities(step: TemplateStep): string[] {
-    const text = `${step.role} ${step.task} ${step.requiredTags.join(" ")}`.toLowerCase();
-    const capabilities = new Set<string>();
+  const gptLibrary = useMemo(
+    () =>
+      enabledAgents.map((agent: AIAgent) => ({
+        ...agent,
+        iconId: getIconIdForAgent(agent),
+        category: getCategoryForAgent(agent),
+        color: getColorForProvider(agent.provider),
+        role: agent.name,
+        systemPrompt: `You are ${agent.name}, ${agent.description}`,
+        enabled: true,
+        isPopular: agent.openrouterOrder === "most-popular" && typeof agent.openrouterRank === "number" && agent.openrouterRank > 0,
+      })),
+    [enabledAgents]
+  );
 
-    if (/代码|开发|程序|架构|审查|coding|code/.test(text)) capabilities.add("coding");
-    if (/分析|逻辑|推理|策略|战略|市场|analysis/.test(text)) capabilities.add("analysis");
-    if (/创意|文案|写作|润色|creative|content/.test(text)) capabilities.add("creative");
-    if (/研究|调研|资料|research/.test(text)) capabilities.add("research");
-    if (/翻译|translation/.test(text)) capabilities.add("translation");
-    if (/对话|助手|conversation/.test(text)) capabilities.add("conversation");
-
-    return Array.from(capabilities);
-  }
-
-  function resolveTemplateAgentIds(template: Template): string[] {
-    const pickedIds: string[] = [];
-
-    for (const step of template.aiSequence) {
-      const exact = gptLibrary.find((agent) => agent.id === step.id);
-      if (exact && !pickedIds.includes(exact.id)) {
-        pickedIds.push(exact.id);
-        continue;
-      }
-
-      const needCaps = mapStepToCapabilities(step);
-      const ranked = gptLibrary
-        .filter((agent) => !pickedIds.includes(agent.id))
-        .map((agent) => {
-          const score = needCaps.reduce(
-            (acc, cap) => acc + (agent.capabilities?.includes(cap) ? 1 : 0),
-            0
-          );
-          return { agent, score };
-        })
-        .sort((a, b) => b.score - a.score);
-
-      if (ranked[0] && ranked[0].score > 0) {
-        pickedIds.push(ranked[0].agent.id);
-      }
-    }
-
-    // 兜底：若模板步骤都无法匹配，至少给一个可用 AI，避免按钮无效
-    if (pickedIds.length === 0 && gptLibrary.length > 0) {
-      pickedIds.push(gptLibrary[0].id);
-    }
-
-    return pickedIds;
-  }
-
-  const recommendedCombos = AVAILABLE_TEMPLATES.map((template) => ({
-    id: template.id,
-    name: template.name,
-    description: template.description,
-    agentIds: resolveTemplateAgentIds(template),
-  }));
 
   const filteredGPTs = gptLibrary.filter((gpt: any) => {
     const matchesSearch =
       gpt.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      gpt.description.toLowerCase().includes(searchQuery.toLowerCase());
-
+      gpt.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      gpt.model.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      gpt.provider.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCategory =
-      activeCategory === "all" || gpt.category === activeCategory;
-    return matchesSearch && matchesCategory;
+      activeCategory === "all" ||
+      (activeCategory === "popular" ? !!gpt.isPopular : gpt.category === activeCategory);
+    const matchesPricing = pricingFilter === "all" || gpt.pricingLevel === pricingFilter;
+    return matchesSearch && matchesCategory && matchesPricing;
   });
+
+  const visibleGPTs = useMemo(() => {
+    const items = [...filteredGPTs];
+    items.sort((a: any, b: any) => {
+      const favA = favoriteIds.includes(a.id) || favoriteIds.includes(a.model) ? 1 : 0;
+      const favB = favoriteIds.includes(b.id) || favoriteIds.includes(b.model) ? 1 : 0;
+      if (favA !== favB) return favB - favA;
+      const rankA = typeof a.openrouterRank === "number" ? a.openrouterRank : Number.MAX_SAFE_INTEGER;
+      const rankB = typeof b.openrouterRank === "number" ? b.openrouterRank : Number.MAX_SAFE_INTEGER;
+      if (rankA !== rankB) return rankA - rankB;
+      return String(a.name || a.model).localeCompare(String(b.name || b.model));
+    });
+    if (activeCategory === "popular") {
+      items.sort((a: any, b: any) => {
+        const rankA = typeof a.openrouterRank === "number" ? a.openrouterRank : Number.MAX_SAFE_INTEGER;
+        const rankB = typeof b.openrouterRank === "number" ? b.openrouterRank : Number.MAX_SAFE_INTEGER;
+        if (rankA !== rankB) return rankA - rankB;
+        return String(a.name || a.model).localeCompare(String(b.name || b.model));
+      });
+    }
+    return items;
+  }, [activeCategory, favoriteIds, filteredGPTs]);
 
   const addGPT = (gpt: any) => {
     if (
       selectedGPTs.length < 4 &&
       !selectedGPTs.find((selected) => selected.id === gpt.id)
     ) {
-      // 手动添加AI时，移除task属性，确保使用并行模式
       const cleanGPT = { ...gpt };
       delete cleanGPT.task;
       delete cleanGPT.templateStep;
@@ -236,320 +221,141 @@ export function GPTLibrary({
   };
 
   const removeGPT = (gptId: string) => {
-    const newSelectedGPTs = selectedGPTs
-      .filter((gpt) => gpt.id !== gptId)
-      .map((gpt) => {
-        // 清除task属性和UI属性
-        const cleanGPT = { ...gpt };
-        delete (cleanGPT as any).task;
-        delete (cleanGPT as any).templateStep;
-        delete (cleanGPT as any).iconId;
-        delete (cleanGPT as any).color;
-        delete (cleanGPT as any).category;
-        delete (cleanGPT as any).systemPrompt;
-        return cleanGPT;
-      });
+    const newSelectedGPTs = selectedGPTs.filter((gpt) => gpt.id !== gptId).map((gpt) => {
+      const cleanGPT = { ...gpt };
+      delete (cleanGPT as any).task;
+      delete (cleanGPT as any).templateStep;
+      delete (cleanGPT as any).iconId;
+      delete (cleanGPT as any).color;
+      delete (cleanGPT as any).category;
+      delete (cleanGPT as any).systemPrompt;
+      return cleanGPT;
+    });
     setSelectedGPTs(newSelectedGPTs);
-    // 删除AI后，切换到并行模式（因为用户进行了自定义修改）
     if (setCollaborationMode && collaborationMode === "sequential") {
       setCollaborationMode("parallel");
     }
   };
 
-  const addCombo = (combo: any) => {
-    // 如果是模板选择，设置协作模式为sequential
-    if (setCollaborationMode) {
-      setCollaborationMode("sequential");
-    }
-
-    const comboGPTs = combo.agentIds
-      .map((id: string) => gptLibrary.find((gpt: any) => gpt.id === id))
-      .filter(Boolean);
-
-    // 为模板选择的AI添加task属性
-    const template = AVAILABLE_TEMPLATES.find((t) => t.id === combo.id);
-    const newGPTs = comboGPTs
-      .map((gpt: any, index: number) => {
-        const step = template?.aiSequence[index];
-        const cleanGPT: any = {
-          id: gpt.id,
-          name: gpt.name,
-          provider: gpt.provider,
-          model: gpt.model,
-          description: gpt.description,
-          capabilities: gpt.capabilities,
-          maxTokens: gpt.maxTokens,
-          temperature: gpt.temperature,
-          task: step?.task,
-          role: step?.role,
-          templateStep: step,
-        };
-        return cleanGPT;
-      })
-      .filter(
-        (gpt: any) => !selectedGPTs.find((selected) => selected.id === gpt.id)
-      );
-
-    if (newGPTs.length === 0) {
-      return;
-    }
-
-    if (selectedGPTs.length + newGPTs.length <= 4) {
-      setSelectedGPTs([...selectedGPTs, ...newGPTs]);
-    }
-  };
 
   return (
     <div className="flex-1 p-6 overflow-y-auto">
       <div className="max-w-6xl mx-auto space-y-6">
-        {/* Header */}
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">
-            {t.library.title}
-          </h2>
-          <p className="text-gray-600">
-            {interpolate(t.library.subtitleWithCount, {
-              count: enabledAgents.length,
-            })}
-          </p>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">{t.library.title}</h2>
+          <p className="text-gray-600">{interpolate(t.library.subtitleWithCount, { count: enabledAgents.length })}</p>
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <Input
-            placeholder={t.library.search}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <Input placeholder={t.library.search} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant={pricingFilter === "all" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("all")}>
+              {language === "zh" ? "全部价格" : "All Prices"}
+            </Button>
+            <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("free")}>
+              {language === "zh" ? "最低价" : "Lowest Price"}
+            </Button>
+            <Button variant={pricingFilter === "low" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("low")}>
+              {language === "zh" ? "低价" : "Low"}
+            </Button>
+            <Button variant={pricingFilter === "medium" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("medium")}>
+              {language === "zh" ? "中价" : "Medium"}
+            </Button>
+            <Button variant={pricingFilter === "high" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("high")}>
+              {language === "zh" ? "高价" : "High"}
+            </Button>
+          </div>
         </div>
 
         <Tabs value={activeCategory} onValueChange={setActiveCategory}>
           <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1 sm:grid sm:grid-cols-6 sm:gap-0 sm:overflow-visible">
-            <TabsTrigger
-              value="all"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.all}
-            </TabsTrigger>
-            <TabsTrigger
-              value="coding"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.coding}
-            </TabsTrigger>
-            <TabsTrigger
-              value="creative"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.creative}
-            </TabsTrigger>
-            <TabsTrigger
-              value="analysis"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.analysis}
-            </TabsTrigger>
-            <TabsTrigger
-              value="research"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.research}
-            </TabsTrigger>
-            <TabsTrigger
-              value="recommended"
-              className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm"
-            >
-              {t.library.categories.recommended}
-            </TabsTrigger>
+            <TabsTrigger value="all" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{t.library.categories.all}</TabsTrigger>
+            <TabsTrigger value="popular" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{language === "zh" ? "最热门" : "Most Popular"}</TabsTrigger>
+            <TabsTrigger value="coding" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{t.library.categories.coding}</TabsTrigger>
+            <TabsTrigger value="creative" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{t.library.categories.creative}</TabsTrigger>
+            <TabsTrigger value="analysis" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{t.library.categories.analysis}</TabsTrigger>
+            <TabsTrigger value="research" className="min-w-max shrink-0 text-xs sm:min-w-0 sm:shrink sm:text-sm">{t.library.categories.research}</TabsTrigger>
           </TabsList>
 
-          {/* Recommended Combos Tab */}
-          {activeCategory === "recommended" && (
-            <TabsContent value="recommended" className="space-y-4 mt-6">
-              <div className="grid gap-4">
-                {recommendedCombos.map((combo, index) => (
-                  <Card
-                    key={index}
-                    className="p-6 hover:shadow-lg transition-all"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-lg mb-2">
-                          {combo.name}
-                        </h3>
-                        <p className="text-gray-600 text-sm mb-3">
-                          {combo.description}
-                        </p>
-                        <div className="flex items-center flex-wrap gap-2">
-                          {combo.agentIds.map((agentId) => {
-                            const agent = gptLibrary.find(
-                              (g) => g.id === agentId
-                            );
-                            return agent ? (
-                              <Badge
-                                key={agentId}
-                                variant="outline"
-                                className="flex items-center space-x-1 bg-gray-50 text-gray-700 border-gray-200"
-                              >
-                                <div
-                                  className={`w-3 h-3 rounded-full ${agent.color}`}
-                                ></div>
-                                <span>{agent.name}</span>
-                              </Badge>
-                            ) : null;
-                          })}
-                        </div>
-                      </div>
-                      <Button onClick={() => addCombo(combo)} className="ml-4">
-                        <Plus className="w-4 h-4 mr-2" />
-                        {t.library.add}
-                      </Button>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </TabsContent>
-          )}
-
-          {/* AI Agents Grid */}
-          {activeCategory !== "recommended" && (
-            <TabsContent value={activeCategory} className="space-y-4 mt-6">
+          <TabsContent value={activeCategory} className="space-y-4 mt-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredGPTs.map((gpt: any) => {
-                  const isSelected = selectedGPTs.find(
-                    (selected) => selected.id === gpt.id
-                  );
+                {visibleGPTs.map((gpt: any) => {
+                  const isSelected = selectedGPTs.find((selected) => selected.id === gpt.id);
                   const Icon = getIconComponent(gpt.iconId);
-
                   return (
-                    <Card
-                      key={gpt.id}
-                      className={`p-6 transition-all hover:shadow-lg ${
-                        isSelected ? "ring-2 ring-blue-500" : ""
-                      }`}
-                    >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                          <div
-                            className={`w-12 h-12 rounded-lg ${gpt.color} flex items-center justify-center`}
-                          >
+                    <Card key={gpt.id} className={`p-6 transition-all hover:shadow-lg flex h-full flex-col ${isSelected ? "ring-2 ring-blue-500" : ""}`}>
+                      <div className="flex items-start gap-3 mb-4">
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className={`w-12 h-12 rounded-lg ${gpt.color} flex items-center justify-center shrink-0`}>
                             <Icon className="w-6 h-6 text-white" />
                           </div>
-                          <div>
-                            <h3 className="font-semibold text-lg">
-                              {gpt.name}
-                            </h3>
+                          <div className="min-w-0">
+                            <h3 className="font-semibold text-lg">{gpt.name}</h3>
                             <p className="text-sm text-gray-600">{gpt.role}</p>
+                            {typeof gpt.openrouterRank === "number" && gpt.openrouterRank > 0 && <p className="text-xs text-blue-600">#{gpt.openrouterRank}</p>}
                           </div>
                         </div>
+                        <button
+                          type="button"
+                          className="ml-auto shrink-0 rounded p-1 text-gray-400 hover:text-amber-500"
+                          onClick={() => setFavoriteIds(toggleStoredModelFavorite(gpt.id || gpt.model, user?.id))}
+                          title={favoriteIds.includes(gpt.id) || favoriteIds.includes(gpt.model) ? (language === "zh" ? "取消收藏" : "Unfavorite") : (language === "zh" ? "收藏模型" : "Favorite model")}
+                        >
+                          <Star className={`h-4 w-4 ${(favoriteIds.includes(gpt.id) || favoriteIds.includes(gpt.model)) ? "fill-amber-400 text-amber-500" : ""}`} />
+                        </button>
                       </div>
 
-                      <p className="text-gray-700 text-sm mb-4">
-                        {gpt.description}
-                      </p>
+                      <p className="text-gray-700 text-sm mb-4">{gpt.description}</p>
 
-                      {/* Model Info */}
                       <div className="mb-3">
-                        <div className="text-xs font-medium text-gray-500 mb-1">
-                          {t.library.model}
-                        </div>
+                        <div className="text-xs font-medium text-gray-500 mb-1">{t.library.model}</div>
                         <div className="flex items-center space-x-2">
-                          <Badge variant="outline" className="text-xs">
-                            {gpt.provider}
-                          </Badge>
-                          <span className="text-xs text-gray-600">
-                            {gpt.model}
-                          </span>
+                          <Badge variant="outline" className="text-xs">{gpt.provider}</Badge>
+                          <Badge variant={getPricingBadgeVariant(gpt)} className="text-xs">{getPricingBadgeLabel(gpt)}</Badge>
+                          <span className="text-xs text-gray-600">{gpt.model}</span>
                         </div>
                       </div>
 
-                      {/* Capabilities */}
                       <div className="mb-4">
-                        <div className="text-xs font-medium text-gray-500 mb-2">
-                          {t.library.capabilitiesTitle}
-                        </div>
+                        <div className="text-xs font-medium text-gray-500 mb-2">{t.library.capabilitiesTitle}</div>
                         <div className="flex flex-wrap gap-1">
-                          {gpt.capabilities?.includes("coding") && (
-                            <Badge variant="outline" className="text-xs">
-                              {t.library.capabilities.coding}
-                            </Badge>
-                          )}
-                          {gpt.capabilities?.includes("analysis") && (
-                            <Badge variant="outline" className="text-xs">
-                              {t.library.capabilities.analysis}
-                            </Badge>
-                          )}
-                          {gpt.capabilities?.includes("creative") && (
-                            <Badge variant="outline" className="text-xs">
-                              {t.library.capabilities.creative}
-                            </Badge>
-                          )}
-                          {gpt.capabilities?.includes("research") && (
-                            <Badge variant="outline" className="text-xs">
-                              {t.library.capabilities.research}
-                            </Badge>
-                          )}
-                          {gpt.capabilities?.includes("translation") && (
-                            <Badge variant="outline" className="text-xs">
-                              {t.library.capabilities.translation}
-                            </Badge>
-                          )}
+                          {gpt.capabilities?.includes("coding") && <Badge variant="outline" className="text-xs">{t.library.capabilities.coding}</Badge>}
+                          {gpt.capabilities?.includes("analysis") && <Badge variant="outline" className="text-xs">{t.library.capabilities.analysis}</Badge>}
+                          {gpt.capabilities?.includes("creative") && <Badge variant="outline" className="text-xs">{t.library.capabilities.creative}</Badge>}
+                          {gpt.capabilities?.includes("research") && <Badge variant="outline" className="text-xs">{t.library.capabilities.research}</Badge>}
+                          {gpt.capabilities?.includes("translation") && <Badge variant="outline" className="text-xs">{t.library.capabilities.translation}</Badge>}
                         </div>
                       </div>
 
-                      <Button
-                        className="w-full"
-                        variant={isSelected ? "secondary" : "default"}
-                        onClick={() =>
-                          isSelected ? removeGPT(gpt.id) : addGPT(gpt)
-                        }
-                        disabled={!isSelected && selectedGPTs.length >= 4}
-                      >
-                        {isSelected ? (
-                          <span>{t.library.remove}</span>
-                        ) : (
-                          <>
-                            <Plus className="w-4 h-4 mr-2" />
-                            {t.library.add}
-                          </>
-                        )}
+                      <Button className="mt-auto w-full" variant={isSelected ? "secondary" : "default"} onClick={() => isSelected ? removeGPT(gpt.id) : addGPT(gpt)} disabled={!isSelected && selectedGPTs.length >= 4}>
+                        {isSelected ? <span>{t.library.remove}</span> : <><Plus className="w-4 h-4 mr-2" />{t.library.add}</>}
                       </Button>
                     </Card>
                   );
                 })}
               </div>
 
-              {filteredGPTs.length === 0 && (
+              {visibleGPTs.length === 0 && (
                 <div className="text-center py-12">
                   <Search className="w-16 h-16 text-gray-300 mx-auto mb-4" />
                   <p className="text-gray-500">{t.library.noResults}</p>
                 </div>
               )}
-            </TabsContent>
-          )}
+          </TabsContent>
         </Tabs>
 
-        {/* Selected Count */}
         {selectedGPTs.length > 0 && (
           <Card className="p-4 bg-blue-50 border-blue-200 sticky bottom-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <Zap className="w-5 h-5 text-blue-600" />
-                <span className="font-medium text-blue-900">
-                  {interpolate(t.library.selectedCount, {
-                    count: selectedGPTs.length,
-                  })}
-                </span>
+                <span className="font-medium text-blue-900">{interpolate(t.library.selectedCount, { count: selectedGPTs.length })}</span>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSelectedGPTs([])}
-              >
-                {t.library.clearAll}
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => setSelectedGPTs([])}>{t.library.clearAll}</Button>
             </div>
           </Card>
         )}

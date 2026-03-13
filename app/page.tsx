@@ -40,7 +40,7 @@ function PlatformContent() {
   const [workspaceProcessing, setWorkspaceProcessing] = useState(false);
   const [collaborationMode, setCollaborationMode] = useState<
     "normal" | "parallel" | "sequential" | "deep" | "graph"
-  >("parallel");
+  >("normal");
 
   const { activeView, setActiveView } = useApp();
   const { loading, refreshUser } = useUser();
@@ -128,6 +128,20 @@ function PlatformContent() {
     }
   }, [searchParams, handleMiniProgramLogin]);
 
+  const resolveDefaultAgent = useCallback(
+    (agents: AIAgent[]) => {
+      if (!Array.isArray(agents) || agents.length === 0) return null;
+      if (!isChinaRegion()) {
+        return (
+          agents.find((agent) => agent.model === "x-ai/grok-4.1-fast" || agent.id === "x-ai/grok-4.1-fast") ||
+          agents[0]
+        );
+      }
+      return agents[0];
+    },
+    []
+  );
+
   // 从API加载可用的AI模型
   useEffect(() => {
     loadAvailableAIs();
@@ -165,11 +179,12 @@ function PlatformContent() {
         throw new Error("Failed to load AI config");
       }
       const data = await res.json();
-      setAvailableAIs(data.agents || []);
+      const agents = Array.isArray(data.agents) ? data.agents : [];
+      setAvailableAIs(agents);
 
-      // 默认选择第一个AI
-      if (data.agents && data.agents.length > 0) {
-        setSelectedGPTs([data.agents[0]]);
+      const defaultAgent = resolveDefaultAgent(agents);
+      if (defaultAgent) {
+        setSelectedGPTs([defaultAgent]);
       }
     } catch (error) {
       console.error("加载AI配置失败:", error);
@@ -186,7 +201,9 @@ function PlatformContent() {
     setCurrentSessionId(null);
     setContextSessionId(undefined);
     clearMessages();
-    setSelectedGPTs(availableAIs[0] ? [availableAIs[0]] : []);
+    setCollaborationMode("normal");
+    const defaultAgent = resolveDefaultAgent(availableAIs);
+    setSelectedGPTs(defaultAgent ? [defaultAgent] : []);
   };
 
   // 选择历史对话

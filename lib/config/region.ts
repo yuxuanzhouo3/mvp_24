@@ -94,7 +94,7 @@ export const RegionConfig = {
    * AI 服务提供商
    */
   ai: {
-    provider: isChinaRegion() ? "deepseek" : "vercel-ai-gateway",
+    provider: isChinaRegion() ? "deepseek" : "openrouter",
     availableModels: isChinaRegion()
       ? ["deepseek-chat", "deepseek-coder"]
       : [
@@ -166,8 +166,8 @@ export function validateRegionConfig(): { valid: boolean; errors: string[] } {
     if (!process.env.PAYPAL_CLIENT_ID) {
       errors.push("❌ 国际区域缺少 PAYPAL_CLIENT_ID");
     }
-    if (!process.env.AI_GATEWAY_API_KEY) {
-      errors.push("❌ 国际区域缺少 AI_GATEWAY_API_KEY");
+    if (!process.env.OPENROUTER_API) {
+      errors.push("❌ 国际区域缺少 OPENROUTER_API");
     }
   }
 

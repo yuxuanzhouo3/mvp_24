@@ -33,12 +33,8 @@ export const MODEL_CONFIG = {
   },
   // International version models (English)
   international: {
-    defaultModel: "codestral-latest",
-    availableModels: [
-      "codestral-latest",
-      "codestral-2412",
-      "mistral-medium-latest",
-    ],
+    defaultModel: "openai/gpt-4o-mini",
+    availableModels: ["openai/gpt-4o-mini"],
     apiBaseUrl: process.env.INTERNATIONAL_API_BASE_URL || "/api/international",
   },
 };

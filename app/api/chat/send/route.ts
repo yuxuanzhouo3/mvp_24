@@ -8,7 +8,7 @@ import { NextRequest } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { aiRouter } from "@/lib/ai/router";
 import type { BaseAIProvider } from "@/lib/ai/providers/base-provider";
-import { calculateCost, getUserMonthlyUsage, recordUsage } from "@/lib/ai/token-counter";
+import { calculateCost, recordUsage } from "@/lib/ai/token-counter";
 import { AIMessage } from "@/lib/ai/types";
 import { edgeChatRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
@@ -19,10 +19,18 @@ import {
 } from "@/lib/cloudbase-db";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
-import { coercePlanId, getPlanQuotaSettings } from "@/lib/plan-quota-settings";
+import { coercePlanId } from "@/lib/plan-quota-settings";
 import { createMessageId } from "@/lib/chat/message-id";
 import { resolveSmartModel } from "@/lib/ai/smart-model-router";
+import { getDefaultRuntimeModel, listEnabledRuntimeModelKeys } from "@/lib/ai/runtime-models";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
+import {
+  authorizeCreditUsage,
+  computeBillingForModel,
+  estimateTextMetrics,
+  releaseCreditUsageReservation,
+  settleCreditUsage,
+} from "@/lib/billing/engine";
 
 // 使用Node.js Runtime以支持winston日志库
 export const runtime = "nodejs";
@@ -378,8 +386,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const availableModels = aiRouter.getAllModels();
-    const routerDefaultModel = aiRouter.getDefaultModel();
+    const availableModels = await listEnabledRuntimeModelKeys();
+    const routerDefaultModel = await getDefaultRuntimeModel();
     const collaborationModeForRouting =
       typeof sessionConfig?.collaborationMode === "string"
         ? sessionConfig.collaborationMode
@@ -447,28 +455,6 @@ export async function POST(req: NextRequest) {
     }
 
     const planId = coercePlanId(subscriptionPlan);
-    const quotaSettings = await getPlanQuotaSettings(planId);
-
-    if (quotaSettings.tokenLimit > 0) {
-      let usedTokens = 0;
-      try {
-        usedTokens = await getUserMonthlyUsage(userId);
-      } catch (err) {
-        console.error("[chat/send] Failed to check token quota:", err);
-      }
-
-      if (usedTokens >= quotaSettings.tokenLimit) {
-        return new Response(
-          JSON.stringify({
-            error: "Monthly token quota exceeded",
-            message:
-              "You have reached your monthly token limit. Please upgrade or wait for the next cycle.",
-            quota: { limit: quotaSettings.tokenLimit, used: usedTokens },
-          }),
-          { status: 429, headers: { "Content-Type": "application/json" } }
-        );
-      }
-    }
 
     // ========================================
     // 5. 获取会话历史消息（带过滤）
@@ -572,6 +558,70 @@ export async function POST(req: NextRequest) {
     const validMaxTokens = maxTokens && !isNaN(maxTokens) && maxTokens > 0 ? maxTokens : undefined;
     const validTemperature = temperature !== undefined && !isNaN(temperature) ? temperature : undefined;
 
+    const billingRequestId = `chat:${sessionId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+    let billingEstimateModel = smartAttemptModels[0] || effectiveModel;
+    let billingEstimateMetrics = await estimateTextMetrics({
+      messages,
+      modelKey: billingEstimateModel,
+      maxTokens: validMaxTokens,
+    });
+
+    for (const candidateModel of smartAttemptModels) {
+      try {
+        const candidateMetrics = await estimateTextMetrics({
+          messages,
+          modelKey: candidateModel,
+          maxTokens: validMaxTokens,
+        });
+        const candidateBilling = await computeBillingForModel({
+          modelKey: candidateModel,
+          metrics: candidateMetrics,
+        });
+        const currentBilling = await computeBillingForModel({
+          modelKey: billingEstimateModel,
+          metrics: billingEstimateMetrics,
+        });
+        if (candidateBilling.credits > currentBilling.credits) {
+          billingEstimateModel = candidateModel;
+          billingEstimateMetrics = candidateMetrics;
+        }
+      } catch (billingEstimateError) {
+        console.warn("[chat/send] Failed to estimate candidate billing:", billingEstimateError);
+      }
+    }
+
+    const creditReservation = await authorizeCreditUsage({
+      userId,
+      sessionId,
+      requestId: billingRequestId,
+      planId,
+      modelKey: billingEstimateModel,
+      metrics: billingEstimateMetrics,
+      metadata: {
+        route: "chat/send",
+        requestedModel: model,
+        reservedModel: billingEstimateModel,
+      },
+    });
+
+    if (!creditReservation.success) {
+      return new Response(
+        JSON.stringify({
+          error: "Insufficient credits",
+          message: creditReservation.error || "Not enough credits",
+          credits: {
+            required: creditReservation.computation?.credits || 0,
+            balance: creditReservation.wallet
+              ? creditReservation.wallet.monthlyGrantBalance +
+                creditReservation.wallet.rechargeBalance +
+                creditReservation.wallet.bonusBalance
+              : 0,
+          },
+        }),
+        { status: 402, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
     // ========================================
     // 8. 创建SSE流式响应
     // ========================================
@@ -609,7 +659,7 @@ export async function POST(req: NextRequest) {
             let attemptProvider: BaseAIProvider;
 
             try {
-              attemptProvider = aiRouter.getProviderForModel(attemptModel);
+              attemptProvider = await aiRouter.getProviderForModel(attemptModel);
             } catch (providerError) {
               lastStreamError = providerError;
               const hasMoreFallback = attemptIndex < smartAttemptModels.length - 1;
@@ -866,6 +916,28 @@ export async function POST(req: NextRequest) {
             costUsd,
           });
 
+          const creditSettlement = await settleCreditUsage({
+            userId,
+            sessionId,
+            requestId: billingRequestId,
+            planId,
+            modelKey: responseModel,
+            metrics: {
+              input_tokens: promptTokens,
+              output_tokens: completionTokens,
+              request_count: 1,
+            },
+            metadata: {
+              route: "chat/send",
+              requestedModel: model,
+              usageSource,
+            },
+          });
+
+          if (!creditSettlement.success) {
+            console.error("[chat/send] Failed to settle credits:", creditSettlement.error);
+          }
+
           if (fullResponse.trim().length > 0) {
             await grantReferralFirstUseReward({
               invitedUserId: userId,
@@ -923,6 +995,13 @@ export async function POST(req: NextRequest) {
 
           controller.close();
         } catch (error) {
+          await releaseCreditUsageReservation({
+            userId,
+            requestId: billingRequestId,
+            reason: error instanceof Error ? error.message : "stream_error",
+          }).catch((releaseError) => {
+            console.error("[chat/send] Failed to release reserved credits:", releaseError);
+          });
           console.error("[Chat API] Stream error:", error);
           console.error("[Chat API] Error details:", {
             message: error instanceof Error ? error.message : "Unknown error",

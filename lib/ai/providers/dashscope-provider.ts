@@ -28,6 +28,7 @@ export class DashScopeProvider extends BaseAIProvider {
     "qwen-plus-2025-12-01",
     "qwen-plus",
     "qwen-flash",
+    "qwen3.5-flash",
     "qwen-max",
     "kimi-k2-thinking",
     "qwen2.5-7b-instruct-1m",
@@ -317,7 +318,7 @@ export class DashScopeProvider extends BaseAIProvider {
   ): Promise<AIResponse> {
     try {
       this.validateMessages(messages);
-      const model = this.getValidModel(options?.model);
+      const model = options?.model || this.defaultModel;
 
       const completion = await this.client.chat.completions.create({
         model,
@@ -369,7 +370,7 @@ export class DashScopeProvider extends BaseAIProvider {
   ): AsyncIterableIterator<StreamChunk> {
     try {
       this.validateMessages(messages);
-      const model = this.getValidModel(options?.model);
+      const model = options?.model || this.defaultModel;
 
       const stream = await this.client.chat.completions.create({
         model,

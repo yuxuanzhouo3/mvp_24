@@ -67,6 +67,13 @@ const REQUIRED_COLLECTIONS = [
   "advertisements", // 广告集合
   "app_releases", // 应用发布集合
   "plan_quota_settings", // 套餐月额度配置
+  "billing_settings",
+  "payment_product_catalog",
+  "ai_model_catalog",
+  "ai_model_price_snapshots",
+  "credit_wallets",
+  "credit_ledger",
+  "ai_usage_events",
   "web_referral_links",
   "web_referral_clicks",
   "web_referral_relations",
@@ -184,6 +191,31 @@ async function initCloudBaseCollections() {
 
   console.log("   plan_quota_settings:");
   console.log("     - 唯一索引: plan_id\n");
+
+  console.log("   billing_settings:");
+  console.log("     - 唯一索引: region\n");
+
+  console.log("   payment_product_catalog:");
+  console.log("     - 复合索引: (product_key, region)\n");
+
+  console.log("   ai_model_catalog:");
+  console.log("     - 复合索引: (model_key, region)");
+  console.log("     - 普通索引: provider\n");
+
+  console.log("   ai_model_price_snapshots:");
+  console.log("     - 复合索引: (model_key, region, created_at)\n");
+
+  console.log("   credit_wallets:");
+  console.log("     - 唯一索引: user_id\n");
+
+  console.log("   credit_ledger:");
+  console.log("     - 唯一索引: idempotency_key (可选/非空)");
+  console.log("     - 复合索引: (user_id, created_at)\n");
+
+  console.log("   ai_usage_events:");
+  console.log("     - 唯一索引: request_id");
+  console.log("     - 复合索引: (user_id, created_at)\n");  console.log("     - 唯一索引: idempotency_key (可选/非空)");
+  console.log("     - 复合索引: (pool_id, created_at)\n");
 
   console.log("   web_referral_links:");
   console.log("     - 唯一索引: share_code");

@@ -52,7 +52,7 @@ const envSchema = z.object({
     .optional(),
   DASHSCOPE_API_KEY: z.string().optional(), // 阿里云通义千问
   DASHSCOPE_BASE_URL: z.string().url().optional(),
-  AI_GATEWAY_API_KEY: z.string().optional(), // Vercel AI Gateway
+  OPENROUTER_API: z.string().optional(), // OpenRouter
 
   // 地理分流配置
   ALLOWED_ORIGINS: z.string().optional(),
@@ -136,7 +136,7 @@ export function checkSensitiveDataExposure(): {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "DASHSCOPE_API_KEY",
-    "AI_GATEWAY_API_KEY",
+    "OPENROUTER_API",
     "SUPABASE_SERVICE_ROLE_KEY",
     "SENTRY_DSN", // 虽然DSN是公开的，但仍需检查
   ];

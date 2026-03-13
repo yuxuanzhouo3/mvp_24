@@ -11,20 +11,23 @@ import { isChinaRegion } from "@/lib/config/region";
 import { paymentRateLimit } from "@/lib/rate-limit";
 import { captureException } from "@/lib/sentry";
 import { logInfo, logError, logWarn } from "@/lib/logger";
-import {
-  getPricingByMethod,
-  getDaysByBillingCycle,
-} from "@/lib/payment-config";
+import { getDaysByBillingCycle } from "@/lib/payment-config";
 import { getAddonPackageById, getAddonDescription } from "@/constants/addon-packages";
+import { getPlanById } from "@/constants/pricing";
 import type { PaymentMethod, BillingCycle } from "@/lib/payment-config";
 import {
   getActiveSubscriptionSnapshot,
   normalizePlanId,
 } from "@/app/api/payment/lib/subscription-plan-guard";
+import { getBillingSettings } from "@/lib/billing/settings";
+import {
+  getAddonProductPrice,
+  getSubscriptionProductPrice,
+} from "@/lib/payment-product-catalog";
 
 const MOBILE_USER_AGENT = /android|iphone|ipad|ipod|mobile/i;
 
-type ProductType = "SUBSCRIPTION" | "ADDON" | "ONETIME";
+type ProductType = "SUBSCRIPTION" | "ADDON" | "ONETIME" | "CREDITS";
 
 interface CreatePaymentBody {
   method: PaymentMethod;
@@ -35,6 +38,8 @@ interface CreatePaymentBody {
   addonPackageId?: string;
   imageCredits?: number;
   videoAudioCredits?: number;
+  rechargeAmount?: number;
+  creditAmount?: number;
 }
 
 function getMetadataActivePlan(user: any): string | null {
@@ -94,12 +99,19 @@ async function handlePaymentCreate(request: NextRequest) {
       productType = "SUBSCRIPTION",
       planId,
       addonPackageId,
+      rechargeAmount,
+      creditAmount,
     } = body;
 
-    const normalizedProductType: "SUBSCRIPTION" | "ADDON" =
-      String(productType).toUpperCase() === "ADDON" ? "ADDON" : "SUBSCRIPTION";
+    const normalizedProductType: "SUBSCRIPTION" | "ADDON" | "CREDITS" =
+      String(productType).toUpperCase() === "ADDON"
+        ? "ADDON"
+        : String(productType).toUpperCase() === "CREDITS"
+          ? "CREDITS"
+          : "SUBSCRIPTION";
     const isAddon = normalizedProductType === "ADDON";
-    const requestedPlanId = normalizePlanId(planId) || "pro";
+    const isCreditRecharge = normalizedProductType === "CREDITS";
+    const requestedPlanId = normalizePlanId(planId) || "free";
 
     logInfo("Creating payment", {
       operationId,
@@ -122,7 +134,7 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    if (!isAddon && planId && !normalizePlanId(planId)) {
+    if (!isAddon && !isCreditRecharge && planId && !normalizePlanId(planId)) {
       return NextResponse.json(
         {
           success: false,
@@ -132,7 +144,7 @@ async function handlePaymentCreate(request: NextRequest) {
       );
     }
 
-    if (!isAddon) {
+    if (!isAddon && !isCreditRecharge) {
       let activePlan = getMetadataActivePlan(user);
       try {
         const activeSubscription = await getActiveSubscriptionSnapshot(user.id);
@@ -169,14 +181,12 @@ async function handlePaymentCreate(request: NextRequest) {
       }
     }
 
-    const pricing = getPricingByMethod(method);
-    const currency = pricing.currency;
-
-    const effectiveBillingCycle: BillingCycle = isAddon
+    const billingRegion = isChinaRegion() ? "CN" : "INTL";
+    const effectiveBillingCycle: BillingCycle = isAddon || isCreditRecharge
       ? "monthly"
       : (billingCycle as BillingCycle);
 
-    if (!isAddon && !["monthly", "yearly"].includes(effectiveBillingCycle)) {
+    if (!isAddon && !isCreditRecharge && !["monthly", "yearly"].includes(effectiveBillingCycle)) {
       return NextResponse.json(
         {
           success: false,
@@ -189,9 +199,16 @@ async function handlePaymentCreate(request: NextRequest) {
     let amount = 0;
     let days = 0;
     let description = "";
+    let resolvedCreditAmount = 0;
+    let currency = billingRegion === "CN" ? "CNY" : "USD";
+    let addonImageCredits = 0;
+    let addonVideoAudioCredits = 0;
     let addonPackage:
       | ReturnType<typeof getAddonPackageById>
       | undefined;
+
+    const billingSettings = await getBillingSettings(billingRegion);
+    currency = String(billingSettings.defaultCurrency || currency).toUpperCase();
 
     if (isAddon) {
       if (!addonPackageId) {
@@ -209,15 +226,95 @@ async function handlePaymentCreate(request: NextRequest) {
         );
       }
 
-      amount = currency === "CNY" ? addonPackage.priceZh : addonPackage.price;
-      description = getAddonDescription(addonPackage, currency === "CNY");
+      const addonProductPrice = await getAddonProductPrice(addonPackageId, billingRegion);
+      if (!addonProductPrice) {
+        return NextResponse.json(
+          { success: false, error: `Addon price not configured: ${addonPackageId}` },
+          { status: 400 }
+        );
+      }
+
+      currency = String(addonProductPrice.currency || currency).toUpperCase();
+      amount = addonProductPrice.amount;
+      addonImageCredits = Math.max(
+        0,
+        Math.floor(
+          Number((addonProductPrice as any)?.metadata?.imageCredits ?? addonPackage.imageCredits)
+        )
+      );
+      addonVideoAudioCredits = Math.max(
+        0,
+        Math.floor(
+          Number(
+            (addonProductPrice as any)?.metadata?.videoAudioCredits ?? addonPackage.videoAudioCredits
+          )
+        )
+      );
+      description =
+        billingRegion === "CN"
+          ? `${addonPackage.nameZh} - ${addonImageCredits}张图 + ${addonVideoAudioCredits}个视频/音频`
+          : `${addonPackage.name} - ${addonImageCredits} images + ${addonVideoAudioCredits} video/audio`;
       days = 0;
+      resolvedCreditAmount = Math.max(
+        0,
+        Math.floor(amount * billingSettings.rechargeCreditRate)
+      );
+    } else if (isCreditRecharge) {
+      amount = Number(rechargeAmount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return NextResponse.json(
+          { success: false, error: "Invalid rechargeAmount for credits recharge" },
+          { status: 400 }
+        );
+      }
+      days = 0;
+      description = billingRegion === "CN" ? "Credits 充值" : "Credits Recharge";
+      resolvedCreditAmount = Math.max(
+        0,
+        Math.floor(Number(creditAmount || amount * billingSettings.rechargeCreditRate))
+      );
     } else {
-      amount = pricing[effectiveBillingCycle];
+      const subscriptionPrice = await getSubscriptionProductPrice(
+        requestedPlanId,
+        effectiveBillingCycle,
+        billingRegion
+      );
+
+      if (!subscriptionPrice) {
+        return NextResponse.json(
+          { success: false, error: `Subscription price not configured: ${requestedPlanId}` },
+          { status: 400 }
+        );
+      }
+
+      const plan = getPlanById(requestedPlanId);
+      const cycleLabel =
+        billingRegion === "CN"
+          ? effectiveBillingCycle === "monthly"
+            ? "月付"
+            : "年付"
+          : effectiveBillingCycle === "monthly"
+            ? "Monthly"
+            : "Yearly";
+      const planName =
+        billingRegion === "CN"
+          ? plan?.nameZh || plan?.name || requestedPlanId
+          : plan?.name || plan?.nameZh || requestedPlanId;
+
+      currency = String(subscriptionPrice.currency || currency).toUpperCase();
+      amount = subscriptionPrice.amount;
       days = getDaysByBillingCycle(effectiveBillingCycle);
-      description = `${
-        effectiveBillingCycle === "monthly" ? "1 Month" : "1 Year"
-      } Premium Membership`;
+      description = `${planName} - ${cycleLabel}`;
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "当前商品价格无效，请先在后台设置有效售价",
+        },
+        { status: 400 }
+      );
     }
 
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
@@ -240,6 +337,10 @@ async function handlePaymentCreate(request: NextRequest) {
         if (isAddon && addonPackage) {
           wherePayload.type = "ADDON";
           wherePayload.addon_package_id = addonPackage.id;
+        }
+
+        if (isCreditRecharge) {
+          wherePayload.type = "CREDITS";
         }
 
         const result = await db
@@ -265,6 +366,14 @@ async function handlePaymentCreate(request: NextRequest) {
         .in("status", ["pending", "completed"])
         .order("created_at", { ascending: false })
         .limit(1);
+
+      if (isAddon && addonPackage) {
+        query = query.eq("type", "ADDON").eq("addon_package_id", addonPackage.id);
+      }
+      if (isCreditRecharge) {
+        query = query.eq("type", "CREDITS");
+      }
+
       const result = await query;
 
       recentPayments = result.data || [];
@@ -317,24 +426,33 @@ async function handlePaymentCreate(request: NextRequest) {
           productType: "ADDON",
           productId: addonPackage!.id,
           addonPackageId: addonPackage!.id,
-          imageCredits: addonPackage!.imageCredits,
-          videoAudioCredits: addonPackage!.videoAudioCredits,
+          imageCredits: addonImageCredits,
+          videoAudioCredits: addonVideoAudioCredits,
+          creditAmount: resolvedCreditAmount,
         }
-      : {
-          userId: user.id,
-          days,
-          paymentType: "onetime",
-          productType: "SUBSCRIPTION",
-          planId: requestedPlanId,
-          billingCycle: effectiveBillingCycle,
-        };
+      : isCreditRecharge
+        ? {
+            userId: user.id,
+            paymentType: "onetime",
+            productType: "CREDITS",
+            rechargeAmount: amount,
+            creditAmount: resolvedCreditAmount,
+          }
+        : {
+            userId: user.id,
+            days,
+            paymentType: "onetime",
+            productType: "SUBSCRIPTION",
+            planId: requestedPlanId,
+            billingCycle: effectiveBillingCycle,
+          };
 
     const order = {
       amount,
       currency,
       description,
       userId: user.id,
-      planType: isAddon ? "addon" : "onetime",
+      planType: isAddon ? "addon" : isCreditRecharge ? "credits" : "onetime",
       billingCycle: effectiveBillingCycle,
       metadata,
     };
@@ -492,7 +610,7 @@ async function handlePaymentCreate(request: NextRequest) {
         status: "pending",
         payment_method: method,
         transaction_id: result.paymentId,
-        type: isAddon ? "ADDON" : "SUBSCRIPTION",
+        type: isAddon ? "ADDON" : isCreditRecharge ? "CREDITS" : "SUBSCRIPTION",
         description,
         created_at: nowIso,
         updated_at: nowIso,
@@ -501,8 +619,8 @@ async function handlePaymentCreate(request: NextRequest) {
 
       if (isAddon && addonPackage) {
         paymentData.addon_package_id = addonPackage.id;
-        paymentData.image_credits = addonPackage.imageCredits;
-        paymentData.video_audio_credits = addonPackage.videoAudioCredits;
+        paymentData.image_credits = addonImageCredits;
+        paymentData.video_audio_credits = addonVideoAudioCredits;
       }
 
       if (method === "wechat" || method === "alipay") {

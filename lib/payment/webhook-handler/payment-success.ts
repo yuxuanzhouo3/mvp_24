@@ -23,6 +23,8 @@ import {
 import { getAddonPackageById } from "@/constants/addon-packages";
 import { updateSubscriptionStatus, findUserBySubscriptionId } from "./subscription-db";
 import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
+import { ensureCreditWallet, grantRechargeCredits } from "@/lib/billing/wallet";
+import { getBillingSettings } from "@/lib/billing/settings";
 import type { PaymentData, PaymentRecord } from "./types";
 
 /**
@@ -58,11 +60,11 @@ export async function handlePaymentSuccess(
       pendingPayment?.type || pendingPayment?.metadata?.productType || "SUBSCRIPTION"
     ).toUpperCase();
 
-    // ADDON: 仅发放额度，不更新订阅状态
-    if (productType === "ADDON") {
+    // ADDON/CREDITS: 仅发放额度，不更新订阅状态
+    if (productType === "ADDON" || productType === "CREDITS") {
       try {
         if (!pendingPayment) {
-          logWarn("ADDON payment webhook received but payment record missing", {
+          logWarn("non-subscription payment webhook received but payment record missing", {
             provider,
             subscriptionId,
             userId,
@@ -98,8 +100,9 @@ export async function handlePaymentSuccess(
 
         const mergedMetadata = {
           ...(pendingPayment?.metadata || {}),
-          addonCreditsGranted: true,
-          addonCreditsGrantedAt: nowIso,
+          creditsGranted: true,
+          creditsGrantedAt: nowIso,
+          grantedProductType: productType,
         };
 
         if (isChinaRegion()) {
@@ -128,7 +131,7 @@ export async function handlePaymentSuccess(
           subscriptionId,
           amount,
           currency,
-          productType: "ADDON",
+          productType,
         });
 
         return true;
@@ -584,15 +587,53 @@ async function updateUserWallet(
   provider: string
 ): Promise<void> {
   try {
-    const productType = payment.type || payment.metadata?.productType;
-    const productId = payment.addon_package_id || payment.metadata?.productId;
-    const planType = payment.metadata?.planType;
+    const metadata = (payment.metadata || {}) as any;
+    const productType = payment.type || metadata.productType;
+    const productId = payment.addon_package_id || metadata.productId;
+    const planType = metadata.planType;
+    const addonImageCredits = Math.max(
+      0,
+      Math.floor(
+        Number(
+          payment.image_credits ?? metadata.imageCredits ?? metadata.addonImageCredits ?? 0
+        )
+      )
+    );
+    const addonVideoAudioCredits = Math.max(
+      0,
+      Math.floor(
+        Number(
+          payment.video_audio_credits ??
+            metadata.videoAudioCredits ??
+            metadata.addonVideoAudioCredits ??
+            0
+        )
+      )
+    );
 
     if (isChinaRegion()) {
-      await updateCloudBaseWallet(userId, productType, productId, planType, provider);
+      await updateCloudBaseWallet(
+        userId,
+        productType,
+        productId,
+        planType,
+        provider,
+        addonImageCredits,
+        addonVideoAudioCredits
+      );
     } else {
-      await updateSupabaseWallet(userId, productType, productId, planType, provider);
+      await updateSupabaseWallet(
+        userId,
+        productType,
+        productId,
+        planType,
+        provider,
+        addonImageCredits,
+        addonVideoAudioCredits
+      );
     }
+
+    await updateUnifiedCredits(userId, payment, provider);
   } catch (walletError) {
     logError("Wallet update error (non-fatal)", walletError as Error, {
       userId,
@@ -602,27 +643,101 @@ async function updateUserWallet(
   }
 }
 
+async function updateUnifiedCredits(
+  userId: string,
+  payment: PaymentRecord,
+  provider: string
+): Promise<void> {
+  const metadata = (payment.metadata || {}) as any;
+  const productType = String(
+    payment.type || metadata.productType || "SUBSCRIPTION"
+  ).toUpperCase();
+  const billingSettings = await getBillingSettings(isChinaRegion() ? "CN" : "INTL");
+  const basePaymentId = String(
+    payment.transaction_id ||
+      payment.out_trade_no ||
+      payment.id ||
+      payment._id ||
+      provider + ":" + Date.now()
+  );
+
+  if (productType === "SUBSCRIPTION" || metadata.planId || metadata.planType) {
+    const plan = String(
+      metadata.planId || metadata.planType || metadata.productId || "pro"
+    ).toLowerCase();
+    await ensureCreditWallet(userId, plan);
+    logInfo("Unified credits seeded for subscription", {
+      userId,
+      plan,
+      provider,
+    });
+    return;
+  }
+
+  if (productType === "ADDON" || productType === "CREDITS") {
+    const fallbackCredits = Math.max(
+      0,
+      Math.floor(
+        Number(payment.amount || metadata.rechargeAmount || 0) *
+          billingSettings.rechargeCreditRate
+      )
+    );
+    const creditAmount = Math.max(
+      0,
+      Math.floor(Number(metadata.creditAmount || fallbackCredits || 0))
+    );
+
+    if (creditAmount <= 0) {
+      return;
+    }
+
+    await grantRechargeCredits({
+      userId,
+      credits: creditAmount,
+      planId: String(metadata.planId || "free"),
+      entryType: productType === "ADDON" ? "addon_recharge" : "recharge",
+      idempotencyKey: "payment-credit:" + basePaymentId + ":" + productType,
+      metadata: {
+        provider,
+        productType,
+      },
+    });
+
+    logInfo("Unified credits granted from payment", {
+      userId,
+      provider,
+      productType,
+      creditAmount,
+    });
+  }
+}
+
 async function updateCloudBaseWallet(
   userId: string,
   productType: string | undefined,
   productId: string | undefined,
   planType: string | undefined,
-  provider: string
+  provider: string,
+  addonImageCredits = 0,
+  addonVideoAudioCredits = 0
 ): Promise<void> {
   if (productType === "ADDON" && productId) {
     const addon = getAddonPackageById(productId);
-    if (addon) {
+    const imageCredits = addonImageCredits > 0 ? addonImageCredits : addon?.imageCredits || 0;
+    const videoAudioCredits =
+      addonVideoAudioCredits > 0 ? addonVideoAudioCredits : addon?.videoAudioCredits || 0;
+    if (imageCredits > 0 || videoAudioCredits > 0) {
       const addResult = await addCloudBaseAddonCredits(
         userId,
-        addon.imageCredits,
-        addon.videoAudioCredits
+        imageCredits,
+        videoAudioCredits
       );
       if (addResult.success) {
         logInfo("CloudBase: Addon credits added to wallet", {
           userId,
           productId,
-          imageCredits: addon.imageCredits,
-          videoAudioCredits: addon.videoAudioCredits,
+          imageCredits,
+          videoAudioCredits,
           provider,
         });
       } else {
@@ -660,22 +775,27 @@ async function updateSupabaseWallet(
   productType: string | undefined,
   productId: string | undefined,
   planType: string | undefined,
-  provider: string
+  provider: string,
+  addonImageCredits = 0,
+  addonVideoAudioCredits = 0
 ): Promise<void> {
   if (productType === "ADDON" && productId) {
     const addon = getAddonPackageById(productId);
-    if (addon) {
+    const imageCredits = addonImageCredits > 0 ? addonImageCredits : addon?.imageCredits || 0;
+    const videoAudioCredits =
+      addonVideoAudioCredits > 0 ? addonVideoAudioCredits : addon?.videoAudioCredits || 0;
+    if (imageCredits > 0 || videoAudioCredits > 0) {
       const addResult = await addAddonCredits(
         userId,
-        addon.imageCredits,
-        addon.videoAudioCredits
+        imageCredits,
+        videoAudioCredits
       );
       if (addResult.success) {
         logInfo("Supabase: Addon credits added to wallet", {
           userId,
           productId,
-          imageCredits: addon.imageCredits,
-          videoAudioCredits: addon.videoAudioCredits,
+          imageCredits,
+          videoAudioCredits,
           provider,
         });
       } else {

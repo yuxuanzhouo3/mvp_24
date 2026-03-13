@@ -21,6 +21,17 @@ export type RefreshTokenPayload = {
   exp?: number;
 };
 
+export type ChatExportTokenPayload = {
+  userId: string;
+  region: "CN" | "INTL";
+  sessionIds: string[];
+  format: "markdown" | "pdf";
+  language?: "zh" | "en";
+  tokenType: "chat-export";
+  iat?: number;
+  exp?: number;
+};
+
 function getJwtSecret(): string {
   const configured = process.env.JWT_SECRET;
   if (configured && configured.trim().length > 0) {
@@ -91,4 +102,37 @@ export function verifyRefreshTokenJwt(token: string): RefreshTokenPayload {
     throw new Error("Access token cannot be used as refresh token");
   }
   return decoded as RefreshTokenPayload;
+}
+
+export function signChatExportToken(
+  payload: Omit<ChatExportTokenPayload, "tokenType">
+): string {
+  return jwt.sign(
+    {
+      ...payload,
+      tokenType: "chat-export",
+    },
+    getJwtSecret(),
+    { expiresIn: "15m" }
+  );
+}
+
+export function verifyChatExportToken(token: string): ChatExportTokenPayload {
+  const decoded = jwt.verify(token, getJwtSecret()) as any;
+  if (decoded.tokenType !== "chat-export") {
+    throw new Error("Invalid token type");
+  }
+  if (
+    !decoded.userId ||
+    !Array.isArray(decoded.sessionIds) ||
+    decoded.sessionIds.length === 0 ||
+    (decoded.format !== "markdown" && decoded.format !== "pdf") ||
+    (decoded.region !== "CN" && decoded.region !== "INTL")
+  ) {
+    throw new Error("Invalid chat export token payload");
+  }
+  if (decoded.language && decoded.language !== "zh" && decoded.language !== "en") {
+    throw new Error("Invalid language");
+  }
+  return decoded as ChatExportTokenPayload;
 }

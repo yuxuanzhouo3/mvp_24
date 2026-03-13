@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAI, getDefaultAIModel } from "@/lib/ai/adapter";
+import { getAI } from "@/lib/ai/adapter";
+import { getDefaultRuntimeModel, listEnabledRuntimeModelKeys } from "@/lib/ai/runtime-models";
 import { z } from "zod";
 
-// AI 聊天请求验证schema
 const chatSchema = z.object({
   messages: z.array(
     z.object({
@@ -14,15 +14,9 @@ const chatSchema = z.object({
   stream: z.boolean().optional().default(false),
 });
 
-/**
- * POST /api/ai/chat
- * AI 聊天接口，支持流式和非流式响应
- */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-
-    // 验证输入
     const validationResult = chatSchema.safeParse(body);
     if (!validationResult.success) {
       return NextResponse.json(
@@ -35,19 +29,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const {
-      messages,
-      model = getDefaultAIModel(),
-      stream = false,
-    } = validationResult.data;
-
-    // 获取 AI 适配器
+    const { messages, model, stream = false } = validationResult.data;
     const ai = getAI();
+    const resolvedModel = model || (await getDefaultRuntimeModel());
 
     if (stream) {
-      // 流式响应
-      const response = await ai.chatStream(messages, model);
-
+      const response = await ai.chatStream(messages, resolvedModel);
       return new Response(response.stream, {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
@@ -55,20 +42,17 @@ export async function POST(request: NextRequest) {
           Connection: "keep-alive",
         },
       });
-    } else {
-      // 非流式响应
-      const response = await ai.chat(messages, model);
-
-      return NextResponse.json({
-        success: true,
-        content: response.content,
-        model: response.model,
-        usage: response.usage,
-      });
     }
+
+    const response = await ai.chat(messages, resolvedModel);
+    return NextResponse.json({
+      success: true,
+      content: response.content,
+      model: response.model || resolvedModel,
+      usage: response.usage,
+    });
   } catch (error) {
     console.error("AI chat error:", error);
-
     return NextResponse.json(
       {
         error: "AI service error",
@@ -80,15 +64,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/**
- * GET /api/ai/models
- * 获取可用模型列表
- */
 export async function GET(request: NextRequest) {
   try {
-    const ai = getAI();
-    const models = ai.getAvailableModels();
-    const defaultModel = ai.getDefaultModel();
+    const models = await listEnabledRuntimeModelKeys();
+    const defaultModel = await getDefaultRuntimeModel();
 
     return NextResponse.json({
       success: true,
@@ -97,7 +76,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("Get models error:", error);
-
     return NextResponse.json(
       {
         error: "Failed to get models",

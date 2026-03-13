@@ -6,12 +6,24 @@ import { useUser } from "./user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { getClientAuthToken } from "@/lib/client-auth";
-import { Zap } from "lucide-react";
+import { Coins, Zap } from "lucide-react";
 
 type UsagePayload = {
   used: number;
   limit: number;
+  remaining?: number;
   plan: string;
+  credits: {
+    balance: number;
+    monthlyGrant: number;
+    dailyCap: number;
+    spentThisMonth: number;
+    spentToday: number;
+    remainingThisMonth: number;
+    monthlyGrantBalance: number;
+    rechargeBalance: number;
+    bonusBalance: number;
+  };
   multimodal?: {
     image: { used: number; limit: number; remaining: number };
     videoAudio: { used: number; limit: number; remaining: number };
@@ -27,7 +39,7 @@ export function QuotaDisplay() {
 
   const fetchUsage = useCallback(async () => {
     if (!user) return;
-    
+
     try {
       setLoading(true);
       const { token } = await getClientAuthToken();
@@ -52,12 +64,10 @@ export function QuotaDisplay() {
 
   useEffect(() => {
     fetchUsage();
-    
-    // 监听消息发送成功的事件来刷新额度
     const handleMessageSent = () => {
       fetchUsage();
     };
-    
+
     window.addEventListener("message-sent", handleMessageSent);
     return () => {
       window.removeEventListener("message-sent", handleMessageSent);
@@ -82,47 +92,31 @@ export function QuotaDisplay() {
     );
   }
 
-  const showConversationQuota = usage.limit > 0;
+  const credits = usage.credits;
   const multimodal = usage.multimodal || null;
   const showImageQuota = !!multimodal && multimodal.image.limit > 0;
-  const showVideoAudioQuota =
-    !!multimodal && multimodal.videoAudio.limit > 0;
+  const showVideoAudioQuota = !!multimodal && multimodal.videoAudio.limit > 0;
   const showMultimodalQuota = showImageQuota || showVideoAudioQuota;
 
-  if (!showConversationQuota && !showImageQuota && !showVideoAudioQuota) {
-    return (
-      <div className="text-xs text-muted-foreground">
-        {language === "zh"
-          ? "当前套餐文本额度无限制"
-          : "Unlimited text quota for current plan"}
-      </div>
-    );
-  }
+  const creditBalance = credits.balance;
+  const monthlyCreditLimit = credits.monthlyGrant;
+  const monthlyCreditUsed = credits.spentThisMonth;
+  const creditProgress =
+    monthlyCreditLimit > 0 ? Math.min(100, (monthlyCreditUsed / monthlyCreditLimit) * 100) : 0;
+  const isCreditLow = creditBalance <= Math.max(100, Math.floor(monthlyCreditLimit * 0.05));
 
-  const isConversationUnlimited = usage.limit <= 0;
-  const conversationPercentage = isConversationUnlimited
-    ? 100
-    : usage.limit > 0
-      ? Math.min(100, (usage.used / usage.limit) * 100)
-      : 0;
-  const isConversationLow =
-    !isConversationUnlimited && usage.limit - usage.used <= 10;
   const imagePercentage =
     multimodal && showImageQuota
       ? Math.min(100, (multimodal.image.used / multimodal.image.limit) * 100)
       : 0;
   const videoPercentage =
     multimodal && showVideoAudioQuota
-      ? Math.min(
-          100,
-          (multimodal.videoAudio.used / multimodal.videoAudio.limit) * 100
-        )
+      ? Math.min(100, (multimodal.videoAudio.used / multimodal.videoAudio.limit) * 100)
       : 0;
+
   const isImageLow = !!multimodal && showImageQuota && multimodal.image.remaining <= 3;
   const isVideoAudioLow =
-    !!multimodal &&
-    showVideoAudioQuota &&
-    multimodal.videoAudio.remaining <= 1;
+    !!multimodal && showVideoAudioQuota && multimodal.videoAudio.remaining <= 1;
   const isMultimodalLow = isImageLow || isVideoAudioLow;
 
   const multimodalRiskHint = (() => {
@@ -155,7 +149,7 @@ export function QuotaDisplay() {
           <div className="flex items-center gap-1.5">
             <Zap
               className={`w-3.5 h-3.5 ${
-                isConversationLow ? "text-orange-500 animate-pulse" : "text-blue-500"
+                isCreditLow ? "text-orange-500 animate-pulse" : "text-blue-500"
               }`}
             />
             <span className="font-medium text-muted-foreground uppercase tracking-wider">
@@ -164,21 +158,28 @@ export function QuotaDisplay() {
           </div>
         </div>
 
-        {showConversationQuota && (
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-[11px]">
-              <span>{language === "zh" ? "对话Token" : "Tokens"}</span>
-              <span
-                className={`font-semibold ${
-                  isConversationLow ? "text-orange-600" : "text-foreground"
-                }`}
-              >
-                {usage.used}/{isConversationUnlimited ? "∞" : usage.limit}
-              </span>
-            </div>
-            <Progress value={conversationPercentage} className="h-1.5 w-full" />
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1">
+              <Coins className="w-3.5 h-3.5" />
+              {language === "zh" ? "Credits 余额" : "Credits"}
+            </span>
+            <span className={isCreditLow ? "font-semibold text-orange-600" : "font-semibold"}>
+              {creditBalance}
+            </span>
           </div>
-        )}
+          {monthlyCreditLimit > 0 && (
+            <>
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>{language === "zh" ? "本月已消耗" : "Monthly used"}</span>
+                <span>
+                  {monthlyCreditUsed}/{monthlyCreditLimit}
+                </span>
+              </div>
+              <Progress value={creditProgress} className="h-1.5 w-full" />
+            </>
+          )}
+        </div>
 
         {showImageQuota && multimodal && (
           <div className="space-y-1">

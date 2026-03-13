@@ -155,6 +155,11 @@ export function GPTWorkspace({
   const messagesRef = useRef<Message[]>([]);
   const sessionMessageCacheRef = useRef<Record<string, Message[]>>({});
   const attachmentsRef = useRef<MultimodalAttachmentPayload[]>([]);
+  const lastFailedRequestRef = useRef<{
+    input: string;
+    attachments: MultimodalAttachmentPayload[];
+    sessionId?: string;
+  } | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -1258,6 +1263,17 @@ export function GPTWorkspace({
   }, [currentSessionId]);
 
   useEffect(() => {
+    setError(null);
+    lastFailedRequestRef.current = null;
+    setShowMultimodalPreprocessHint(false);
+    if (!currentSessionId) {
+      setSessionConfig(null);
+      setAIResponses([]);
+      setIsSessionHistoryLoading(false);
+    }
+  }, [currentSessionId]);
+
+  useEffect(() => {
     sessionSwitchStartedAtRef.current = Date.now();
     setShouldAutoScroll(true);
     const container = chatContainerRef.current;
@@ -1447,6 +1463,7 @@ export function GPTWorkspace({
         let pageCount = 0;
         let totalMessages: number | null = null;
         let loadedSessionConfig: any = null;
+        let loadedSessionModel = "";
         const loadedMessages: any[] = [];
 
         while (pageCount < maxPages) {
@@ -1497,6 +1514,9 @@ export function GPTWorkspace({
 
           if (loadedSessionConfig === null && data?.sessionConfig !== undefined) {
             loadedSessionConfig = data.sessionConfig ?? null;
+          }
+          if (!loadedSessionModel && typeof data?.sessionModel === "string") {
+            loadedSessionModel = data.sessionModel;
           }
 
           const parsedTotal =
@@ -1551,11 +1571,16 @@ export function GPTWorkspace({
               : msg?.content && typeof msg.content === "object" && typeof msg.content.content === "string"
                 ? msg.content.content
                 : "";
+          const normalizedAttachments =
+            role === "user" && msg?.content && typeof msg.content === "object" && Array.isArray(msg.content.attachments)
+              ? msg.content.attachments.filter((item: any) => item && typeof item === "object")
+              : [];
 
           return {
             id: typeof msg?.id === "string" && msg.id.trim().length > 0 ? msg.id : fallbackId,
             role,
             content: isMultiAIStructured ? normalizedResponses : normalizedContent,
+            attachments: normalizedAttachments,
             isMultiAI,
             collaborationMode,
             taskGraph: rawTaskGraph,
@@ -1629,17 +1654,31 @@ export function GPTWorkspace({
             setCollaborationMode(loadedSessionConfig.collaborationMode);
           }
 
-          // 如果是多AI会话，恢复之前选择的AI
-          if (loadedSessionConfig.isMultiAI && loadedSessionConfig.selectedAgentIds) {
-            const restoredAIs = loadedSessionConfig.selectedAgentIds
+          const lockedAgentIds = Array.isArray(loadedSessionConfig?.selectedAgentIds)
+            ? loadedSessionConfig.selectedAgentIds
+                .map((agentId: string) => String(agentId || "").trim())
+                .filter(Boolean)
+            : [];
+
+          if (lockedAgentIds.length > 0) {
+            const restoredAIs = lockedAgentIds
               .map((agentId: string) =>
-                availableAIs.find((ai) => ai.id === agentId)
+                availableAIs.find((ai) => ai.id === agentId || ai.model === agentId)
               )
               .filter((ai: any) => ai !== undefined);
 
             if (restoredAIs.length > 0) {
               setSelectedGPTs(restoredAIs);
-              console.log("[GPTWorkspace] Restored selected AIs:", restoredAIs);
+              console.log("[GPTWorkspace] Restored locked AIs:", restoredAIs);
+            } else if ((typeof loadedSessionModel === "string" && loadedSessionModel.trim()) || (typeof loadedSessionConfig?.model === "string" && loadedSessionConfig.model.trim())) {
+              const fallbackModel = loadedSessionModel || loadedSessionConfig.model;
+              const fallbackAI = availableAIs.find(
+                (ai) => ai.id === fallbackModel || ai.model === fallbackModel
+              );
+              if (fallbackAI) {
+                setSelectedGPTs([fallbackAI]);
+                console.log("[GPTWorkspace] Restored fallback locked AI:", fallbackAI);
+              }
             }
           }
         } else {
@@ -1752,10 +1791,14 @@ export function GPTWorkspace({
     };
   };
 
-  const handleSend = async () => {
-    const originalInput = input;
+  const handleSend = async (override?: {
+    input?: string;
+    attachments?: MultimodalAttachmentPayload[];
+    sessionId?: string;
+  }) => {
+    const originalInput = override?.input ?? input;
     const rawInput = originalInput.trim();
-    const attachmentSnapshot = [...attachments];
+    const attachmentSnapshot = override?.attachments ?? [...attachments];
     if ((!rawInput && attachmentSnapshot.length === 0) || isProcessing) return;
     if (isRecordingAudio) {
       toast.info(
@@ -1787,17 +1830,19 @@ export function GPTWorkspace({
       id: `user-${Date.now()}`,
       role: "user",
       content: visibleUserInput || fallbackModelMessage,
+      attachments: attachmentSnapshot,
       timestamp: new Date(),
     };
     const restoreComposer = () => {
       setInput(originalInput);
       setAttachments(attachmentSnapshot);
     };
-    let sessId: string | null = currentSessionId || null;
+    let sessId: string | null = override?.sessionId || currentSessionId || null;
     let isNewSession = false;
     let userMessageCommitted = false;
     let userMessageAttachedToSession = false;
     let modelExecutionStarted = false;
+    let authTokenForFailure: string | null = null;
     const hasMultimodalInput = attachmentSnapshot.length > 0;
     const appendVisibleMessage = (message: Message) => {
       const visibleMessages = messagesRef.current;
@@ -1828,8 +1873,21 @@ export function GPTWorkspace({
     setIsProcessing(true);
     setShowMultimodalPreprocessHint(hasMultimodalInput);
     setError(null);
+    lastFailedRequestRef.current = null;
     setInput("");
     setAttachments([]);
+
+    const provisionalResponses: AIResponse[] = (
+      effectiveCollaborationMode === "normal" ? selectedGPTs.slice(0, 1) : selectedGPTs
+    ).map((gpt: AIAgent) => ({
+      agentId: gpt.id,
+      agentName: gpt.name,
+      content: "",
+      status: "processing",
+      timestamp: new Date(),
+      model: gpt.model,
+    }));
+    setAIResponses(provisionalResponses);
     if (sessId) {
       setProcessingSessionId(sessId);
       processingSessionIdRef.current = sessId;
@@ -1843,6 +1901,7 @@ export function GPTWorkspace({
     try {
       // 获取认证 Token（支持 CloudBase 和 Supabase）
       const { token: authToken, error: authError } = await getClientAuthToken();
+      authTokenForFailure = authToken || null;
 
       if (authError || !authToken) {
         toast.error("请先登录", {
@@ -1882,8 +1941,8 @@ export function GPTWorkspace({
         });
         if (usageRes.ok) {
           const usageData = await usageRes.json();
-          if (usageData.plan === "free" && usageData.used >= usageData.limit) {
-            // 触发订阅弹窗
+          const creditBalance = Number(usageData?.credits?.balance ?? 0);
+          if (creditBalance <= 0) {
             window.dispatchEvent(new CustomEvent("show-subscription-modal"));
             removeCommittedUserMessage();
             restoreComposer();
@@ -2037,6 +2096,11 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "graph",
                   aiResponses: nodeResponses.map((r) => ({
@@ -2074,7 +2138,7 @@ export function GPTWorkspace({
           agentId: gpt.id,
           agentName: gpt.name,
           content: "",
-          status: "pending",
+          status: "processing",
           timestamp: new Date(),
         }));
         setAIResponses(initialResponses);
@@ -2121,6 +2185,11 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "normal",
                   aiResponses: finalResponses.map((r) => ({
@@ -2196,6 +2265,11 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "parallel",
                   aiResponses: finalResponses.map((r) => ({
@@ -2300,6 +2374,11 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "deep",
                   aiResponses: finalResponses.map((r) => ({
@@ -2369,6 +2448,11 @@ export function GPTWorkspace({
                   userMessageId: userMessage.id,
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+                  userAttachments: userMessage.attachments || [],
+              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "sequential",
                   aiResponses: result.allResponses.map((r) => ({
@@ -2400,13 +2484,61 @@ export function GPTWorkspace({
       if (isAbortError(error) || runId !== activeRunIdRef.current) {
         return;
       }
-      if (!modelExecutionStarted && userMessageCommitted) {
+      const errorMessage = error instanceof Error ? error.message : t.workspace.error;
+      lastFailedRequestRef.current = {
+        input: originalInput,
+        attachments: attachmentSnapshot,
+        sessionId: sessId || currentSessionIdRef.current,
+      };
+
+      const canPersistFailedTurn =
+        !!sessId &&
+        !!authTokenForFailure &&
+        userMessageCommitted;
+
+      if (canPersistFailedTurn) {
+        const errorAssistantMessage: Message = {
+          id: `ai-error-${Date.now()}`,
+          role: "assistant",
+          content: errorMessage,
+          timestamp: new Date(),
+          model: "system/error",
+          finalAgentName: "System",
+        };
+        appendMessageForSession(sessId!, errorAssistantMessage);
+
+        try {
+          await fetch("/api/chat/save-final", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authTokenForFailure}`,
+            },
+            body: JSON.stringify({
+              sessionId: sessId,
+              userMessageId: userMessage.id,
+              assistantMessageId: errorAssistantMessage.id,
+              userMessage:
+                typeof userMessage.content === "string"
+                  ? userMessage.content
+                  : visibleUserInput || fallbackModelMessage,
+              userAttachments: userMessage.attachments || [],
+              finalAnswer: errorMessage,
+              finalAgentName: "System",
+              finalModel: "system/error",
+            }),
+          });
+        } catch (saveError) {
+          console.error("[GPTWorkspace] Failed to persist error turn:", saveError);
+        }
+      } else if (!modelExecutionStarted && userMessageCommitted) {
         removeCommittedUserMessage();
         restoreComposer();
       }
+
       console.error("Multi-AI collaboration error:", error);
-      setError(error instanceof Error ? error.message : t.workspace.error);
-      toast.error(error instanceof Error ? error.message : t.workspace.error);
+      setError(errorMessage);
+      toast.error(errorMessage);
     } finally {
       if (runId !== activeRunIdRef.current) {
         return;
@@ -3681,7 +3813,16 @@ export function GPTWorkspace({
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setError(null)}
+                      onClick={() => {
+                        const pending = lastFailedRequestRef.current;
+                        setError(null);
+                        if (!pending || isProcessing) return;
+                        void handleSend({
+                          input: pending.input,
+                          attachments: pending.attachments,
+                          sessionId: pending.sessionId,
+                        });
+                      }}
                       className="mt-2"
                     >
                       {t.workspace.retry}

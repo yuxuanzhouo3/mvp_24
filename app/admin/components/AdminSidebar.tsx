@@ -14,6 +14,8 @@ import {
   BarChart3,
   UsersRound,
   SlidersHorizontal,
+  Coins,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -25,12 +27,14 @@ interface AdminSidebarProps {
 
 const menuItems = [
   { title: "数据仪表盘", href: "/admin/dashboard", icon: BarChart3 },
-  { title: "Market 裂变系统", href: "/market", icon: UsersRound },
   { title: "套餐限额", href: "/admin/plan-quotas", icon: SlidersHorizontal },
+  { title: "AI 计费", href: "/admin/billing", icon: Coins },
+  { title: "模型目录", href: "/admin/model-catalog", icon: Database },
   { title: "广告管理", href: "/admin/ads", icon: Image },
   { title: "发布版本", href: "/admin/releases", icon: Package },
   { title: "系统设置", href: "/admin/settings", icon: Settings },
-];
+  { title: "Market 裂变系统", href: "/market", icon: UsersRound },
+]; 
 
 export default function AdminSidebar({
   username,

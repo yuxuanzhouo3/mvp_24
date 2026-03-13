@@ -1,3 +1,8 @@
+import { NextRequest, NextResponse } from "next/server";
+import { extractTokenFromHeader, verifyAuthToken } from "@/lib/auth-utils";
+import { isChinaRegion } from "@/lib/config/region";
+import { getDatabase } from "@/lib/cloudbase-service";
+import { supabaseAdmin } from "@/lib/supabase-admin";
 import {
   getFreeDailyLimit,
   getFreeContextMsgLimit,

@@ -17,11 +17,15 @@ import { ADDON_PACKAGES, type AddonPackage } from "@/constants/addon-packages";
 interface AddonPackagesProps {
   onSelectPackage: (packageId: string) => void;
   currency?: string;
+  priceOverrides?: Record<string, number>;
+  creditsOverrides?: Record<string, { imageCredits: number; videoAudioCredits: number }>;
 }
 
 export function AddonPackages({
   onSelectPackage,
   currency = "USD",
+  priceOverrides,
+  creditsOverrides,
 }: AddonPackagesProps) {
   const { language } = useLanguage();
 
@@ -46,7 +50,25 @@ export function AddonPackages({
   };
 
   const getPrice = (pkg: AddonPackage) => {
+    const override = priceOverrides?.[pkg.id];
+    if (typeof override === "number" && Number.isFinite(override)) {
+      return override;
+    }
     return currency === "CNY" ? pkg.priceZh : pkg.price;
+  };
+
+  const getCredits = (pkg: AddonPackage) => {
+    const override = creditsOverrides?.[pkg.id];
+    return {
+      imageCredits:
+        typeof override?.imageCredits === "number" && Number.isFinite(override.imageCredits)
+          ? Math.max(0, Math.floor(override.imageCredits))
+          : pkg.imageCredits,
+      videoAudioCredits:
+        typeof override?.videoAudioCredits === "number" && Number.isFinite(override.videoAudioCredits)
+          ? Math.max(0, Math.floor(override.videoAudioCredits))
+          : pkg.videoAudioCredits,
+    };
   };
 
   return (
@@ -65,6 +87,7 @@ export function AddonPackages({
       <div className="grid gap-6 md:grid-cols-3 max-w-6xl mx-auto">
         {ADDON_PACKAGES.map((pkg) => {
           const isPopular = !!pkg.popular;
+          const credits = getCredits(pkg);
 
           return (
             <Card
@@ -87,7 +110,9 @@ export function AddonPackages({
                   {language === "zh" ? pkg.nameZh : pkg.name}
                 </CardTitle>
                 <CardDescription>
-                  {language === "zh" ? pkg.descriptionZh : pkg.description}
+                  {language === "zh"
+                    ? `${credits.imageCredits}张图片 + ${credits.videoAudioCredits}个视频/音频`
+                    : `${credits.imageCredits} images + ${credits.videoAudioCredits} video/audio credits`}
                 </CardDescription>
               </CardHeader>
 
@@ -102,14 +127,14 @@ export function AddonPackages({
                   <li className="flex items-center">
                     <Check className="h-4 w-4 text-green-500 mr-2 flex-shrink-0" />
                     {language === "zh"
-                      ? `${pkg.imageCredits} 张图片额度`
-                      : `${pkg.imageCredits} image credits`}
+                      ? `${credits.imageCredits} 张图片额度`
+                      : `${credits.imageCredits} image credits`}
                   </li>
                   <li className="flex items-center">
                     <Check className="h-4 w-4 text-green-500 mr-2 flex-shrink-0" />
                     {language === "zh"
-                      ? `${pkg.videoAudioCredits} 个视频/音频额度`
-                      : `${pkg.videoAudioCredits} video/audio credits`}
+                      ? `${credits.videoAudioCredits} 个视频/音频额度`
+                      : `${credits.videoAudioCredits} video/audio credits`}
                   </li>
                   <li className="flex items-center">
                     <Check className="h-4 w-4 text-green-500 mr-2 flex-shrink-0" />

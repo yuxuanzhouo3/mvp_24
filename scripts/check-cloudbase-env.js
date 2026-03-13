@@ -56,8 +56,7 @@ const optionalEnvVars = [
   "WECHAT_APP_SECRET",
   "DOMESTIC_SYSTEM_URL",
   "INTERNATIONAL_SYSTEM_URL",
-  "DB_CONNECTION_TIMEOUT",
-  "AI_GATEWAY_API_KEY",
+  "DB_CONNECTION_TIMEOUT",
 ];
 
 console.log("🔍 检查腾讯云云开发环境变量配置...\n");

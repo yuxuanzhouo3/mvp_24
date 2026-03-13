@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { ArrowLeft, Copy, Download, QrCode, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,8 @@ type InviteSummary = {
   invitedFirstUseBonus: number;
   inviterFirstPaymentBonus: number;
   invitedFirstPaymentBonus: number;
+  basicMonthlyRewardDays: number;
+  basicYearlyRewardDays: number;
 };
 
 export default function InvitePage() {
@@ -63,7 +66,7 @@ export default function InvitePage() {
             loginRequired: "请先登录",
             login: "去登录",
             title: "邀请中心",
-            subtitle: "邀请奖励已切换为会员天数，支持首次使用与首次付费双奖励。",
+            subtitle: "邀请奖励已切换为会员天数；首次付费按基础版对应周期发放。",
             shareLinkTitle: "分享链接",
             copy: "复制",
             shareApps: "系统分享到应用",
@@ -85,7 +88,7 @@ export default function InvitePage() {
             qrSourceHint: "二维码链接自动附带 ",
             qrAttributionTail: "用于后台渠道归因统计。",
             posterTitle: "邀请海报",
-            posterDescription: "扫码注册并体验 MultiGPT，双方均可获得会员奖励。",
+            posterDescription: "扫码注册并体验 MultiGPT，首次付费后双方均可获得基础版会员时长奖励。",
             posterCtaText: "扫码打开并开始使用",
             savePoster: "保存海报",
             savingPoster: "保存中...",
@@ -114,7 +117,7 @@ export default function InvitePage() {
             login: "Sign in",
             title: "Invite Center",
             subtitle:
-              "Rewards are membership days. Both first-use and first-payment rewards are enabled.",
+              "Rewards are membership days. First-payment rewards now follow the matching Basic cycle.",
             shareLinkTitle: "Share Link",
             copy: "Copy",
             shareApps: "Share via Apps",
@@ -440,9 +443,12 @@ export default function InvitePage() {
         <CardContent className="space-y-3">
           <div className="flex flex-col items-center justify-center rounded-lg border bg-white p-4">
             {qrImageUrl ? (
-              <img
+              <Image
                 src={qrImageUrl}
                 alt={ui.qrInvite}
+                width={224}
+                height={224}
+                unoptimized
                 className="h-56 w-56 rounded-md border"
               />
             ) : (
@@ -556,9 +562,10 @@ export default function InvitePage() {
             {ui.dayUnit}
           </div>
           <div>
-            {ui.firstPayment}：{ui.inviter} +
-            {summary?.inviterFirstPaymentBonus || 30} {ui.dayUnit}，{ui.invited} +
-            {summary?.invitedFirstPaymentBonus || 7} {ui.dayUnit}
+            {ui.firstPayment}：{ui.inviter} / {ui.invited} {isZh ? "均送" : "each get"}
+            {isZh ? "基础版会员时长" : "Basic membership duration"}
+            （{isZh ? "月付" : "Monthly"} {summary?.basicMonthlyRewardDays || 30} {ui.dayUnit} / 
+            {isZh ? "年付" : "Yearly"} {summary?.basicYearlyRewardDays || 365} {ui.dayUnit}）
           </div>
           <div>
             {ui.firstPaymentTotal}：{summary?.firstPaymentRewardDays || 0}{" "}

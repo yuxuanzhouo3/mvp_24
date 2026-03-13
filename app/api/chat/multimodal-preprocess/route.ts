@@ -4,7 +4,6 @@ import { extractTokenFromHeader, verifyAuthToken } from "@/lib/auth-utils";
 import { isChinaRegion } from "@/lib/config/region";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
 import {
-  checkQuota,
   consumeQuota,
   getPlanMediaLimits,
   getWalletStats,
@@ -14,6 +13,15 @@ import type {
   MultimodalAttachmentPayload,
   MultimodalPreprocessResult,
 } from "@/lib/chat/multimodal-types";
+import {
+  authorizeCreditUsage,
+  estimateTextMetrics,
+  releaseCreditUsageReservation,
+  settleCreditUsage,
+} from "@/lib/billing/engine";
+import type { AIMessage } from "@/lib/ai/types";
+import { coercePlanId } from "@/lib/plan-quota-settings";
+import { listModelCatalogEntries } from "@/lib/billing/catalog";
 
 export const runtime = "nodejs";
 
@@ -21,8 +29,10 @@ const MAX_ATTACHMENTS = 8;
 const MAX_TEXT_PREVIEW_CHARS = 12000;
 const MAX_DATA_URL_CHARS = 3 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 24 * 1024 * 1024;
-const QWEN_OMNI_MODEL = "qwen3-omni-flash";
-const QWEN_OMNI_AUDIO_MODEL = "qwen3-omni-flash-2025-12-01";
+const CN_QWEN_OMNI_MODEL = "qwen3-omni-flash";
+const CN_QWEN_OMNI_AUDIO_MODEL = "qwen3-omni-flash-2025-12-01";
+const INTL_IMAGE_PREPROCESS_MODEL_KEY = "openai/gpt-5-nano";
+const INTL_AUDIO_PREPROCESS_MODEL_KEY = "google/gemini-2.5-flash-lite";
 
 function sanitizeAttachment(raw: any): MultimodalAttachmentPayload | null {
   if (!raw || typeof raw !== "object") return null;
@@ -34,6 +44,10 @@ function sanitizeAttachment(raw: any): MultimodalAttachmentPayload | null {
     raw.kind === "image" || raw.kind === "audio" || raw.kind === "video" || raw.kind === "file"
       ? raw.kind
       : null;
+  const durationSeconds =
+    typeof raw.durationSeconds === "number" && Number.isFinite(raw.durationSeconds)
+      ? Math.max(0, raw.durationSeconds)
+      : undefined;
 
   if (!id || !name || !kind) return null;
 
@@ -52,6 +66,7 @@ function sanitizeAttachment(raw: any): MultimodalAttachmentPayload | null {
     mimeType,
     size: Math.max(0, size),
     kind,
+    durationSeconds,
     dataUrl,
     textContent,
   };
@@ -208,13 +223,65 @@ function buildPromptContext(message: string, attachments: MultimodalAttachmentPa
   ].join("\n");
 }
 
-function isOmniModel(model: string): boolean {
-  return model.startsWith("qwen3-omni-flash");
+function normalizeBillingModelKey(model: string) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (!normalized) return CN_QWEN_OMNI_MODEL;
+  if (normalized.endsWith("/qwen3-omni-flash-2025-12-01")) return CN_QWEN_OMNI_AUDIO_MODEL;
+  if (normalized.endsWith("/qwen3-omni-flash")) return CN_QWEN_OMNI_MODEL;
+  if (normalized.endsWith("/gpt-5-nano")) return "gpt-5-nano";
+  if (normalized.endsWith("/gemini-2.5-flash-lite")) return "gemini-2.5-flash-lite";
+  return normalized;
 }
 
-function resolvePreprocessModel(attachments: MultimodalAttachmentPayload[]) {
-  const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
-  return hasAudioAttachment ? QWEN_OMNI_AUDIO_MODEL : QWEN_OMNI_MODEL;
+async function resolvePreprocessModel(attachments: MultimodalAttachmentPayload[]) {
+  const hasAudioAttachment = attachments.some((item) => item.kind === "audio" || item.kind === "video");
+  if (isChinaRegion()) {
+    return hasAudioAttachment ? CN_QWEN_OMNI_AUDIO_MODEL : CN_QWEN_OMNI_MODEL;
+  }
+
+  const catalog = await listModelCatalogEntries("INTL");
+  const enabledCatalog = catalog.filter((item) => item.enabled !== false);
+  const targetModelKey = hasAudioAttachment
+    ? INTL_AUDIO_PREPROCESS_MODEL_KEY
+    : INTL_IMAGE_PREPROCESS_MODEL_KEY;
+  const found = enabledCatalog.find((item) => item.modelKey === targetModelKey);
+  if (!found) {
+    throw new Error(
+      hasAudioAttachment
+        ? `International audio/video preprocess model is not enabled in billing catalog: ${targetModelKey}`
+        : `International image preprocess model is not enabled in billing catalog: ${targetModelKey}`
+    );
+  }
+  return found.modelKey;
+}
+
+function createPreprocessClient() {
+  if (isChinaRegion()) {
+    const apiKey = process.env.DASHSCOPE_API_KEY;
+    if (!apiKey) {
+      throw new Error("DASHSCOPE_API_KEY is not configured");
+    }
+    return new OpenAI({
+      apiKey,
+      baseURL:
+        process.env.DASHSCOPE_BASE_URL ||
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  }
+
+  const apiKey = process.env.OPENROUTER_API;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API is not configured");
+  }
+
+  return new OpenAI({
+    apiKey,
+    baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
+    defaultHeaders: {
+      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "http://localhost:3000",
+      "X-Title": process.env.APP_NAME || "MultiGPT",
+    },
+  });
 }
 
 async function runQwenMultimodalPreprocess(params: {
@@ -224,18 +291,8 @@ async function runQwenMultimodalPreprocess(params: {
 }) {
   const { userId, message, attachments } = params;
   const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
-  const selectedModel = resolvePreprocessModel(attachments);
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) {
-    throw new Error("DASHSCOPE_API_KEY is not configured");
-  }
-
-  const client = new OpenAI({
-    apiKey,
-    baseURL:
-      process.env.DASHSCOPE_BASE_URL ||
-      "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  });
+  const selectedModel = await resolvePreprocessModel(attachments);
+  const client = createPreprocessClient();
 
   const promptContext = buildPromptContext(message, attachments);
   const richParts: any[] = [{ type: "text", text: promptContext }];
@@ -243,7 +300,6 @@ async function runQwenMultimodalPreprocess(params: {
 
   for (const attachment of attachments) {
     if (
-      isOmniModel(selectedModel) &&
       (attachment.kind === "image" || attachment.kind === "video") &&
       attachment.dataUrl
     ) {
@@ -317,7 +373,7 @@ async function runQwenMultimodalPreprocess(params: {
       "[multimodal-preprocess] rich multimodal request failed, fallback to text-only:",
       error
     );
-    const fallbackModel = hasAudioAttachment ? QWEN_OMNI_MODEL : selectedModel;
+    const fallbackModel = selectedModel;
     const fallbackContext = hasAudioAttachment
       ? [
           promptContext,
@@ -334,10 +390,17 @@ async function runQwenMultimodalPreprocess(params: {
   }
 
   const rawContent = completion?.choices?.[0]?.message?.content;
+  const usage = {
+    promptTokens: Math.max(0, Number(completion?.usage?.prompt_tokens || 0)),
+    completionTokens: Math.max(0, Number(completion?.usage?.completion_tokens || 0)),
+    totalTokens: Math.max(0, Number(completion?.usage?.total_tokens || 0)),
+  };
+
   if (typeof rawContent === "string" && rawContent.trim()) {
     return {
       summary: rawContent.trim(),
       model: modelUsed,
+      usage,
     };
   }
   if (Array.isArray(rawContent)) {
@@ -355,6 +418,7 @@ async function runQwenMultimodalPreprocess(params: {
       return {
         summary: text,
         model: modelUsed,
+        usage,
       };
     }
   }
@@ -376,6 +440,41 @@ function buildEnhancedMessage(
     "",
     "请基于以上预处理结果继续推理并回答。如果信息不足，请明确指出。",
   ].join("\n");
+}
+
+function buildMultimodalBillingMetrics(params: {
+  message: string;
+  attachments: MultimodalAttachmentPayload[];
+  modelKey: string;
+  maxTokens?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+}) {
+  const { message, attachments, modelKey, maxTokens, promptTokens, completionTokens } = params;
+  const promptMessages: AIMessage[] = [
+    { role: "user", content: buildPromptContext(message, attachments) },
+  ];
+  const estimatedTextMetrics = await estimateTextMetrics({
+    messages: promptMessages,
+    modelKey,
+    maxTokens,
+  });
+
+  const imageCount = attachments.filter((item) => item.kind === "image").length;
+  const audioSeconds = attachments
+    .filter((item) => item.kind === "audio")
+    .reduce((sum, item) => sum + Math.max(0, item.durationSeconds || 0), 0);
+  const videoSeconds = attachments
+    .filter((item) => item.kind === "video")
+    .reduce((sum, item) => sum + Math.max(0, item.durationSeconds || 0), 0);
+  return {
+    input_tokens: promptTokens ?? (estimatedTextMetrics.input_tokens || 0),
+    output_tokens: completionTokens ?? (estimatedTextMetrics.output_tokens || 0),
+    image_count: imageCount,
+    audio_input_seconds: audioSeconds,
+    video_input_seconds: videoSeconds,
+    request_count: 1,
+  };
 }
 
 async function buildQuotaSnapshot(params: {
@@ -477,30 +576,81 @@ export async function POST(req: NextRequest) {
     await seedWalletForPlan(userId, planLower || "free");
 
     const { imageCount, videoAudioCount } = countQuotaDemand(attachments);
-    if (imageCount > 0 || videoAudioCount > 0) {
-      const quotaCheck = await checkQuota(userId, imageCount, videoAudioCount);
-      if (!quotaCheck.hasEnoughQuota) {
-        return Response.json(
-          {
-            error: "Insufficient multimodal quota",
-            quota: {
-              required: { image: imageCount, videoAudio: videoAudioCount },
-              remaining: {
-                image: quotaCheck.totalImageBalance,
-                videoAudio: quotaCheck.totalVideoBalance,
-              },
-            },
-          },
-          { status: 402 }
-        );
-      }
-    }
-
-    const preprocessResult = await runQwenMultimodalPreprocess({
-      userId,
+    const preprocessModel = resolvePreprocessModel(attachments);
+    const billingModelKey = normalizeBillingModelKey(preprocessModel);
+    const billingRequestId = `multimodal:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+    const estimatedMetrics = buildMultimodalBillingMetrics({
       message: rawMessage,
       attachments,
+      modelKey: billingModelKey,
+      maxTokens: 1400,
     });
+
+    const planId = coercePlanId(planLower);
+
+    const reservation = await authorizeCreditUsage({
+      userId,
+      requestId: billingRequestId,
+      planId,
+      modelKey: billingModelKey,
+      metrics: estimatedMetrics,
+      metadata: { route: "chat/multimodal-preprocess" },
+    });
+
+    if (!reservation.success) {
+      return Response.json(
+        {
+          error: "Insufficient credits",
+          message: reservation.error || "Not enough credits",
+          credits: {
+            required: reservation.computation?.credits || 0,
+            balance: reservation.wallet
+              ? reservation.wallet.monthlyGrantBalance + reservation.wallet.rechargeBalance + reservation.wallet.bonusBalance
+              : 0,
+          },
+        },
+        { status: 402 }
+      );
+    }
+
+    let preprocessResult;
+    try {
+      preprocessResult = await runQwenMultimodalPreprocess({
+        userId,
+        message: rawMessage,
+        attachments,
+      });
+    } catch (error) {
+      await releaseCreditUsageReservation({
+        userId,
+        requestId: billingRequestId,
+        reason: error instanceof Error ? error.message : "multimodal_preprocess_failed",
+      }).catch(() => undefined);
+      throw error;
+    }
+
+    const actualBillingModelKey = normalizeBillingModelKey(preprocessResult.model);
+    const actualMetrics = buildMultimodalBillingMetrics({
+      message: rawMessage,
+      attachments,
+      modelKey: actualBillingModelKey,
+      maxTokens: 1400,
+      promptTokens: preprocessResult.usage?.promptTokens,
+      completionTokens: preprocessResult.usage?.completionTokens,
+    });
+
+    const settlement = await settleCreditUsage({
+      userId,
+      requestId: billingRequestId,
+      planId,
+      modelKey: actualBillingModelKey,
+      metrics: actualMetrics,
+      metadata: { route: "chat/multimodal-preprocess" },
+    });
+
+    if (!settlement.success) {
+      console.error("[multimodal-preprocess] Failed to settle credits:", settlement.error);
+    }
 
     if (imageCount > 0 || videoAudioCount > 0) {
       const deduction = await consumeQuota({
@@ -509,12 +659,7 @@ export async function POST(req: NextRequest) {
         videoAudioCount,
       });
       if (!deduction.success) {
-        return Response.json(
-          {
-            error: deduction.error || "Failed to consume multimodal quota",
-          },
-          { status: 402 }
-        );
+        console.warn("[multimodal-preprocess] Legacy quota mirror failed:", deduction.error);
       }
     }
 

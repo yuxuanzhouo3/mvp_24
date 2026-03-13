@@ -233,6 +233,12 @@ export const MODEL_PRICING = {
   "deepseek-chat": { prompt: 0.00014, completion: 0.00028 },
   "deepseek-coder": { prompt: 0.00014, completion: 0.00028 },
 
+  // OpenRouter INTL multimodal preprocess
+  "gpt-5-nano": { prompt: 0.00005, completion: 0.0004 },
+  "gemini-2.5-flash-lite": { prompt: 0.00001, completion: 0.00004 },
+  "openai/gpt-5-nano": { prompt: 0.00005, completion: 0.0004 },
+  "google/gemini-2.5-flash-lite": { prompt: 0.00001, completion: 0.00004 },
+
   // DashScope / Qwen
   "qwen3-omni-flash": { prompt: 0.000008, completion: 0.000008 },
   "qwen3-max-2026-01-23": { prompt: 0.00004, completion: 0.00012 },

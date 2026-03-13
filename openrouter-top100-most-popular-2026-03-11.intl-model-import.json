@@ -1,0 +1,2424 @@
+[
+  {
+    "modelKey": "minimax/minimax-m2.5",
+    "provider": "openrouter",
+    "providerModel": "minimax/minimax-m2.5",
+    "displayName": "MiniMax: MiniMax M2.5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00027,
+    "outputPrice": 0.00095,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00027,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00095,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "stepfun/step-3.5-flash",
+    "provider": "openrouter",
+    "providerModel": "stepfun/step-3.5-flash",
+    "displayName": "StepFun: Step 3.5 Flash (free)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "google/gemini-3-flash-preview",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-3-flash-preview",
+    "displayName": "Google: Gemini 3 Flash Preview",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0005,
+    "outputPrice": 0.003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-v3.2",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-v3.2",
+    "displayName": "DeepSeek: DeepSeek V3.2",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00025,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-opus-4.6",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-opus-4.6",
+    "displayName": "Anthropic: Claude Opus 4.6",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.01,
+    "outputPrice": 0.0375,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0375,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-sonnet-4.6",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-sonnet-4.6",
+    "displayName": "Anthropic: Claude Sonnet 4.6",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.006,
+    "outputPrice": 0.0225,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0225,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "moonshotai/kimi-k2.5",
+    "provider": "openrouter",
+    "providerModel": "moonshotai/kimi-k2.5",
+    "displayName": "MoonshotAI: Kimi K2.5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00045,
+    "outputPrice": 0.0022,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00045,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0022,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "x-ai/grok-4.1-fast",
+    "provider": "openrouter",
+    "providerModel": "x-ai/grok-4.1-fast",
+    "displayName": "xAI: Grok 4.1 Fast",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.001,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.001,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-oss-120b",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-oss-120b",
+    "displayName": "OpenAI: gpt-oss-120b",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.000039,
+    "outputPrice": 0.00019,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.000039,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00019,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.5-flash",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.5-flash",
+    "displayName": "Google: Gemini 2.5 Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0003,
+    "outputPrice": 0.0025,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0025,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "arcee-ai/trinity-large-preview",
+    "provider": "openrouter",
+    "providerModel": "arcee-ai/trinity-large-preview",
+    "displayName": "Arcee AI: Trinity Large Preview (free)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "anthropic/claude-sonnet-4.5",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-sonnet-4.5",
+    "displayName": "Anthropic: Claude Sonnet 4.5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.006,
+    "outputPrice": 0.0225,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0225,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.5-flash-lite",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.5-flash-lite",
+    "displayName": "Google: Gemini 2.5 Flash Lite",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5-nano",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5-nano",
+    "displayName": "OpenAI: GPT-5 Nano",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00005,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "z-ai/glm-5",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-5",
+    "displayName": "Z.ai: GLM 5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00072,
+    "outputPrice": 0.0023,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00072,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0023,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-3.1-pro-preview",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-3.1-pro-preview",
+    "displayName": "Google: Gemini 3.1 Pro Preview",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.004,
+    "outputPrice": 0.018,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.018,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-haiku-4.5",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-haiku-4.5",
+    "displayName": "Anthropic: Claude Haiku 4.5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.001,
+    "outputPrice": 0.005,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.005,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.0-flash-001",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.0-flash-001",
+    "displayName": "Google: Gemini 2.0 Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-4o-mini",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4o-mini",
+    "displayName": "OpenAI: GPT-4o-mini",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00015,
+    "outputPrice": 0.0006,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00015,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0006,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.2",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.2",
+    "displayName": "OpenAI: GPT-5.2",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00175,
+    "outputPrice": 0.014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00175,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.4",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.4",
+    "displayName": "OpenAI: GPT-5.4",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.005,
+    "outputPrice": 0.0225,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0225,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.3-codex",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.3-codex",
+    "displayName": "OpenAI: GPT-5.3-Codex",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00175,
+    "outputPrice": 0.014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00175,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "x-ai/grok-4-fast",
+    "provider": "openrouter",
+    "providerModel": "x-ai/grok-4-fast",
+    "displayName": "xAI: Grok 4 Fast",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.001,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.001,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-3.1-flash-lite-preview",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-3.1-flash-lite-preview",
+    "displayName": "Google: Gemini 3.1 Flash Lite Preview",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00025,
+    "outputPrice": 0.0015,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0015,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5-mini",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5-mini",
+    "displayName": "OpenAI: GPT-5 Mini",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00025,
+    "outputPrice": 0.002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "xiaomi/mimo-v2-flash",
+    "provider": "openrouter",
+    "providerModel": "xiaomi/mimo-v2-flash",
+    "displayName": "Xiaomi: MiMo-V2-Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00009,
+    "outputPrice": 0.00029,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00009,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00029,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-235b-a22b-2507",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-235b-a22b-2507",
+    "displayName": "Qwen: Qwen3 235B A22B Instruct 2507",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.000071,
+    "outputPrice": 0.0001,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.000071,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-4.1-mini",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4.1-mini",
+    "displayName": "OpenAI: GPT-4.1 Mini",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.0016,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0016,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "meta-llama/llama-3.1-8b-instruct",
+    "provider": "openrouter",
+    "providerModel": "meta-llama/llama-3.1-8b-instruct",
+    "displayName": "Meta: Llama 3.1 8B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00002,
+    "outputPrice": 0.00005,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00005,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.5-pro",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.5-pro",
+    "displayName": "Google: Gemini 2.5 Pro",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0025,
+    "outputPrice": 0.015,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.015,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-oss-20b",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-oss-20b",
+    "displayName": "OpenAI: gpt-oss-20b",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00003,
+    "outputPrice": 0.00014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00003,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "z-ai/glm-4.7",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-4.7",
+    "displayName": "Z.ai: GLM 4.7",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00038,
+    "outputPrice": 0.00198,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00038,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00198,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-opus-4.5",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-opus-4.5",
+    "displayName": "Anthropic: Claude Opus 4.5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.005,
+    "outputPrice": 0.025,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.025,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-3-pro-preview",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-3-pro-preview",
+    "displayName": "Google: Gemini 3 Pro Preview",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.004,
+    "outputPrice": 0.018,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.018,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-sonnet-4",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-sonnet-4",
+    "displayName": "Anthropic: Claude Sonnet 4",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.006,
+    "outputPrice": 0.0225,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0225,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "mistralai/mistral-nemo",
+    "provider": "openrouter",
+    "providerModel": "mistralai/mistral-nemo",
+    "displayName": "Mistral: Mistral Nemo",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00002,
+    "outputPrice": 0.00004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.5-flash-lite-preview-09-2025",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.5-flash-lite-preview-09-2025",
+    "displayName": "Google: Gemini 2.5 Flash Lite Preview 09-2025",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-chat-v3-0324",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-chat-v3-0324",
+    "displayName": "DeepSeek: DeepSeek V3 0324",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0002,
+    "outputPrice": 0.00077,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00077,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3.5-35b-a3b",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3.5-35b-a3b",
+    "displayName": "Qwen: Qwen3.5-35B-A3B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00025,
+    "outputPrice": 0.002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3.5-397b-a17b",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3.5-397b-a17b",
+    "displayName": "Qwen: Qwen3.5 397B A17B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0006,
+    "outputPrice": 0.0036,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0036,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-chat-v3.1",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-chat-v3.1",
+    "displayName": "DeepSeek: DeepSeek V3.1",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00015,
+    "outputPrice": 0.00075,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00015,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00075,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "z-ai/glm-4.5-air",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-4.5-air",
+    "displayName": "Z.ai: GLM 4.5 Air (free)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "openai/gpt-4.1",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4.1",
+    "displayName": "OpenAI: GPT-4.1",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.002,
+    "outputPrice": 0.008,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.008,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3.5-flash-02-23",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3.5-flash-02-23",
+    "displayName": "Qwen: Qwen3.5-Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-32b",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-32b",
+    "displayName": "Qwen: Qwen3 32B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00008,
+    "outputPrice": 0.00024,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00008,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00024,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-coder-next",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-coder-next",
+    "displayName": "Qwen: Qwen3 Coder Next",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00012,
+    "outputPrice": 0.00075,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00012,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00075,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-vl-235b-a22b-instruct",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-vl-235b-a22b-instruct",
+    "displayName": "Qwen: Qwen3 VL 235B A22B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0002,
+    "outputPrice": 0.00088,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00088,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-embedding-8b",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-embedding-8b",
+    "displayName": "Qwen: Qwen3 Embedding 8B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00001,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.1-chat",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.1-chat",
+    "displayName": "OpenAI: GPT-5.1 Chat",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00125,
+    "outputPrice": 0.01,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00125,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.2-codex",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.2-codex",
+    "displayName": "OpenAI: GPT-5.2-Codex",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00175,
+    "outputPrice": 0.014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00175,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/text-embedding-3-small",
+    "provider": "openrouter",
+    "providerModel": "openai/text-embedding-3-small",
+    "displayName": "OpenAI: Text Embedding 3 Small",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00002,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3.5-plus-02-15",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3.5-plus-02-15",
+    "displayName": "Qwen: Qwen3.5 Plus 2026-02-15",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0005,
+    "outputPrice": 0.003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.1",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.1",
+    "displayName": "OpenAI: GPT-5.1",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00125,
+    "outputPrice": 0.01,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00125,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-3.1-pro-preview-customtools",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-3.1-pro-preview-customtools",
+    "displayName": "Google: Gemini 3.1 Pro Preview Custom Tools",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.004,
+    "outputPrice": 0.018,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.018,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "meta-llama/llama-3.3-70b-instruct",
+    "provider": "openrouter",
+    "providerModel": "meta-llama/llama-3.3-70b-instruct",
+    "displayName": "Meta: Llama 3.3 70B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.00032,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00032,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "nvidia/nemotron-3-nano-30b-a3b",
+    "provider": "openrouter",
+    "providerModel": "nvidia/nemotron-3-nano-30b-a3b",
+    "displayName": "NVIDIA: Nemotron 3 Nano 30B A3B (free)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "z-ai/glm-4.7-flash",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-4.7-flash",
+    "displayName": "Z.ai: GLM 4.7 Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00006,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "minimax/minimax-m2.1",
+    "provider": "openrouter",
+    "providerModel": "minimax/minimax-m2.1",
+    "displayName": "MiniMax: MiniMax M2.1",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00027,
+    "outputPrice": 0.00095,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00027,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00095,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "mistralai/mistral-small-3.2-24b-instruct",
+    "provider": "openrouter",
+    "providerModel": "mistralai/mistral-small-3.2-24b-instruct",
+    "displayName": "Mistral: Mistral Small 3.2 24B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00006,
+    "outputPrice": 0.00018,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00018,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemma-3-27b-it",
+    "provider": "openrouter",
+    "providerModel": "google/gemma-3-27b-it",
+    "displayName": "Google: Gemma 3 27B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00003,
+    "outputPrice": 0.00011,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00003,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00011,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemini-2.0-flash-lite-001",
+    "provider": "openrouter",
+    "providerModel": "google/gemini-2.0-flash-lite-001",
+    "displayName": "Google: Gemini 2.0 Flash Lite",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.000075,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.000075,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "meta-llama/llama-4-maverick",
+    "provider": "openrouter",
+    "providerModel": "meta-llama/llama-4-maverick",
+    "displayName": "Meta: Llama 4 Maverick",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00015,
+    "outputPrice": 0.0006,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00015,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0006,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-4.1-nano",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4.1-nano",
+    "displayName": "OpenAI: GPT-4.1 Nano",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-vl-235b-a22b-thinking",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-vl-235b-a22b-thinking",
+    "displayName": "Qwen: Qwen3 VL 235B A22B Thinking",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "moonshotai/kimi-k2-0905",
+    "provider": "openrouter",
+    "providerModel": "moonshotai/kimi-k2-0905",
+    "displayName": "MoonshotAI: Kimi K2 0905",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5",
+    "displayName": "OpenAI: GPT-5",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00125,
+    "outputPrice": 0.01,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00125,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-v3.2-exp",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-v3.2-exp",
+    "displayName": "DeepSeek: DeepSeek V3.2 Exp",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00027,
+    "outputPrice": 0.00041,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00027,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00041,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "stepfun/step-3.5-flash",
+    "provider": "openrouter",
+    "providerModel": "stepfun/step-3.5-flash",
+    "displayName": "StepFun: Step 3.5 Flash",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "z-ai/glm-4.5-air",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-4.5-air",
+    "displayName": "Z.ai: GLM 4.5 Air",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00013,
+    "outputPrice": 0.00085,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00013,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00085,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-coder",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-coder",
+    "displayName": "Qwen: Qwen3 Coder 480B A35B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00022,
+    "outputPrice": 0.001,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00022,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.001,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-3.5-haiku",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-3.5-haiku",
+    "displayName": "Anthropic: Claude 3.5 Haiku",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0008,
+    "outputPrice": 0.004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0008,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-chat",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-chat",
+    "displayName": "DeepSeek: DeepSeek V3",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00032,
+    "outputPrice": 0.00089,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00032,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00089,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-v3.1-terminus",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-v3.1-terminus",
+    "displayName": "DeepSeek: DeepSeek V3.1 Terminus",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00021,
+    "outputPrice": 0.00079,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00021,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00079,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-vl-8b-instruct",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-vl-8b-instruct",
+    "displayName": "Qwen: Qwen3 VL 8B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00008,
+    "outputPrice": 0.0005,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00008,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0005,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "meta-llama/llama-4-scout",
+    "provider": "openrouter",
+    "providerModel": "meta-llama/llama-4-scout",
+    "displayName": "Meta: Llama 4 Scout",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00008,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00008,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-4o-mini-2024-07-18",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4o-mini-2024-07-18",
+    "displayName": "OpenAI: GPT-4o-mini (2024-07-18)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00015,
+    "outputPrice": 0.0006,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00015,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0006,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-235b-a22b-thinking-2507",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-235b-a22b-thinking-2507",
+    "displayName": "Qwen: Qwen3 235B A22B Thinking 2507",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00011,
+    "outputPrice": 0.0006,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00011,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0006,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-3.7-sonnet",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-3.7-sonnet",
+    "displayName": "Anthropic: Claude 3.7 Sonnet",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.003,
+    "outputPrice": 0.015,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.003,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.015,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "anthropic/claude-3.5-sonnet",
+    "provider": "openrouter",
+    "providerModel": "anthropic/claude-3.5-sonnet",
+    "displayName": "Anthropic: Claude 3.5 Sonnet",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.006,
+    "outputPrice": 0.03,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.006,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.03,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-4o",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-4o",
+    "displayName": "OpenAI: GPT-4o",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0025,
+    "outputPrice": 0.01,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0025,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "x-ai/grok-code-fast-1",
+    "provider": "openrouter",
+    "providerModel": "x-ai/grok-code-fast-1",
+    "displayName": "xAI: Grok Code Fast 1",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0002,
+    "outputPrice": 0.0015,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0015,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5-chat",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5-chat",
+    "displayName": "OpenAI: GPT-5 Chat",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00125,
+    "outputPrice": 0.01,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00125,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.01,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "deepseek/deepseek-r1-0528",
+    "provider": "openrouter",
+    "providerModel": "deepseek/deepseek-r1-0528",
+    "displayName": "DeepSeek: R1 0528",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00045,
+    "outputPrice": 0.00215,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00045,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00215,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "z-ai/glm-4.6",
+    "provider": "openrouter",
+    "providerModel": "z-ai/glm-4.6",
+    "displayName": "Z.ai: GLM 4.6",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00039,
+    "outputPrice": 0.0019,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00039,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0019,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3-30b-a3b-instruct-2507",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-30b-a3b-instruct-2507",
+    "displayName": "Qwen: Qwen3 30B A3B Instruct 2507",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00009,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00009,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "qwen/qwen3.5-122b-a10b",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3.5-122b-a10b",
+    "displayName": "Qwen: Qwen3.5-122B-A10B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.0032,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0032,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "mistralai/mistral-small-creative",
+    "provider": "openrouter",
+    "providerModel": "mistralai/mistral-small-creative",
+    "displayName": "Mistral: Mistral Small Creative",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0001,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0001,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "meta-llama/llama-3.1-70b-instruct",
+    "provider": "openrouter",
+    "providerModel": "meta-llama/llama-3.1-70b-instruct",
+    "displayName": "Meta: Llama 3.1 70B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0004,
+    "outputPrice": 0.0004,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0004,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "google/gemma-3-12b-it",
+    "provider": "openrouter",
+    "providerModel": "google/gemma-3-12b-it",
+    "displayName": "Google: Gemma 3 12B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00004,
+    "outputPrice": 0.00013,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00004,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00013,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.2-chat",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.2-chat",
+    "displayName": "OpenAI: GPT-5.2 Chat",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00175,
+    "outputPrice": 0.014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00175,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "arcee-ai/trinity-mini",
+    "provider": "openrouter",
+    "providerModel": "arcee-ai/trinity-mini",
+    "displayName": "Arcee AI: Trinity Mini (free)",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": []
+  },
+  {
+    "modelKey": "qwen/qwen3-next-80b-a3b-instruct",
+    "provider": "openrouter",
+    "providerModel": "qwen/qwen3-next-80b-a3b-instruct",
+    "displayName": "Qwen: Qwen3 Next 80B A3B Instruct",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00009,
+    "outputPrice": 0.0011,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00009,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0011,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "moonshotai/kimi-k2-thinking",
+    "provider": "openrouter",
+    "providerModel": "moonshotai/kimi-k2-thinking",
+    "displayName": "MoonshotAI: Kimi K2 Thinking",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00047,
+    "outputPrice": 0.002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00047,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/text-embedding-3-large",
+    "provider": "openrouter",
+    "providerModel": "openai/text-embedding-3-large",
+    "displayName": "OpenAI: Text Embedding 3 Large",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00013,
+    "outputPrice": 0,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00013,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "mistralai/ministral-14b-2512",
+    "provider": "openrouter",
+    "providerModel": "mistralai/ministral-14b-2512",
+    "displayName": "Mistral: Ministral 3 14B 2512",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.0002,
+    "outputPrice": 0.0002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-oss-safeguard-20b",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-oss-safeguard-20b",
+    "displayName": "OpenAI: gpt-oss-safeguard-20b",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.000075,
+    "outputPrice": 0.0003,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.000075,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0003,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "moonshotai/kimi-k2",
+    "provider": "openrouter",
+    "providerModel": "moonshotai/kimi-k2",
+    "displayName": "MoonshotAI: Kimi K2 0711",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00055,
+    "outputPrice": 0.0022,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00055,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0022,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "nvidia/nemotron-3-nano-30b-a3b",
+    "provider": "openrouter",
+    "providerModel": "nvidia/nemotron-3-nano-30b-a3b",
+    "displayName": "NVIDIA: Nemotron 3 Nano 30B A3B",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00005,
+    "outputPrice": 0.0002,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.0002,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "openai/gpt-5.3-chat",
+    "provider": "openrouter",
+    "providerModel": "openai/gpt-5.3-chat",
+    "displayName": "OpenAI: GPT-5.3 Chat",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00175,
+    "outputPrice": 0.014,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00175,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.014,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  },
+  {
+    "modelKey": "mistralai/mistral-small-24b-instruct-2501",
+    "provider": "openrouter",
+    "providerModel": "mistralai/mistral-small-24b-instruct-2501",
+    "displayName": "Mistral: Mistral Small 3",
+    "modality": "text",
+    "currency": "USD",
+    "inputPrice": 0.00005,
+    "outputPrice": 0.00008,
+    "enabled": true,
+    "pricingRules": [
+      {
+        "metricKey": "input_tokens",
+        "unitSize": 1000,
+        "price": 0.00005,
+        "label": "USD/1K input tokens"
+      },
+      {
+        "metricKey": "output_tokens",
+        "unitSize": 1000,
+        "price": 0.00008,
+        "label": "USD/1K output tokens"
+      }
+    ]
+  }
+]

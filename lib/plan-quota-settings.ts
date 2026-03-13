@@ -17,22 +17,18 @@ export type PlanId = (typeof PLAN_IDS)[number];
 
 export interface PlanQuotaSettings {
   planId: PlanId;
-  tokenLimit: number;
   imageLimit: number;
   videoAudioLimit: number;
+  monthlyCreditGrant: number;
+  dailyCreditCap: number;
   updatedAt?: string | null;
 }
 
 const CLOUDBASE_PLAN_QUOTA_COLLECTION = "plan_quota_settings";
-const DEFAULT_TOKEN_LIMITS: Record<PlanId, number> = {
-  free: 50000,
-  basic: 200000,
-  pro: 1000000,
-  enterprise: 5000000,
-};
+const LEGACY_TOKEN_LIMIT_PLACEHOLDER = 0;
 
-const MAX_TOKEN_LIMIT = 10_000_000_000;
 const MAX_MEDIA_LIMIT = 1_000_000;
+const MAX_CREDIT_LIMIT = 10_000_000_000;
 
 function clampInt(
   value: unknown,
@@ -67,9 +63,11 @@ function getDefaultPlanQuotaPayload(planId: PlanId, now: string) {
   const item = getDefaultPlanQuotas()[planId];
   return {
     plan_id: item.planId,
-    token_limit: item.tokenLimit,
+    token_limit: LEGACY_TOKEN_LIMIT_PLACEHOLDER,
     image_limit: item.imageLimit,
     video_audio_limit: item.videoAudioLimit,
+    monthly_credit_grant: item.monthlyCreditGrant,
+    daily_credit_cap: item.dailyCreditCap,
     created_at: now,
     updated_at: now,
   };
@@ -144,27 +142,31 @@ export function getDefaultPlanQuotas(): Record<PlanId, PlanQuotaSettings> {
   return {
     free: {
       planId: "free",
-      tokenLimit: DEFAULT_TOKEN_LIMITS.free,
       imageLimit: getFreeMonthlyPhotoLimit(),
       videoAudioLimit: getFreeMonthlyVideoAudioLimit(),
+      monthlyCreditGrant: 2000,
+      dailyCreditCap: 500,
     },
     basic: {
       planId: "basic",
-      tokenLimit: DEFAULT_TOKEN_LIMITS.basic,
       imageLimit: getBasicMonthlyPhotoLimit(),
       videoAudioLimit: getBasicMonthlyVideoAudioLimit(),
+      monthlyCreditGrant: 30000,
+      dailyCreditCap: 5000,
     },
     pro: {
       planId: "pro",
-      tokenLimit: DEFAULT_TOKEN_LIMITS.pro,
       imageLimit: getProMonthlyPhotoLimit(),
       videoAudioLimit: getProMonthlyVideoAudioLimit(),
+      monthlyCreditGrant: 120000,
+      dailyCreditCap: 25000,
     },
     enterprise: {
       planId: "enterprise",
-      tokenLimit: DEFAULT_TOKEN_LIMITS.enterprise,
       imageLimit: getEnterpriseMonthlyPhotoLimit(),
       videoAudioLimit: getEnterpriseMonthlyVideoAudioLimit(),
+      monthlyCreditGrant: 600000,
+      dailyCreditCap: 0,
     },
   };
 }
@@ -173,7 +175,6 @@ function buildPlanQuotaFromRow(
   row: any,
   fallback: PlanQuotaSettings
 ): PlanQuotaSettings {
-  const tokenRaw = pickRaw(row?.token_limit ?? row?.tokenLimit ?? row?.token);
   const imageRaw = pickRaw(row?.image_limit ?? row?.imageLimit ?? row?.image);
   const videoRaw = pickRaw(
     row?.video_audio_limit ??
@@ -182,16 +183,18 @@ function buildPlanQuotaFromRow(
       row?.videoLimit ??
       row?.video
   );
+  const monthlyCreditRaw = pickRaw(
+    row?.monthly_credit_grant ?? row?.monthlyCreditGrant ?? row?.credit_limit
+  );
+  const dailyCreditCapRaw = pickRaw(
+    row?.daily_credit_cap ?? row?.dailyCreditCap ?? row?.daily_limit
+  );
   const updatedAtRaw = row?.updated_at ?? row?.updatedAt;
   const updatedAt =
     typeof updatedAtRaw === "string" ? updatedAtRaw : fallback.updatedAt || null;
 
   return {
     planId: fallback.planId,
-    tokenLimit:
-      tokenRaw === undefined
-        ? fallback.tokenLimit
-        : clampInt(tokenRaw, { min: 0, max: MAX_TOKEN_LIMIT }),
     imageLimit:
       imageRaw === undefined
         ? fallback.imageLimit
@@ -200,6 +203,14 @@ function buildPlanQuotaFromRow(
       videoRaw === undefined
         ? fallback.videoAudioLimit
         : clampInt(videoRaw, { min: 0, max: MAX_MEDIA_LIMIT }),
+    monthlyCreditGrant:
+      monthlyCreditRaw === undefined
+        ? fallback.monthlyCreditGrant
+        : clampInt(monthlyCreditRaw, { min: 0, max: MAX_CREDIT_LIMIT }),
+    dailyCreditCap:
+      dailyCreditCapRaw === undefined
+        ? fallback.dailyCreditCap
+        : clampInt(dailyCreditCapRaw, { min: 0, max: MAX_CREDIT_LIMIT }),
     updatedAt,
   };
 }
@@ -209,7 +220,7 @@ async function fetchSupabasePlanQuotas(): Promise<PlanQuotaSettings[] | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from("plan_quota_settings")
-      .select("plan_id, token_limit, image_limit, video_audio_limit, updated_at");
+      .select("plan_id, image_limit, video_audio_limit, monthly_credit_grant, daily_credit_cap, updated_at");
     if (error) {
       console.error("[plan-quota] Supabase fetch error:", error);
       return null;
@@ -285,14 +296,18 @@ export async function upsertPlanQuotaSettings(
     const planId = coercePlanId(item?.planId);
     normalized.set(planId, {
       planId,
-      tokenLimit: clampInt(item?.tokenLimit, {
-        min: 0,
-        max: MAX_TOKEN_LIMIT,
-      }),
       imageLimit: clampInt(item?.imageLimit, { min: 0, max: MAX_MEDIA_LIMIT }),
       videoAudioLimit: clampInt(item?.videoAudioLimit, {
         min: 0,
         max: MAX_MEDIA_LIMIT,
+      }),
+      monthlyCreditGrant: clampInt(item?.monthlyCreditGrant, {
+        min: 0,
+        max: MAX_CREDIT_LIMIT,
+      }),
+      dailyCreditCap: clampInt(item?.dailyCreditCap, {
+        min: 0,
+        max: MAX_CREDIT_LIMIT,
       }),
       updatedAt: item?.updatedAt ?? null,
     });
@@ -321,9 +336,11 @@ export async function upsertPlanQuotaSettings(
 
         const baseData = {
           plan_id: item.planId,
-          token_limit: item.tokenLimit,
+          token_limit: LEGACY_TOKEN_LIMIT_PLACEHOLDER,
           image_limit: item.imageLimit,
           video_audio_limit: item.videoAudioLimit,
+          monthly_credit_grant: item.monthlyCreditGrant,
+          daily_credit_cap: item.dailyCreditCap,
           updated_at: new Date().toISOString(),
         };
 
@@ -349,9 +366,11 @@ export async function upsertPlanQuotaSettings(
     const { error } = await supabaseAdmin.from("plan_quota_settings").upsert(
       payload.map((item) => ({
         plan_id: item.planId,
-        token_limit: item.tokenLimit,
+        token_limit: LEGACY_TOKEN_LIMIT_PLACEHOLDER,
         image_limit: item.imageLimit,
         video_audio_limit: item.videoAudioLimit,
+        monthly_credit_grant: item.monthlyCreditGrant,
+        daily_credit_cap: item.dailyCreditCap,
       })),
       { onConflict: "plan_id" }
     );

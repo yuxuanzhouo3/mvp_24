@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Bot, X, ChevronDown, Sparkles } from "lucide-react";
 import { AISelectorDropdown } from "./ai-selector-dropdown";
+import { useLanguage } from "@/components/language-provider";
 
 interface AIAgent {
   id: string;
@@ -34,11 +35,12 @@ export function ChatToolbar({
   availableAIs,
   sessionId,
   sessionConfig,
-  collaborationMode = "parallel",
+  collaborationMode = "normal",
   onCollaborationModeChange,
   variant = "default",
 }: ChatToolbarProps) {
   const [showAISelector, setShowAISelector] = useState(false);
+  const { language } = useLanguage();
   const selectorTriggerRef = useRef<HTMLDivElement | null>(null);
   const smartGradientTextClass =
     "bg-[linear-gradient(90deg,#2f8cff_0%,#7a5cff_35%,#ff2d95_70%,#ff8a1f_100%)] bg-clip-text text-transparent";
@@ -52,6 +54,18 @@ export function ChatToolbar({
     ai.model === "smart-auto" || ai.id.includes("smart-model");
   const isSingleSmartModel =
     selectedAIs.length === 1 && isSmartModel(selectedAIs[0]);
+  const lockedHint =
+    language === "zh"
+      ? "当前对话已锁定模型，如需切换模型，请新建新对话"
+      : "This chat is locked to its current model. Create a new chat to switch models.";
+  const getShortDisplayName = (ai?: AIAgent) => {
+    const fallback = language === "zh" ? "选择AI模型" : "Choose AI Model";
+    const rawName = String(ai?.name || ai?.model || fallback).trim();
+    const simplified = rawName.includes(":") ? rawName.split(":").slice(1).join(":").trim() : rawName;
+    const displayName = simplified || rawName || fallback;
+    const maxLength = 18;
+    return displayName.length > maxLength ? `${displayName.slice(0, maxLength)}…` : displayName;
+  };
 
   // ✅ 改进：会话创建且有 multi_ai_config 时，禁用AI选择
   // 无论是单AI还是多AI，都应该被锁定
@@ -60,12 +74,15 @@ export function ChatToolbar({
   // 显示当前选中的AI
   const getAIDisplayText = () => {
     if (selectedAIs.length === 0) {
-      return "选择AI模型";
+      return language === "zh" ? "选择AI模型" : "Choose AI Model";
+    }
+    if (selectedAIs.length === 1) {
+      return getShortDisplayName(selectedAIs[0]);
     }
     if (isSessionLocked) {
-      return `🔒 已锁定 ${selectedAIs.length} AI`;
+      return language === "zh" ? `🔒 已锁定 ${selectedAIs.length} 个模型` : `🔒 ${selectedAIs.length} model${selectedAIs.length > 1 ? "s" : ""} locked`;
     }
-    return `已选 ${selectedAIs.length}/4`;
+    return language === "zh" ? `已选 ${selectedAIs.length}/4` : `${selectedAIs.length}/4 selected`;
   };
 
   // 移除单个AI
@@ -79,10 +96,14 @@ export function ChatToolbar({
   if (variant === "integrated") {
     return (
       <div className="flex items-center gap-1 min-w-0">
-        <div ref={selectorTriggerRef} className="relative min-w-0">
+        <div
+          ref={selectorTriggerRef}
+          className="relative min-w-0 group"
+          title={isSessionLocked ? lockedHint : undefined}
+        >
           <Button
             variant="outline"
-            className={`h-7 sm:h-8 px-2.5 sm:px-3.5 gap-1 sm:gap-2 text-[11px] sm:text-sm font-normal rounded-full min-w-0 transition-all ${
+            className={`h-7 sm:h-8 min-w-[126px] sm:min-w-[190px] justify-between px-2.5 sm:px-3 gap-1 sm:gap-2 text-[11px] sm:text-sm font-normal rounded-full transition-all ${
               isSingleSmartModel
                 ? `${smartGradientSoftClass} ${smartGradientHoverClass} border-violet-200 text-slate-700 shadow-[0_10px_24px_-16px_rgba(168,85,247,0.65)]`
                 : "border-gray-200 hover:bg-gray-50"
@@ -96,15 +117,17 @@ export function ChatToolbar({
               <Bot className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
             )}
             <span
-              className={`truncate max-w-[40px] sm:max-w-[100px] ${
+              className={`min-w-0 flex-1 truncate text-left ${
                 isSingleSmartModel ? smartGradientTextClass : "text-gray-700"
               }`}
             >
               {selectedAIs.length === 0
-                ? "模型"
+                ? (language === "zh" ? "模型" : "Model")
                 : selectedAIs.length === 1
-                ? selectedAIs[0].name.slice(0, 6)
-                : `${selectedAIs.length}个`}
+                ? getShortDisplayName(selectedAIs[0])
+                : language === "zh"
+                  ? `${selectedAIs.length}个`
+                  : `${selectedAIs.length}`}
             </span>
             <ChevronDown
               className={`w-3 h-3 flex-shrink-0 ${
@@ -112,6 +135,12 @@ export function ChatToolbar({
               }`}
             />
           </Button>
+
+          {isSessionLocked && (
+            <div className="pointer-events-none absolute bottom-full left-1/2 z-[1200] mb-2 hidden w-64 -translate-x-1/2 rounded-md border bg-white px-3 py-2 text-xs text-gray-600 shadow-lg group-hover:block">
+              {lockedHint}
+            </div>
+          )}
 
           {showAISelector && !isSessionLocked && (
             <AISelectorDropdown
@@ -138,7 +167,7 @@ export function ChatToolbar({
             onClick={() => !isSessionLocked && onCollaborationModeChange("parallel")}
             disabled={!!isSessionLocked}
           >
-            并行
+            {language === "zh" ? "并行" : "Parallel"}
           </Button>
           <Button
             variant={collaborationMode === "sequential" ? "default" : "outline"}
@@ -146,16 +175,20 @@ export function ChatToolbar({
             onClick={() => !isSessionLocked && onCollaborationModeChange("sequential")}
             disabled={!!isSessionLocked}
           >
-            顺序
+            {language === "zh" ? "顺序" : "Sequential"}
           </Button>
         </div>
       )}
 
       {/* AI 选择器 */}
-      <div ref={selectorTriggerRef} className="relative flex-shrink-0 z-[101]">
+      <div
+        ref={selectorTriggerRef}
+        className="relative flex-shrink-0 z-[101] group"
+        title={isSessionLocked ? lockedHint : undefined}
+      >
         <Button
           variant={isSessionLocked ? "secondary" : "outline"}
-          className={`h-8 sm:h-9 px-2 sm:px-3 gap-1 sm:gap-2 text-xs sm:text-sm font-normal ${
+          className={`h-8 sm:h-9 min-w-[132px] sm:min-w-[200px] justify-between px-2.5 sm:px-3 gap-1 sm:gap-2 text-xs sm:text-sm font-normal ${
             !isSessionLocked && isSingleSmartModel
               ? `${smartGradientSoftClass} ${smartGradientHoverClass} border-violet-200 text-slate-700 shadow-[0_10px_24px_-16px_rgba(168,85,247,0.65)]`
               : ""
@@ -168,7 +201,7 @@ export function ChatToolbar({
           ) : (
             <Bot className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
           )}
-          <span className={`hidden xs:inline ${isSingleSmartModel ? smartGradientTextClass : ""}`}>
+          <span className={`hidden xs:inline min-w-0 flex-1 truncate text-left ${isSingleSmartModel ? smartGradientTextClass : ""}`}>
             {getAIDisplayText()}
           </span>
           <span className="xs:hidden">{selectedAIs.length > 0 ? `${selectedAIs.length}` : "+"}</span>
@@ -188,6 +221,12 @@ export function ChatToolbar({
             </svg>
           )}
         </Button>
+
+        {isSessionLocked && (
+          <div className="pointer-events-none absolute bottom-full left-1/2 z-[1200] mb-2 hidden w-72 -translate-x-1/2 rounded-md border bg-white px-3 py-2 text-xs text-gray-600 shadow-lg group-hover:block">
+            {lockedHint}
+          </div>
+        )}
 
         {/* AI 选择下拉菜单 */}
         {showAISelector && !isSessionLocked && (

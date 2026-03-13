@@ -184,6 +184,7 @@ export async function GET(
           limit,
           offset,
           sessionConfig: row.session_config || null,
+          sessionModel: typeof row.model === "string" ? row.model : "",
           stats: {
             totalMessages,
             totalTokens,
@@ -194,7 +195,7 @@ export async function GET(
       // RPC 不存在时回退到旧逻辑
       const { data: session, error: sessionError } = await supabaseAdmin
         .from("gpt_sessions")
-        .select("messages, multi_ai_config")
+        .select("messages, multi_ai_config, model")
         .eq("id", sessionId)
         .eq("user_id", userId)
         .single();
@@ -221,6 +222,7 @@ export async function GET(
         limit,
         offset,
         sessionConfig: session.multi_ai_config || null,
+        sessionModel: typeof session.model === "string" ? session.model : "",
         stats: {
           totalMessages,
           totalTokens,

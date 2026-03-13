@@ -45,7 +45,7 @@ export class OpenAIProvider extends BaseAIProvider {
       );
     }
 
-    // 使用 Vercel AI Gateway
+    // 使用自定义 baseURL 或直连提供商
     const baseURL =
       process.env.OPENAI_BASE_URL ||
       "https://gateway.ai.cloudflare.com/v1/openai";

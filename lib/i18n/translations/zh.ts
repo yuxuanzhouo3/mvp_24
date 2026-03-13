@@ -345,8 +345,7 @@ export const zh = {
       analysis: "分析",
       research: "研究",
       translation: "翻译",
-      general: "通用",
-      recommended: "推荐组合",
+      general: "通用",
     },
 
     capabilities: {
@@ -590,6 +589,28 @@ export const zh = {
     sessionDeleted: "会话已删除",
     titleUpdated: "标题已更新",
     messagesCleared: "消息已清空",
+    sidebar: {
+      blockedMessage: "当前对话生成中，请先停止再切换会话",
+      expandSidebar: "展开侧边栏",
+      collapseSidebar: "折叠侧边栏",
+      favorites: "收藏对话",
+      noFavorites: "暂无收藏",
+      emptyPreview: "(空)",
+      removeFavorite: "取消收藏",
+      collapseFavorites: "收起收藏",
+      showMoreFavorites: "显示更多（+{count}）",
+      deleteInProgress: "删除中...",
+      confirmDelete: "确认删除",
+      notFoundOrNoAccess: "对话不存在或无权限",
+      sessionExpired: "登录状态已过期，请重新登录",
+      groups: {
+        today: "今天",
+        yesterday: "昨天",
+        last7Days: "最近7天",
+        last30Days: "最近30天",
+        earlier: "更早",
+      },
+    },
   },
 
   // ==================== Profile ====================

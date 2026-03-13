@@ -39,7 +39,7 @@ export class AnthropicProvider extends BaseAIProvider {
       );
     }
 
-    // 使用 Vercel AI Gateway 或自定义 baseURL
+    // 使用自定义 baseURL 或直连提供商
     const baseURL = process.env.ANTHROPIC_BASE_URL || undefined;
 
     this.client = new Anthropic({

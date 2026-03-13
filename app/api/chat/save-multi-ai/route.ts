@@ -13,6 +13,7 @@ import {
   type MultiAIResponsePayload,
 } from "@/lib/chat/save-multi-ai-intl";
 import type { TaskGraphExecutionRun, TaskGraphSpec } from "@/types/task-graph";
+import type { MultimodalAttachmentPayload } from "@/lib/chat/multimodal-types";
 
 export const runtime = "nodejs";
 
@@ -68,6 +69,7 @@ export async function POST(req: NextRequest) {
       userMessageId,
       assistantMessageId,
       userMessage,
+      userAttachments,
       userModelInput,
       aiResponses,
       taskGraph,
@@ -77,6 +79,7 @@ export async function POST(req: NextRequest) {
       userMessageId?: string;
       assistantMessageId?: string;
       userMessage: string;
+      userAttachments?: MultimodalAttachmentPayload[];
       userModelInput?: string;
       aiResponses: AIResponse[];
       taskGraph?: { spec: TaskGraphSpec; run?: TaskGraphExecutionRun };
@@ -108,6 +111,7 @@ export async function POST(req: NextRequest) {
         session_id: sessionId,
         user_id: userId,
         user_message: userMessage,
+        user_attachments: Array.isArray(userAttachments) ? userAttachments : [],
         user_message_id: userMessageId,
         assistant_message_id: assistantMessageId,
         ai_responses: aiResponses,
@@ -137,7 +141,8 @@ export async function POST(req: NextRequest) {
           userMessageId,
           assistantMessageId,
           userMessage,
-          userModelInput,
+          userAttachments,
+      userModelInput,
           aiResponses: aiResponses as MultiAIResponsePayload[],
           collaborationMode,
           taskGraph,
