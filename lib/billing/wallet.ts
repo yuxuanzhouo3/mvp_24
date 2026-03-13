@@ -190,6 +190,86 @@ function createDefaultWallet(userId: string, planId: PlanId, monthlyGrant: numbe
   };
 }
 
+export function reconcileMonthlyGrantBalance(params: {
+  existing: CreditWalletSnapshot;
+  planId: PlanId;
+  currentMonthKey: string;
+  monthlyGrant: number;
+  spentThisMonth?: number;
+}) {
+  const { existing, planId, currentMonthKey } = params;
+  const monthlyGrant = Math.max(0, Math.floor(params.monthlyGrant));
+  const spentThisMonth = Math.max(0, Math.floor(toNumber(params.spentThisMonth, 0)));
+
+  if (existing.monthKey !== currentMonthKey) {
+    const next = {
+      ...existing,
+      planId,
+      monthKey: currentMonthKey,
+      monthlyGrantTotal: monthlyGrant,
+      monthlyGrantBalance: monthlyGrant,
+      updatedAt: new Date().toISOString(),
+      lifetimeCredited: existing.lifetimeCredited + monthlyGrant,
+    };
+    return {
+      next,
+      grantDelta: monthlyGrant,
+      revokedGrantCredits: 0,
+    };
+  }
+
+  if (monthlyGrant > existing.monthlyGrantTotal) {
+    const grantDelta = monthlyGrant - existing.monthlyGrantTotal;
+    const next = {
+      ...existing,
+      planId,
+      monthKey: currentMonthKey,
+      monthlyGrantTotal: monthlyGrant,
+      monthlyGrantBalance: existing.monthlyGrantBalance + grantDelta,
+      lifetimeCredited: existing.lifetimeCredited + grantDelta,
+      updatedAt: new Date().toISOString(),
+    };
+    return {
+      next,
+      grantDelta,
+      revokedGrantCredits: 0,
+    };
+  }
+
+  if (monthlyGrant < existing.monthlyGrantTotal) {
+    const nextGrantBalance = Math.min(
+      existing.monthlyGrantBalance,
+      Math.max(0, monthlyGrant - spentThisMonth)
+    );
+    const next = {
+      ...existing,
+      planId,
+      monthKey: currentMonthKey,
+      monthlyGrantTotal: monthlyGrant,
+      monthlyGrantBalance: nextGrantBalance,
+      updatedAt: new Date().toISOString(),
+    };
+    return {
+      next,
+      grantDelta: 0,
+      revokedGrantCredits: Math.max(0, existing.monthlyGrantBalance - nextGrantBalance),
+    };
+  }
+
+  return {
+    next:
+      existing.planId === planId
+        ? existing
+        : {
+            ...existing,
+            planId,
+            updatedAt: new Date().toISOString(),
+          },
+    grantDelta: 0,
+    revokedGrantCredits: 0,
+  };
+}
+
 export async function getRawCreditWallet(userId: string): Promise<CreditWalletSnapshot | null> {
   if (isChinaRegion()) {
     try {
@@ -411,33 +491,17 @@ export async function ensureCreditWallet(
     return wallet;
   }
 
-  let next = { ...existing };
-  let grantDelta = 0;
-
-  if (existing.monthKey !== currentMonthKey) {
-    grantDelta = monthlyGrant;
-    next = {
-      ...existing,
-      planId,
-      monthKey: currentMonthKey,
-      monthlyGrantTotal: monthlyGrant,
-      monthlyGrantBalance: monthlyGrant,
-      updatedAt: new Date().toISOString(),
-      lifetimeCredited: existing.lifetimeCredited + grantDelta,
-    };
-  } else {
-    const totalTarget = Math.max(existing.monthlyGrantTotal, monthlyGrant);
-    grantDelta = Math.max(0, totalTarget - existing.monthlyGrantTotal);
-    next = {
-      ...existing,
-      planId,
-      monthKey: currentMonthKey,
-      monthlyGrantTotal: totalTarget,
-      monthlyGrantBalance: existing.monthlyGrantBalance + grantDelta,
-      lifetimeCredited: existing.lifetimeCredited + grantDelta,
-      updatedAt: new Date().toISOString(),
-    };
-  }
+  const spentThisMonth =
+    existing.monthKey === currentMonthKey && monthlyGrant < existing.monthlyGrantTotal
+      ? (await getCreditUsageStats(userId)).spentThisMonth
+      : 0;
+  const { next, grantDelta, revokedGrantCredits } = reconcileMonthlyGrantBalance({
+    existing,
+    planId,
+    currentMonthKey,
+    monthlyGrant,
+    spentThisMonth,
+  });
 
   if (
     next.planId !== existing.planId ||
@@ -455,6 +519,22 @@ export async function ensureCreditWallet(
         balanceAfter: getAvailableCredits(next),
         idempotencyKey: `monthly-grant:${userId}:${currentMonthKey}:${planId}`,
         metadata: { planId, monthKey: currentMonthKey },
+      });
+    }
+    if (revokedGrantCredits > 0) {
+      await addCreditLedgerEntry({
+        userId,
+        direction: "debit",
+        entryType: "quota_sync_revoke",
+        credits: revokedGrantCredits,
+        balanceAfter: getAvailableCredits(next),
+        idempotencyKey: `quota-sync-revoke:${userId}:${currentMonthKey}:${planId}:${monthlyGrant}`,
+        metadata: {
+          planId,
+          monthKey: currentMonthKey,
+          previousGrant: existing.monthlyGrantTotal,
+          currentGrant: monthlyGrant,
+        },
       });
     }
     return next;

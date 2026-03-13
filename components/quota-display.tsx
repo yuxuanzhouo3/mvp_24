@@ -98,12 +98,20 @@ export function QuotaDisplay() {
   const showVideoAudioQuota = !!multimodal && multimodal.videoAudio.limit > 0;
   const showMultimodalQuota = showImageQuota || showVideoAudioQuota;
 
-  const creditBalance = credits.balance;
   const monthlyCreditLimit = credits.monthlyGrant;
   const monthlyCreditUsed = credits.spentThisMonth;
+  const monthlyCreditRemaining =
+    monthlyCreditLimit > 0 ? Math.max(0, monthlyCreditLimit - monthlyCreditUsed) : 0;
+  const extraCreditBalance = Math.max(
+    0,
+    Math.floor(credits.rechargeBalance || 0) + Math.floor(credits.bonusBalance || 0)
+  );
+  const showExtraCredits = extraCreditBalance > 0;
   const creditProgress =
     monthlyCreditLimit > 0 ? Math.min(100, (monthlyCreditUsed / monthlyCreditLimit) * 100) : 0;
-  const isCreditLow = creditBalance <= Math.max(100, Math.floor(monthlyCreditLimit * 0.05));
+  const isCreditLow =
+    monthlyCreditRemaining + extraCreditBalance <=
+    Math.max(100, Math.floor(monthlyCreditLimit * 0.05));
 
   const imagePercentage =
     multimodal && showImageQuota
@@ -159,25 +167,25 @@ export function QuotaDisplay() {
         </div>
 
         <div className="space-y-1">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="flex items-center gap-1">
-              <Coins className="w-3.5 h-3.5" />
-              {language === "zh" ? "Credits 余额" : "Credits"}
-            </span>
-            <span className={isCreditLow ? "font-semibold text-orange-600" : "font-semibold"}>
-              {creditBalance}
-            </span>
-          </div>
           {monthlyCreditLimit > 0 && (
             <>
               <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                 <span>{language === "zh" ? "本月已消耗" : "Monthly used"}</span>
-                <span>
+                <span className={isCreditLow ? "font-semibold text-orange-600" : undefined}>
                   {monthlyCreditUsed}/{monthlyCreditLimit}
                 </span>
               </div>
               <Progress value={creditProgress} className="h-1.5 w-full" />
             </>
+          )}
+          {showExtraCredits && (
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="flex items-center gap-1">
+                <Coins className="w-3.5 h-3.5" />
+                {language === "zh" ? "额外 Credits" : "Extra credits"}
+              </span>
+              <span className="font-semibold">{extraCreditBalance}</span>
+            </div>
           )}
         </div>
 
