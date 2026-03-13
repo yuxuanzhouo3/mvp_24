@@ -23,6 +23,12 @@ import {
 import type { AIMessage } from "@/lib/ai/types";
 import { coercePlanId } from "@/lib/plan-quota-settings";
 import { listModelCatalogEntries } from "@/lib/billing/catalog";
+import {
+  buildPreprocessUnavailableMessage,
+  resolveIntlPreprocessModelCandidates,
+  resolvePreprocessBillingModelKey,
+  shouldRetryPreprocessModel,
+} from "@/lib/chat/multimodal-preprocess-models";
 
 export const runtime = "nodejs";
 
@@ -32,8 +38,16 @@ const MAX_DATA_URL_CHARS = 3 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 24 * 1024 * 1024;
 const CN_QWEN_OMNI_MODEL = "qwen3-omni-flash";
 const CN_QWEN_OMNI_AUDIO_MODEL = "qwen3-omni-flash-2025-12-01";
-const INTL_IMAGE_PREPROCESS_MODEL_KEY = "openai/gpt-5-nano";
-const INTL_AUDIO_PREPROCESS_MODEL_KEY = "google/gemini-2.5-flash-lite";
+
+class MultimodalPreprocessRouteError extends Error {
+  statusCode: number;
+
+  constructor(message: string, statusCode = 500) {
+    super(message);
+    this.name = "MultimodalPreprocessRouteError";
+    this.statusCode = statusCode;
+  }
+}
 
 function sanitizeAttachment(raw: any): MultimodalAttachmentPayload | null {
   if (!raw || typeof raw !== "object") return null;
@@ -224,36 +238,38 @@ function buildPromptContext(message: string, attachments: MultimodalAttachmentPa
   ].join("\n");
 }
 
-function normalizeBillingModelKey(model: string) {
-  const normalized = String(model || "").trim().toLowerCase();
-  if (!normalized) return CN_QWEN_OMNI_MODEL;
-  if (normalized.endsWith("/qwen3-omni-flash-2025-12-01")) return CN_QWEN_OMNI_AUDIO_MODEL;
-  if (normalized.endsWith("/qwen3-omni-flash")) return CN_QWEN_OMNI_MODEL;
-  if (normalized.endsWith("/gpt-5-nano")) return "gpt-5-nano";
-  if (normalized.endsWith("/gemini-2.5-flash-lite")) return "gemini-2.5-flash-lite";
-  return normalized;
+function summarizePreprocessError(error: unknown) {
+  const status = Number((error as any)?.status || 0);
+  const message =
+    (typeof (error as any)?.error?.message === "string" && (error as any).error.message) ||
+    (typeof (error as any)?.message === "string" && (error as any).message) ||
+    "Unknown error";
+
+  return {
+    status: status > 0 ? status : null,
+    message,
+  };
 }
 
-async function resolvePreprocessModel(attachments: MultimodalAttachmentPayload[]) {
-  const hasAudioAttachment = attachments.some((item) => item.kind === "audio" || item.kind === "video");
+async function resolvePreprocessModels(
+  attachments: MultimodalAttachmentPayload[],
+): Promise<string[]> {
+  const hasAudioAttachment = attachments.some(
+    (item) => item.kind === "audio" || item.kind === "video",
+  );
   if (isChinaRegion()) {
-    return hasAudioAttachment ? CN_QWEN_OMNI_AUDIO_MODEL : CN_QWEN_OMNI_MODEL;
+    return [hasAudioAttachment ? CN_QWEN_OMNI_AUDIO_MODEL : CN_QWEN_OMNI_MODEL];
   }
 
   const catalog = await listModelCatalogEntries("INTL");
-  const enabledCatalog = catalog.filter((item) => item.enabled !== false);
-  const targetModelKey = hasAudioAttachment
-    ? INTL_AUDIO_PREPROCESS_MODEL_KEY
-    : INTL_IMAGE_PREPROCESS_MODEL_KEY;
-  const found = enabledCatalog.find((item) => item.modelKey === targetModelKey);
-  if (!found) {
-    throw new Error(
-      hasAudioAttachment
-        ? `International audio/video preprocess model is not enabled in billing catalog: ${targetModelKey}`
-        : `International image preprocess model is not enabled in billing catalog: ${targetModelKey}`
+  const candidates = resolveIntlPreprocessModelCandidates(catalog, attachments);
+  if (candidates.length === 0) {
+    throw new MultimodalPreprocessRouteError(
+      buildPreprocessUnavailableMessage(attachments),
+      503,
     );
   }
-  return found.modelKey;
+  return candidates.map((item) => item.modelKey);
 }
 
 function createPreprocessClient() {
@@ -285,19 +301,22 @@ function createPreprocessClient() {
   });
 }
 
-async function runQwenMultimodalPreprocess(params: {
+async function runMultimodalPreprocess(params: {
   userId: string;
   message: string;
   attachments: MultimodalAttachmentPayload[];
+  candidateModels: string[];
 }) {
-  const { userId, message, attachments } = params;
+  const { userId, message, attachments, candidateModels } = params;
   const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
-  const selectedModel = await resolvePreprocessModel(attachments);
   const client = createPreprocessClient();
 
   const promptContext = buildPromptContext(message, attachments);
   const richParts: any[] = [{ type: "text", text: promptContext }];
+  const attemptedModels: string[] = [];
+  let lastError: unknown = null;
   let audioPayloadCount = 0;
+  let textOnlyContext = promptContext;
 
   for (const attachment of attachments) {
     if (
@@ -339,10 +358,11 @@ async function runQwenMultimodalPreprocess(params: {
     console.warn(
       "[multimodal-preprocess] audio attachments exist but no parsable audio payload, fallback to metadata-only analysis"
     );
-    richParts.push({
-      type: "text",
-      text: "注意：当前请求未携带可解析音频数据，只提供了音频元信息。请不要编造逐字转写，并给出用户可执行的下一步建议。",
-    });
+    textOnlyContext = [
+      promptContext,
+      "",
+      "注意：当前请求未携带可解析音频数据，只提供了音频元信息。请不要编造逐字转写，并给出用户可执行的下一步建议。",
+    ].join("\n");
   }
 
   const makeRequest = async (content: any, model: string) => {
@@ -365,66 +385,76 @@ async function runQwenMultimodalPreprocess(params: {
     });
   };
 
-  let completion: any;
-  let modelUsed = selectedModel;
-  try {
-    completion = await makeRequest(richParts, selectedModel);
-  } catch (error) {
-    console.warn(
-      "[multimodal-preprocess] rich multimodal request failed, fallback to text-only:",
-      error
-    );
-    const fallbackModel = selectedModel;
-    const fallbackContext = hasAudioAttachment
-      ? [
-          promptContext,
-          "",
-          "注意：若语音输入不可解析，请明确指出并给出可执行的下一步建议。",
-        ].join("\n")
-      : promptContext;
-    const fallbackContent =
-      hasAudioAttachment && isOmniModel(fallbackModel)
-        ? richParts
-        : fallbackContext;
-    modelUsed = fallbackModel;
-    completion = await makeRequest(fallbackContent, fallbackModel);
-  }
+  const hasRichMediaPayload = richParts.some(
+    (part) => part?.type === "image_url" || part?.type === "input_audio",
+  );
+  const requestContent = hasRichMediaPayload ? richParts : textOnlyContext;
 
-  const rawContent = completion?.choices?.[0]?.message?.content;
-  const usage = {
-    promptTokens: Math.max(0, Number(completion?.usage?.prompt_tokens || 0)),
-    completionTokens: Math.max(0, Number(completion?.usage?.completion_tokens || 0)),
-    totalTokens: Math.max(0, Number(completion?.usage?.total_tokens || 0)),
-  };
-
-  if (typeof rawContent === "string" && rawContent.trim()) {
-    return {
-      summary: rawContent.trim(),
-      model: modelUsed,
-      usage,
-    };
-  }
-  if (Array.isArray(rawContent)) {
-    const text = rawContent
-      .map((part: any) =>
-        typeof part === "string"
-          ? part
-          : typeof part?.text === "string"
-            ? part.text
-            : ""
-      )
-      .join("")
-      .trim();
-    if (text) {
-      return {
-        summary: text,
-        model: modelUsed,
-        usage,
+  for (const candidateModel of candidateModels) {
+    attemptedModels.push(candidateModel);
+    try {
+      const completion = await makeRequest(requestContent, candidateModel);
+      const rawContent = completion?.choices?.[0]?.message?.content;
+      const usage = {
+        promptTokens: Math.max(0, Number(completion?.usage?.prompt_tokens || 0)),
+        completionTokens: Math.max(0, Number(completion?.usage?.completion_tokens || 0)),
+        totalTokens: Math.max(0, Number(completion?.usage?.total_tokens || 0)),
       };
+
+      if (typeof rawContent === "string" && rawContent.trim()) {
+        return {
+          summary: rawContent.trim(),
+          model: candidateModel,
+          usage,
+        };
+      }
+      if (Array.isArray(rawContent)) {
+        const text = rawContent
+          .map((part: any) =>
+            typeof part === "string"
+              ? part
+              : typeof part?.text === "string"
+                ? part.text
+                : "",
+          )
+          .join("")
+          .trim();
+        if (text) {
+          return {
+            summary: text,
+            model: candidateModel,
+            usage,
+          };
+        }
+      }
+
+      lastError = new Error(`${candidateModel} returned empty content`);
+      if (!shouldRetryPreprocessModel(lastError)) {
+        throw lastError;
+      }
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        "[multimodal-preprocess] candidate failed, trying next model if available:",
+        {
+          candidateModel,
+          ...summarizePreprocessError(error),
+        },
+      );
+      if (!shouldRetryPreprocessModel(error)) {
+        throw error;
+      }
     }
   }
 
-  throw new Error(`${selectedModel} returned empty content`);
+  console.error("[multimodal-preprocess] all candidate models failed:", {
+    attemptedModels,
+    ...summarizePreprocessError(lastError),
+  });
+  throw new MultimodalPreprocessRouteError(
+    buildPreprocessUnavailableMessage(attachments),
+    503,
+  );
 }
 
 function buildEnhancedMessage(
@@ -577,8 +607,8 @@ export async function POST(req: NextRequest) {
     await seedWalletForPlan(userId, planLower || "free");
 
     const { imageCount, videoAudioCount } = countQuotaDemand(attachments);
-    const preprocessModel = resolvePreprocessModel(attachments);
-    const billingModelKey = normalizeBillingModelKey(preprocessModel);
+    const preprocessModels = await resolvePreprocessModels(attachments);
+    const billingModelKey = resolvePreprocessBillingModelKey(preprocessModels[0] || "");
     const billingRequestId = `multimodal:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
     const estimatedMetrics = await buildMultimodalBillingMetrics({
       message: rawMessage,
@@ -607,10 +637,11 @@ export async function POST(req: NextRequest) {
 
     let preprocessResult;
     try {
-      preprocessResult = await runQwenMultimodalPreprocess({
+      preprocessResult = await runMultimodalPreprocess({
         userId,
         message: rawMessage,
         attachments,
+        candidateModels: preprocessModels,
       });
     } catch (error) {
       await releaseCreditUsageReservation({
@@ -621,7 +652,7 @@ export async function POST(req: NextRequest) {
       throw error;
     }
 
-    const actualBillingModelKey = normalizeBillingModelKey(preprocessResult.model);
+    const actualBillingModelKey = resolvePreprocessBillingModelKey(preprocessResult.model);
     const actualMetrics = await buildMultimodalBillingMetrics({
       message: rawMessage,
       attachments,
@@ -672,12 +703,16 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error("[multimodal-preprocess] API error:", error);
+    const statusCode =
+      error instanceof MultimodalPreprocessRouteError
+        ? error.statusCode
+        : 500;
     return Response.json(
       {
         error: "Failed to preprocess multimodal input",
         message: error instanceof Error ? error.message : "Unknown error",
       },
-      { status: 500 }
+      { status: statusCode }
     );
   }
 }

@@ -71,7 +71,23 @@ async function getOpenRouterPopularityRank(entry: ModelCatalogEntry): Promise<nu
 function inferCapabilities(entry: ModelCatalogEntry): string[] {
   const modality = String(entry.modality || "text").toLowerCase();
   const text = `${entry.modelKey} ${entry.displayName} ${entry.provider} ${entry.modality}`.toLowerCase();
+  const metadata = entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {};
+  const metadataModalities = new Set<string>();
+  const metadataArrays = [
+    (metadata as any).inputModalities,
+    (metadata as any).outputModalities,
+    (metadata as any).capabilities,
+  ];
   const capabilities = new Set<string>();
+
+  for (const candidate of metadataArrays) {
+    if (!Array.isArray(candidate)) continue;
+    for (const item of candidate) {
+      if (typeof item !== "string") continue;
+      const normalized = item.trim().toLowerCase();
+      if (normalized) metadataModalities.add(normalized);
+    }
+  }
 
   if (modality.includes("image")) {
     capabilities.add("vision");
@@ -90,6 +106,20 @@ function inferCapabilities(entry: ModelCatalogEntry): string[] {
   if (modality.includes("multi") || modality.includes("omni")) {
     capabilities.add("multimodal");
     capabilities.add("vision");
+  }
+  if ([...metadataModalities].some((item) => /image|vision/.test(item))) {
+    capabilities.add("vision");
+    capabilities.add("image_input");
+    capabilities.add("multimodal");
+  }
+  if ([...metadataModalities].some((item) => /audio|speech|stt|asr/.test(item))) {
+    capabilities.add("audio_input");
+    capabilities.add("audio_output");
+    capabilities.add("multimodal");
+  }
+  if ([...metadataModalities].some((item) => /video/.test(item))) {
+    capabilities.add("vision");
+    capabilities.add("multimodal");
   }
 
   capabilities.add("conversation");

@@ -21,6 +21,7 @@ import {
 import { useLanguage } from "@/components/language-provider";
 import { interpolate, useTranslations } from "@/lib/i18n";
 import { useUser } from "@/components/user-context";
+import { isChinaRegion } from "@/lib/config/region";
 import { getStoredModelFavorites, toggleStoredModelFavorite, MODEL_FAVORITES_EVENT } from "@/lib/ai/model-favorites";
 
 interface AIAgent {
@@ -47,6 +48,15 @@ interface GPTLibraryProps {
   setCollaborationMode?: (
     mode: "normal" | "parallel" | "sequential" | "deep" | "graph"
   ) => void;
+}
+const CHINA_REGION = isChinaRegion();
+
+function getDisplayPricingLevel(
+  pricingLevel: AIAgent["pricingLevel"],
+  chinaRegion: boolean,
+) {
+  if (chinaRegion && pricingLevel === "free") return "low";
+  return pricingLevel;
 }
 
 export function GPTLibrary({
@@ -126,16 +136,18 @@ export function GPTLibrary({
   }
 
   function getPricingBadgeLabel(agent: AIAgent): string {
-    if (agent.pricingLevel === "low") return language === "zh" ? "低价" : "Low";
-    if (agent.pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
-    if (agent.pricingLevel === "high") return language === "zh" ? "高价" : "High";
+    const pricingLevel = getDisplayPricingLevel(agent.pricingLevel, CHINA_REGION);
+    if (pricingLevel === "low") return language === "zh" ? "低价" : "Low";
+    if (pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
+    if (pricingLevel === "high") return language === "zh" ? "高价" : "High";
     return language === "zh" ? "最低价" : "Lowest Price";
   }
 
   function getPricingBadgeVariant(agent: AIAgent): "default" | "secondary" | "outline" {
-    if (agent.pricingLevel === "high") return "default";
-    if (agent.pricingLevel === "medium") return "outline";
-    if (agent.pricingLevel === "low") return "secondary";
+    const pricingLevel = getDisplayPricingLevel(agent.pricingLevel, CHINA_REGION);
+    if (pricingLevel === "high") return "default";
+    if (pricingLevel === "medium") return "outline";
+    if (pricingLevel === "low") return "secondary";
     return "secondary";
   }
 
@@ -178,7 +190,9 @@ export function GPTLibrary({
     const matchesCategory =
       activeCategory === "all" ||
       (activeCategory === "popular" ? !!gpt.isPopular : gpt.category === activeCategory);
-    const matchesPricing = pricingFilter === "all" || gpt.pricingLevel === pricingFilter;
+    const matchesPricing =
+      pricingFilter === "all" ||
+      getDisplayPricingLevel(gpt.pricingLevel, CHINA_REGION) === pricingFilter;
     return matchesSearch && matchesCategory && matchesPricing;
   });
 
@@ -256,9 +270,11 @@ export function GPTLibrary({
             <Button variant={pricingFilter === "all" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("all")}>
               {language === "zh" ? "全部价格" : "All Prices"}
             </Button>
-            <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("free")}>
-              {language === "zh" ? "最低价" : "Lowest Price"}
-            </Button>
+            {!CHINA_REGION && (
+              <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("free")}>
+                {language === "zh" ? "最低价" : "Lowest Price"}
+              </Button>
+            )}
             <Button variant={pricingFilter === "low" ? "default" : "outline"} size="sm" onClick={() => setPricingFilter("low")}>
               {language === "zh" ? "低价" : "Low"}
             </Button>

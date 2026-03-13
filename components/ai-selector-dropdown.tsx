@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Check, Search, Sparkles, Star, X } from "lucide-react";
 import { useLanguage } from "@/components/language-provider";
 import { useUser } from "@/components/user-context";
+import { isChinaRegion } from "@/lib/config/region";
 import {
   getStoredModelFavorites,
   MODEL_FAVORITES_EVENT,
@@ -37,6 +38,15 @@ interface AISelectorDropdownProps {
 
 const SWIPE_CLOSE_DISTANCE = 90;
 const SWIPE_CLOSE_VELOCITY = 0.7;
+const CHINA_REGION = isChinaRegion();
+
+function getDisplayPricingLevel(
+  pricingLevel: AIAgent["pricingLevel"],
+  chinaRegion: boolean,
+) {
+  if (chinaRegion && pricingLevel === "free") return "low";
+  return pricingLevel;
+}
 
 export function AISelectorDropdown({
   availableAIs,
@@ -75,9 +85,10 @@ export function AISelectorDropdown({
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
   const getPricingBadgeLabel = (ai: AIAgent) => {
-    if (ai.pricingLevel === "low") return language === "zh" ? "低价" : "Low";
-    if (ai.pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
-    if (ai.pricingLevel === "high") return language === "zh" ? "高价" : "High";
+    const pricingLevel = getDisplayPricingLevel(ai.pricingLevel, CHINA_REGION);
+    if (pricingLevel === "low") return language === "zh" ? "低价" : "Low";
+    if (pricingLevel === "medium") return language === "zh" ? "中价" : "Medium";
+    if (pricingLevel === "high") return language === "zh" ? "高价" : "High";
     return language === "zh" ? "最低价" : "Lowest Price";
   };
 
@@ -151,7 +162,8 @@ export function AISelectorDropdown({
 
       const matchesPricing =
         pricingFilter === "all" ||
-        (!isSmartModel(ai) && ai.pricingLevel === pricingFilter);
+        (!isSmartModel(ai) &&
+          getDisplayPricingLevel(ai.pricingLevel, CHINA_REGION) === pricingFilter);
 
       return matchesSearch && matchesPricing;
     });
@@ -317,7 +329,9 @@ export function AISelectorDropdown({
 
         <div className="flex flex-wrap gap-2">
           <Button variant={pricingFilter === "all" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("all")}>{language === "zh" ? "全部价格" : "All Prices"}</Button>
-          <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("free")}>{language === "zh" ? "最低价" : "Lowest Price"}</Button>
+          {!CHINA_REGION && (
+            <Button variant={pricingFilter === "free" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("free")}>{language === "zh" ? "最低价" : "Lowest Price"}</Button>
+          )}
           <Button variant={pricingFilter === "low" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("low")}>{language === "zh" ? "低价" : "Low"}</Button>
           <Button variant={pricingFilter === "medium" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("medium")}>{language === "zh" ? "中价" : "Medium"}</Button>
           <Button variant={pricingFilter === "high" ? "default" : "outline"} size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => setPricingFilter("high")}>{language === "zh" ? "高价" : "High"}</Button>
