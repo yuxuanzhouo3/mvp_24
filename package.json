@@ -5,7 +5,7 @@
   "scripts": {
     "test": "jest --passWithNoTests",
     "test:ci": "jest --runInBand --ci",
-    "build": "next build",
+    "build": "next build --webpack",
     "dev": "next dev",
     "lint": "eslint .",
     "test:multimodal:audio": "node test-multimodal-audio.mjs",
