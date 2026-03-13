@@ -388,8 +388,15 @@ export async function ensureCreditWallet(
   const existing = await getRawCreditWallet(userId);
 
   if (!existing) {
+    console.log(`[billing-wallet] Creating new wallet for user ${userId}, plan ${planId}, grant ${monthlyGrant}`);
     const wallet = createDefaultWallet(userId, planId, monthlyGrant);
-    await saveRawCreditWallet(wallet);
+    try {
+      await saveRawCreditWallet(wallet);
+      console.log(`[billing-wallet] Successfully saved wallet for user ${userId}`);
+    } catch (error) {
+      console.error(`[billing-wallet] Failed to save wallet for user ${userId}:`, error);
+      throw error;
+    }
     if (monthlyGrant > 0) {
       await addCreditLedgerEntry({
         userId,

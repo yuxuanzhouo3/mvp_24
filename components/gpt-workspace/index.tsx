@@ -49,6 +49,27 @@ import type {
   MultimodalPreprocessResult,
 } from "@/lib/chat/multimodal-types";
 
+interface ChatApiErrorPayload {
+  error?: string;
+  code?: string;
+  message?: string;
+  credits?: {
+    required?: number;
+    balance?: number;
+    shortfall?: number;
+  };
+  quota?: {
+    dailyCap?: number;
+    spentToday?: number;
+    monthlyGrant?: number;
+    spentThisMonth?: number;
+  };
+  remaining?: {
+    image?: number;
+    videoAudio?: number;
+  };
+}
+
 const SMART_RUNTIME_AGENT_PREFIX = "smart-model-runtime";
 const SMART_DEEPSEEK_MODEL = "deepseek-v3.2";
 const SMART_COLLABORATION_MODELS = [
@@ -677,6 +698,96 @@ export function GPTWorkspace({
     return `${cleanText}\n\n${attachmentLine}`;
   };
 
+  const buildChatApiError = (
+    status: number,
+    payload: ChatApiErrorPayload | null,
+    rawText: string,
+    fallback: string
+  ): { message: string; openSubscriptionModal: boolean; payload: ChatApiErrorPayload | null } => {
+    const code = typeof payload?.code === "string" ? payload.code : "";
+    const required = Number(payload?.credits?.required ?? 0);
+    const balance = Number(payload?.credits?.balance ?? 0);
+    const spentToday = Number(payload?.quota?.spentToday ?? 0);
+    const dailyCap = Number(payload?.quota?.dailyCap ?? 0);
+    const payloadMessage =
+      typeof payload?.message === "string" && payload.message.trim().length > 0
+        ? payload.message.trim()
+        : typeof payload?.error === "string" && payload.error.trim().length > 0
+          ? payload.error.trim()
+          : "";
+
+    if (status === 402 && code === "daily_credit_cap_exceeded") {
+      return {
+        message:
+          language === "zh"
+            ? dailyCap > 0
+              ? `今日 Credits 已达上限（已用 ${spentToday}/${dailyCap}）。请明天再试，或升级套餐。`
+              : "今日 Credits 已达上限，请明天再试或升级套餐。"
+            : dailyCap > 0
+              ? `Today's credit limit has been reached (${spentToday}/${dailyCap}). Try again tomorrow or upgrade your plan.`
+              : "Today's credit limit has been reached. Try again tomorrow or upgrade your plan.",
+        openSubscriptionModal: false,
+        payload,
+      };
+    }
+
+    if (status === 402) {
+      return {
+        message:
+          language === "zh"
+            ? required > 0
+              ? `当前 Credits 不足：本次预计需要 ${required}，当前余额 ${balance}。请切换更便宜的模型，或购买/升级额度。`
+              : "当前 Credits 不足，请切换更便宜的模型，或购买/升级额度。"
+            : required > 0
+              ? `Not enough credits for this request. Need ${required}, available ${balance}. Try a cheaper model or add more credits.`
+              : "Not enough credits for this request. Try a cheaper model or add more credits.",
+        openSubscriptionModal: true,
+        payload,
+      };
+    }
+
+    if (status === 403) {
+      return {
+        message:
+          language === "zh"
+            ? payloadMessage || "当前所选模型需要更高套餐，请升级后再试。"
+            : payloadMessage || "This model requires a higher plan. Please upgrade and try again.",
+        openSubscriptionModal: true,
+        payload,
+      };
+    }
+
+    return {
+      message: payloadMessage || rawText || fallback,
+      openSubscriptionModal: false,
+      payload,
+    };
+  };
+
+  const readChatApiError = async (
+    response: Response,
+    fallback: string
+  ): Promise<{ message: string; openSubscriptionModal: boolean; payload: ChatApiErrorPayload | null }> => {
+    const rawText = await response.text();
+    let payload: ChatApiErrorPayload | null = null;
+
+    if (rawText) {
+      try {
+        const parsed = JSON.parse(rawText);
+        if (parsed && typeof parsed === "object") {
+          payload = parsed as ChatApiErrorPayload;
+        }
+      } catch {}
+    }
+
+    return buildChatApiError(response.status, payload, rawText, fallback);
+  };
+
+  const maybeShowSubscriptionModal = (shouldOpen: boolean) => {
+    if (!shouldOpen || typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent("show-subscription-modal"));
+  };
+
   const preprocessMultimodalInput = async (
     authToken: string,
     rawInput: string,
@@ -697,16 +808,29 @@ export function GPTWorkspace({
     });
 
     if (!response.ok) {
-      const payload = await response.json().catch(() => null);
+      const rawText = await response.text();
+      let payload: ChatApiErrorPayload | null = null;
+      if (rawText) {
+        try {
+          const parsed = JSON.parse(rawText);
+          if (parsed && typeof parsed === "object") {
+            payload = parsed as ChatApiErrorPayload;
+          }
+        } catch {}
+      }
       const quotaPayload = payload?.quota;
-      if (response.status === 402 && quotaPayload) {
+      const hasMediaQuotaShape =
+        quotaPayload &&
+        typeof quotaPayload === "object" &&
+        ("image" in quotaPayload || "videoAudio" in quotaPayload);
+      if (response.status === 402 && hasMediaQuotaShape) {
         const imageRemaining =
-          typeof quotaPayload?.remaining?.image === "number"
-            ? quotaPayload.remaining.image
+          typeof (quotaPayload as any)?.image?.remaining === "number"
+            ? (quotaPayload as any).image.remaining
             : 0;
         const videoRemaining =
-          typeof quotaPayload?.remaining?.videoAudio === "number"
-            ? quotaPayload.remaining.videoAudio
+          typeof (quotaPayload as any)?.videoAudio?.remaining === "number"
+            ? (quotaPayload as any).videoAudio.remaining
             : 0;
         throw new Error(
           language === "zh"
@@ -715,13 +839,16 @@ export function GPTWorkspace({
         );
       }
 
-      const message =
-        payload?.message ||
-        payload?.error ||
-        (language === "zh"
+      const errorInfo = buildChatApiError(
+        response.status,
+        payload,
+        rawText,
+        language === "zh"
           ? "多模态预处理失败，请稍后重试"
-          : "Multimodal preprocess failed");
-      throw new Error(message);
+          : "Multimodal preprocess failed"
+      );
+      maybeShowSubscriptionModal(errorInfo.openSubscriptionModal);
+      throw new Error(errorInfo.message);
     }
 
     const data = await response.json();
@@ -2683,8 +2810,12 @@ export function GPTWorkspace({
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`API Error: ${response.status} ${response.statusText} ${errorText}`);
+          const errorInfo = await readChatApiError(
+            response,
+            language === "zh" ? "聊天请求失败，请稍后重试" : "Chat request failed"
+          );
+          maybeShowSubscriptionModal(errorInfo.openSubscriptionModal);
+          throw new Error(errorInfo.message);
         }
 
         const reader = response.body?.getReader();
@@ -2805,7 +2936,12 @@ export function GPTWorkspace({
         }
         streamUpdater?.cancel();
         console.error(`AI ${gpt.name} error (sequential):`, error);
-        const errorContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
+        const errorContent =
+          error instanceof Error
+            ? error.message
+            : language === "zh"
+              ? "请求失败，请稍后重试"
+              : "Request failed. Please try again.";
         setAIResponses((prev) =>
           prev.map((r) =>
             r.agentId === gpt.id
@@ -2909,9 +3045,12 @@ export function GPTWorkspace({
         );
 
         if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`[Frontend] Error response:`, errorText);
-          throw new Error(`API Error: ${response.statusText}`);
+          const errorInfo = await readChatApiError(
+            response,
+            language === "zh" ? "聊天请求失败，请稍后重试" : "Chat request failed"
+          );
+          maybeShowSubscriptionModal(errorInfo.openSubscriptionModal);
+          throw new Error(errorInfo.message);
         }
 
         // 处理 SSE 流式响应
@@ -3023,17 +3162,23 @@ export function GPTWorkspace({
         }
         streamUpdater?.cancel();
         console.error(`AI ${gpt.name} error:`, error);
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : language === "zh"
+              ? "请求失败，请稍后重试"
+              : "Request failed. Please try again.";
         setAIResponses((prev) =>
           prev.map((r) =>
             r.agentId === gpt.id
-              ? { ...r, status: "error" as const, content: `Error: ${error}` }
+              ? { ...r, status: "error" as const, content: errorMessage }
               : r
           )
         );
         return {
           agentId: gpt.id,
           agentName: gpt.name,
-          content: `Error: ${error}`,
+          content: errorMessage,
           status: "error" as const,
           timestamp: new Date(),
         } as AIResponse;
@@ -3131,8 +3276,12 @@ export function GPTWorkspace({
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API Error: ${response.status} ${response.statusText} ${errorText}`);
+      const errorInfo = await readChatApiError(
+        response,
+        language === "zh" ? "聊天请求失败，请稍后重试" : "Chat request failed"
+      );
+      maybeShowSubscriptionModal(errorInfo.openSubscriptionModal);
+      throw new Error(errorInfo.message);
     }
 
     const reader = response.body?.getReader();
@@ -3357,12 +3506,12 @@ export function GPTWorkspace({
               setAIResponses((prev) =>
                 prev.map((r) =>
                   r.nodeId === nodeId
-                    ? { ...r, status: "error" as const, content: `Error: ${msg}` }
+                    ? { ...r, status: "error" as const, content: msg }
                     : r
                 )
               );
               current.status = "error";
-              current.content = `Error: ${msg}`;
+              current.content = msg;
               current.timestamp = new Date();
             }
           })

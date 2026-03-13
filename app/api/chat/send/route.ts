@@ -26,6 +26,7 @@ import { getDefaultRuntimeModel, listEnabledRuntimeModelKeys } from "@/lib/ai/ru
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 import {
   authorizeCreditUsage,
+  buildCreditReservationErrorPayload,
   computeBillingForModel,
   estimateTextMetrics,
   releaseCreditUsageReservation,
@@ -605,20 +606,13 @@ export async function POST(req: NextRequest) {
     });
 
     if (!creditReservation.success) {
+      const payload = buildCreditReservationErrorPayload(creditReservation);
       return new Response(
-        JSON.stringify({
-          error: "Insufficient credits",
-          message: creditReservation.error || "Not enough credits",
-          credits: {
-            required: creditReservation.computation?.credits || 0,
-            balance: creditReservation.wallet
-              ? creditReservation.wallet.monthlyGrantBalance +
-                creditReservation.wallet.rechargeBalance +
-                creditReservation.wallet.bonusBalance
-              : 0,
-          },
-        }),
-        { status: 402, headers: { "Content-Type": "application/json" } }
+        JSON.stringify(payload),
+        {
+          status: creditReservation.failureCode === "reservation_failed" ? 503 : 402,
+          headers: { "Content-Type": "application/json" },
+        }
       );
     }
 

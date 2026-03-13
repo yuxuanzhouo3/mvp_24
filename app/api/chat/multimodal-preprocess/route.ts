@@ -15,6 +15,7 @@ import type {
 } from "@/lib/chat/multimodal-types";
 import {
   authorizeCreditUsage,
+  buildCreditReservationErrorPayload,
   estimateTextMetrics,
   releaseCreditUsageReservation,
   settleCreditUsage,
@@ -598,19 +599,10 @@ export async function POST(req: NextRequest) {
     });
 
     if (!reservation.success) {
-      return Response.json(
-        {
-          error: "Insufficient credits",
-          message: reservation.error || "Not enough credits",
-          credits: {
-            required: reservation.computation?.credits || 0,
-            balance: reservation.wallet
-              ? reservation.wallet.monthlyGrantBalance + reservation.wallet.rechargeBalance + reservation.wallet.bonusBalance
-              : 0,
-          },
-        },
-        { status: 402 }
-      );
+      const payload = buildCreditReservationErrorPayload(reservation);
+      return Response.json(payload, {
+        status: reservation.failureCode === "reservation_failed" ? 503 : 402,
+      });
     }
 
     let preprocessResult;

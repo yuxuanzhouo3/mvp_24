@@ -89,6 +89,20 @@ export interface BillingComputation {
   credits: number;
 }
 
+export type CreditReservationFailureCode =
+  | "daily_credit_cap_exceeded"
+  | "insufficient_credits"
+  | "reservation_failed";
+
+export interface CreditQuotaSnapshot {
+  monthlyGrant: number;
+  dailyCreditCap: number;
+  spentThisMonth: number;
+  spentToday: number;
+  remainingThisMonth: number;
+  remainingToday: number;
+}
+
 export interface CreditReservationResult {
   success: boolean;
   error?: string;
@@ -96,6 +110,8 @@ export interface CreditReservationResult {
   reservedCredits: number;
   computation?: BillingComputation;
   wallet?: CreditWalletSnapshot;
+  failureCode?: CreditReservationFailureCode;
+  quotaSnapshot?: CreditQuotaSnapshot;
 }
 
 export interface CreditSettlementResult {

@@ -20,7 +20,22 @@ function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function normalizePricingRules(raw: unknown): BillingRule[] {
+function isTokenMetric(metricKey: string): boolean {
+  return /(^|_)(token|tokens)(_|$)/i.test(metricKey);
+}
+
+function isCanonicalTextTokenMetric(metricKey: string): boolean {
+  return metricKey === "input_tokens" || metricKey === "output_tokens";
+}
+
+function normalizeRuleRounding(metricKey: string, rawRounding: unknown): BillingRule["rounding"] {
+  if (isTokenMetric(metricKey)) {
+    return "none";
+  }
+  return rawRounding === "none" ? "none" : "ceil";
+}
+
+export function normalizePricingRules(raw: unknown): BillingRule[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((item) => {
@@ -30,7 +45,7 @@ function normalizePricingRules(raw: unknown): BillingRule[] {
         : "";
       const unitSize = Math.max(1, toNumber((item as any).unitSize, 1));
       const price = Math.max(0, toNumber((item as any).price, 0));
-      const rounding = (item as any).rounding === "none" ? "none" : "ceil";
+      const rounding = normalizeRuleRounding(metricKey, (item as any).rounding);
       const label = typeof (item as any).label === "string" ? (item as any).label : undefined;
       if (!metricKey) return null;
       return { metricKey, unitSize, price, rounding, label } as BillingRule;
@@ -132,12 +147,18 @@ function getBuiltinModelKeys(region: BillingRegion): string[] {
   });
 }
 
-function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): ModelCatalogEntry {
+export function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): ModelCatalogEntry {
   const region = (typeof row?.region === "string" ? row.region : fallback?.region) || currentRegion();
   const inputPrice = Math.max(0, toNumber(row?.input_price ?? row?.inputPrice, fallback?.inputPrice || 0));
   const outputPrice = Math.max(0, toNumber(row?.output_price ?? row?.outputPrice, fallback?.outputPrice || 0));
   const explicitRules = normalizePricingRules(row?.pricing_rules ?? row?.pricingRules);
-  const pricingRules = dedupeRules([...explicitRules, ...synthesizeTokenRules(inputPrice, outputPrice)]);
+  const explicitNonCanonicalRules = explicitRules.filter(
+    (rule) => !isCanonicalTextTokenMetric(rule.metricKey)
+  );
+  const pricingRules = dedupeRules([
+    ...explicitNonCanonicalRules,
+    ...synthesizeTokenRules(inputPrice, outputPrice),
+  ]);
   return {
     modelKey:
       typeof (row?.model_key ?? row?.modelKey) === "string"

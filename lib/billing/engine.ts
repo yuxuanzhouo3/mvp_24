@@ -5,7 +5,9 @@ import type {
   BillingComputation,
   BillingMetricKey,
   CreditChargeContext,
+  CreditQuotaSnapshot,
   CreditReservationResult,
+  CreditReservationFailureCode,
   CreditSettlementResult,
   CreditWalletSnapshot,
 } from "./types";
@@ -44,6 +46,88 @@ function parseBreakdown(raw: any): CreditBucketBreakdown {
     monthlyGrant: Math.max(0, Math.floor(toNumber(raw?.monthlyGrant ?? raw?.monthly_grant, 0))),
     bonus: Math.max(0, Math.floor(toNumber(raw?.bonus, 0))),
     recharge: Math.max(0, Math.floor(toNumber(raw?.recharge, 0))),
+  };
+}
+
+function buildQuotaSnapshot(params: {
+  monthlyCreditGrant: number;
+  dailyCreditCap: number;
+  spentThisMonth: number;
+  spentToday: number;
+}): CreditQuotaSnapshot {
+  const monthlyGrant = Math.max(0, Math.floor(toNumber(params.monthlyCreditGrant, 0)));
+  const dailyCreditCap = Math.max(0, Math.floor(toNumber(params.dailyCreditCap, 0)));
+  const spentThisMonth = Math.max(0, Math.floor(toNumber(params.spentThisMonth, 0)));
+  const spentToday = Math.max(0, Math.floor(toNumber(params.spentToday, 0)));
+
+  return {
+    monthlyGrant,
+    dailyCreditCap,
+    spentThisMonth,
+    spentToday,
+    remainingThisMonth: Math.max(0, monthlyGrant - spentThisMonth),
+    remainingToday: dailyCreditCap > 0 ? Math.max(0, dailyCreditCap - spentToday) : 0,
+  };
+}
+
+export function buildCreditReservationErrorPayload(result: CreditReservationResult) {
+  const required = Math.max(0, Math.floor(toNumber(result.computation?.credits, 0)));
+  const balance = Math.max(0, getAvailableCredits(result.wallet));
+  const shortfall = Math.max(0, required - balance);
+  const quota = result.quotaSnapshot;
+  const failureCode: CreditReservationFailureCode =
+    result.failureCode || "insufficient_credits";
+
+  if (failureCode === "daily_credit_cap_exceeded") {
+    const spentToday = Math.max(0, Math.floor(toNumber(quota?.spentToday, 0)));
+    const dailyCap = Math.max(0, Math.floor(toNumber(quota?.dailyCreditCap, 0)));
+
+    return {
+      error: "Daily credit cap exceeded",
+      code: failureCode,
+      message:
+        dailyCap > 0
+          ? `Today's credit limit has been reached (${spentToday}/${dailyCap}). Try again tomorrow or upgrade your plan.`
+          : "Today's credit limit has been reached. Try again tomorrow or upgrade your plan.",
+      credits: {
+        required,
+        balance,
+        shortfall,
+      },
+      quota: quota || null,
+      action: "retry_tomorrow_or_upgrade",
+    };
+  }
+
+  if (failureCode === "reservation_failed") {
+    return {
+      error: "Credit reservation failed",
+      code: failureCode,
+      message: "Unable to reserve credits right now. Please retry in a moment.",
+      credits: {
+        required,
+        balance,
+        shortfall,
+      },
+      quota: quota || null,
+      action: "retry",
+    };
+  }
+
+  return {
+    error: "Insufficient credits",
+    code: "insufficient_credits",
+    message:
+      required > 0
+        ? `Not enough credits for this request. Need ${required}, available ${balance}. Try a cheaper model or add more credits.`
+        : "Not enough credits for this request. Try a cheaper model or add more credits.",
+    credits: {
+      required,
+      balance,
+      shortfall,
+    },
+    quota: quota || null,
+    action: "upgrade_or_top_up",
   };
 }
 
@@ -107,7 +191,15 @@ export async function estimateTextMetrics(params: {
   maxTokens?: number;
 }) {
   const inputTokens = await countTokensWithFallback(params.messages, params.modelKey);
-  const outputTokens = Math.max(128, Math.min(4096, Math.floor(params.maxTokens || 1024)));
+  const requestedMaxTokens = Math.max(1, Math.floor(params.maxTokens || 1024));
+  // Reserve a realistic first-response budget instead of the full model max.
+  // Actual usage is settled after streaming completes, so over-reserving here
+  // can block short free-tier chats before the model is even called.
+  const conservativeOutputBudget = Math.min(
+    1800,
+    Math.max(512, Math.ceil(inputTokens * 1.5))
+  );
+  const outputTokens = Math.max(1, Math.min(requestedMaxTokens, conservativeOutputBudget));
   return normalizeMetrics({
     input_tokens: inputTokens,
     output_tokens: outputTokens,
@@ -122,6 +214,12 @@ export async function authorizeCreditUsage(
   const wallet = await ensureCreditWallet(context.userId, planId);
   const quota = await getPlanQuotaSettings(planId);
   const usageStats = await getCreditUsageStats(context.userId);
+  const quotaSnapshot = buildQuotaSnapshot({
+    monthlyCreditGrant: quota.monthlyCreditGrant,
+    dailyCreditCap: quota.dailyCreditCap,
+    spentThisMonth: usageStats.spentThisMonth,
+    spentToday: usageStats.spentToday,
+  });
   const computation = await computeBillingForModel({
     modelKey: context.modelKey,
     metrics: context.metrics,
@@ -135,6 +233,8 @@ export async function authorizeCreditUsage(
       reservedCredits: 0,
       computation,
       wallet,
+      failureCode: "daily_credit_cap_exceeded",
+      quotaSnapshot,
     };
   }
 
@@ -146,6 +246,8 @@ export async function authorizeCreditUsage(
       reservedCredits: 0,
       computation,
       wallet,
+      failureCode: "insufficient_credits",
+      quotaSnapshot,
     };
   }
 
@@ -169,6 +271,8 @@ export async function authorizeCreditUsage(
       reservedCredits: 0,
       computation,
       wallet,
+      failureCode: "reservation_failed",
+      quotaSnapshot,
     };
   }
 

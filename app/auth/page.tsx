@@ -845,35 +845,6 @@ function AuthPageContent() {
     }
   };
 
-  const handleAppleSignIn = async () => {
-    if (loading) return;
-
-    setLoading(true);
-    setError("");
-
-    try {
-      const { error } = await authClient.signInWithOAuth({
-        provider: "apple",
-        options: {
-          redirectTo: buildUrl(`${window.location.origin}/auth/callback`),
-        },
-      });
-
-      if (error) {
-        setError(error.message);
-        setLoading(false);
-      }
-      // OAuth会重定向，不需要手动处理
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError(t.auth.appleLoginFailed || "Apple登录失败，请稍后重试");
-      }
-      setLoading(false);
-    }
-  };
-
   const resetForgotPasswordFlow = () => {
     setForgotPasswordStep("request");
     setResetOtp("");
@@ -1555,23 +1526,6 @@ function AuthPageContent() {
                     </svg>
                     {t.auth.googleLogin}
                   </Button>
-                  {(platformInfo.type === "web" ||
-                    platformInfo.type === "desktop-app") && (
-                    <Button
-                      onClick={handleAppleSignIn}
-                      variant="outline"
-                      className="w-full h-12"
-                      disabled={loading}
-                    >
-                      <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
-                        <path
-                          fill="currentColor"
-                          d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
-                        />
-                      </svg>
-                      {t.auth.appleLogin}
-                    </Button>
-                  )}
                 </div>
               ) : null}
 
@@ -1810,23 +1764,6 @@ function AuthPageContent() {
                     </svg>
                     {t.auth.googleRegister}
                   </Button>
-                  {(platformInfo.type === "web" ||
-                    platformInfo.type === "desktop-app") && (
-                    <Button
-                      onClick={handleAppleSignIn}
-                      variant="outline"
-                      className="w-full h-12"
-                      disabled={loading}
-                    >
-                      <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
-                        <path
-                          fill="currentColor"
-                          d="M17.05 20.28c-.98.95-2.05 1.72-3.11 1.72-1.01 0-1.45-.67-2.61-.67-1.18 0-1.65.67-2.61.67-1.03 0-2.18-.81-3.13-1.72C3.61 18.33 2 15.02 2 12.01c0-4.69 3.05-7.13 6-7.13 1.51 0 2.73.93 3.61.93.89 0 2.28-.93 3.91-.93 1.35 0 4.5.56 6.1 2.83-3.3 1.93-2.76 6.05.48 7.33-1.15 2.89-3.01 5.24-5.05 5.24zm-4.69-15.8c0-2.1 1.73-3.8 3.83-3.8.13 0 .26.01.39.03-.15 2.21-1.93 3.98-4.13 3.98-.03 0-.06 0-.09-.01v-.2z"
-                        />
-                      </svg>
-                      {t.auth.appleRegister}
-                    </Button>
-                  )}
                 </div>
               ) : null}
 
