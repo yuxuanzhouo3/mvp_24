@@ -4,6 +4,7 @@ const helperModule = require("@/lib/chat/multimodal-preprocess-models");
 
 const {
   buildPreprocessUnavailableMessage,
+  resolveCnPreprocessModelCandidates,
   resolveIntlPreprocessModelCandidates,
   resolvePreprocessBillingModelKey,
   summarizePreprocessRequirements,
@@ -113,6 +114,102 @@ describe("multimodal preprocess model selection", () => {
     expect(candidates.map((item: ModelCatalogEntry) => item.modelKey)).toEqual([
       "google/gemini-2.5-flash-lite",
       "openai/gpt-4o-mini",
+    ]);
+  });
+
+  it("recognizes CN multimodal capabilities from provider metadata and prefers low-cost candidates", () => {
+    const candidates = resolveCnPreprocessModelCandidates(
+      [
+        buildEntry({
+          modelKey: "doubao-seed-1.6-vision",
+          provider: "volcengine",
+          providerModel: "ep-vision-1",
+          region: "CN",
+          modality: "multimodal",
+          inputPrice: 0.0004,
+          outputPrice: 0.004,
+          metadata: {
+            requestModality: ["text", "image"],
+            responseModality: ["text"],
+            sourceOrder: 2,
+          },
+        }),
+        buildEntry({
+          modelKey: "qwen3-omni-flash",
+          provider: "dashscope",
+          region: "CN",
+          modality: "multimodal",
+          inputPrice: 0.000008,
+          outputPrice: 0.000008,
+          metadata: {
+            requestModality: ["text", "image"],
+            responseModality: ["text"],
+            sourceOrder: 1,
+          },
+        }),
+      ],
+      [
+        {
+          id: "img-1",
+          name: "image.png",
+          mimeType: "image/png",
+          size: 1024,
+          kind: "image",
+          dataUrl: "data:image/png;base64,abc",
+        },
+      ],
+    );
+
+    expect(candidates.map((item: ModelCatalogEntry) => item.modelKey)).toEqual([
+      "qwen3-omni-flash",
+      "doubao-seed-1.6-vision",
+    ]);
+  });
+
+  it("keeps CN audio preprocess candidates limited to audio-capable models", () => {
+    const candidates = resolveCnPreprocessModelCandidates(
+      [
+        buildEntry({
+          modelKey: "doubao-seed-1.6-vision",
+          provider: "volcengine",
+          providerModel: "ep-vision-1",
+          region: "CN",
+          modality: "multimodal",
+          inputPrice: 0.0004,
+          outputPrice: 0.004,
+          metadata: {
+            requestModality: ["text", "image"],
+            responseModality: ["text"],
+          },
+        }),
+        buildEntry({
+          modelKey: "qwen3-omni-flash-2025-12-01",
+          provider: "dashscope",
+          region: "CN",
+          modality: "multimodal",
+          inputPrice: 0.000008,
+          outputPrice: 0.000008,
+          metadata: {
+            requestModality: ["text", "image", "audio"],
+            responseModality: ["text"],
+            capabilities: ["audio", "omni"],
+          },
+        }),
+      ],
+      [
+        {
+          id: "audio-1",
+          name: "voice.m4a",
+          mimeType: "audio/mp4",
+          size: 2048,
+          kind: "audio",
+          dataUrl: "data:audio/mp4;base64,abc",
+        },
+      ],
+    );
+
+    expect(candidates.map((item: ModelCatalogEntry) => item.modelKey)).toEqual([
+      "qwen3-omni-flash-2025-12-01",
     ]);
   });
 

@@ -76,4 +76,99 @@ describe("billing catalog pricing normalization", () => {
       { metricKey: "output_tokens", unitSize: 1000, price: 0.001, rounding: "none" },
     ]);
   });
+
+  it("preserves million-token pricing when the source unit is per_1m_tokens", () => {
+    const entry = buildCatalogEntry(
+      {
+        model_key: "qwen-plus-2025-12-01",
+        provider: "dashscope",
+        provider_model: "qwen-plus-2025-12-01",
+        display_name: "Qwen Plus",
+        region: "CN",
+        modality: "text",
+        currency: "CNY",
+        input_price: 0.5,
+        output_price: 2,
+        pricing_unit: "per_1m_tokens",
+        pricing_rules: [],
+      },
+      {
+        modelKey: "qwen-plus-2025-12-01",
+        provider: "dashscope",
+        providerModel: "qwen-plus-2025-12-01",
+        displayName: "Qwen Plus",
+        region: "CN",
+        modality: "text",
+        billingMode: "metered",
+        currency: "CNY",
+        inputPrice: 0.5,
+        outputPrice: 2,
+        pricingUnit: "per_1k_tokens",
+        pricingRules: [],
+        enabled: true,
+        metadata: {},
+      }
+    );
+
+    expect(entry.pricingUnit).toBe("per_1m_tokens");
+    expect(entry.pricingRules).toEqual([
+      { metricKey: "input_tokens", unitSize: 1_000_000, price: 0.5, rounding: "none" },
+      { metricKey: "output_tokens", unitSize: 1_000_000, price: 2, rounding: "none" },
+    ]);
+  });
+
+  it("repairs legacy Bailian rows using source price metadata", () => {
+    const entry = buildCatalogEntry(
+      {
+        model_key: "qwen-plus-2025-12-01",
+        provider: "dashscope",
+        provider_model: "qwen-plus-2025-12-01",
+        display_name: "Qwen Plus",
+        region: "CN",
+        modality: "text",
+        currency: "CNY",
+        input_price: 0.5,
+        output_price: 2,
+        pricing_unit: "per_unit",
+        pricing_rules: [
+          { metricKey: "input_tokens", unitSize: 1000, price: 0.5, rounding: "none" },
+          { metricKey: "output_tokens", unitSize: 1000, price: 2, rounding: "none" },
+        ],
+        metadata: {
+          source: "bailian-console",
+          priceRows: [
+            {
+              priceUnit: "元/百万tokens",
+              prices: [
+                { type: "input_token", price: "0.5", priceUnit: "元/百万tokens" },
+                { type: "output_token", price: "2", priceUnit: "元/百万tokens" },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        modelKey: "qwen-plus-2025-12-01",
+        provider: "dashscope",
+        providerModel: "qwen-plus-2025-12-01",
+        displayName: "Qwen Plus",
+        region: "CN",
+        modality: "text",
+        billingMode: "metered",
+        currency: "CNY",
+        inputPrice: 0.5,
+        outputPrice: 2,
+        pricingUnit: "per_1k_tokens",
+        pricingRules: [],
+        enabled: true,
+        metadata: {},
+      }
+    );
+
+    expect(entry.pricingUnit).toBe("per_1m_tokens");
+    expect(entry.pricingRules).toEqual([
+      { metricKey: "input_tokens", unitSize: 1_000_000, price: 0.5, rounding: "none" },
+      { metricKey: "output_tokens", unitSize: 1_000_000, price: 2, rounding: "none" },
+    ]);
+  });
 });

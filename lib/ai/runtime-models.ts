@@ -159,10 +159,19 @@ function inferIcon(entry: ModelCatalogEntry): string {
   return "🤖";
 }
 
-function getUnitPrice(entry: ModelCatalogEntry): number {
+function normalizeCatalogUnitPrice(entry: ModelCatalogEntry): number {
   const input = Number(entry.inputPrice || 0);
   const output = Number(entry.outputPrice || 0);
-  return input + output;
+  const total = input + output;
+  const pricingUnit = String(entry.pricingUnit || "").trim().toLowerCase();
+
+  if (pricingUnit === "per_1m_tokens") return total / 1000;
+  if (pricingUnit === "per_10k_characters") return total / 10;
+  return total;
+}
+
+function getUnitPrice(entry: ModelCatalogEntry): number {
+  return normalizeCatalogUnitPrice(entry);
 }
 
 function getPricingLevel(entry: ModelCatalogEntry): "free" | "low" | "medium" | "high" {

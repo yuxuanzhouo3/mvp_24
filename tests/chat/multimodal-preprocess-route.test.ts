@@ -24,6 +24,25 @@ jest.mock("openai", () => ({
   })),
 }));
 
+jest.mock("@cloudbase/node-sdk", () => ({
+  init: jest.fn(() => ({
+    database: () => ({
+      collection: () => ({
+        where: () => ({
+          orderBy: () => ({
+            limit: () => ({
+              get: jest.fn(async () => ({ data: [] })),
+            }),
+          }),
+          limit: () => ({
+            get: jest.fn(async () => ({ data: [] })),
+          }),
+        }),
+      }),
+    }),
+  })),
+}));
+
 jest.mock("@/lib/auth-utils", () => ({
   extractTokenFromHeader: jest.fn(() => ({ token: "test-token", error: null })),
   verifyAuthToken: jest.fn(async () => ({
@@ -72,6 +91,8 @@ describe("multimodal preprocess route", () => {
     jest.resetModules();
     process.env.NEXT_PUBLIC_DEPLOYMENT_REGION = "INTL";
     process.env.OPENROUTER_API = "test-openrouter-key";
+    process.env.DASHSCOPE_API_KEY = "test-dashscope-key";
+    process.env.VOLCENGINE_API_KEY = "test-volcengine-key";
 
     createCompletion.mockReset();
     authorizeCreditUsage.mockReset();
@@ -124,6 +145,9 @@ describe("multimodal preprocess route", () => {
     buildCreditReservationErrorPayload.mockReturnValue({
       error: "reservation failed",
     });
+
+    const { isChinaRegion } = require("@/lib/config/region");
+    isChinaRegion.mockReturnValue(false);
   });
 
   it("falls back to the next preprocess model and settles credits with the actual model used", async () => {
@@ -223,5 +247,107 @@ describe("multimodal preprocess route", () => {
       "google/gemini-2.5-flash-lite",
     );
     expect(settleCreditUsage.mock.calls[0][0].modelKey).toBe("openai/gpt-4o-mini");
+  });
+
+  it("uses CN catalog candidates with provider fallback compatibility layers", async () => {
+    const { isChinaRegion } = require("@/lib/config/region");
+    isChinaRegion.mockReturnValue(true);
+    process.env.NEXT_PUBLIC_DEPLOYMENT_REGION = "CN";
+
+    listModelCatalogEntries.mockResolvedValue([
+      {
+        modelKey: "qwen3-omni-flash",
+        provider: "dashscope",
+        providerModel: "qwen3-omni-flash",
+        displayName: "Qwen3 Omni Flash",
+        region: "CN",
+        modality: "multimodal",
+        billingMode: "metered",
+        currency: "CNY",
+        inputPrice: 0.000008,
+        outputPrice: 0.000008,
+        pricingUnit: "per_1k_tokens",
+        pricingRules: [],
+        enabled: true,
+        metadata: {
+          requestModality: ["text", "image"],
+          responseModality: ["text"],
+        },
+      },
+      {
+        modelKey: "doubao-seed-1.6-vision",
+        provider: "volcengine",
+        providerModel: "ep-vision-1",
+        displayName: "Doubao Seed 1.6 Vision",
+        region: "CN",
+        modality: "multimodal",
+        billingMode: "metered",
+        currency: "CNY",
+        inputPrice: 0.0004,
+        outputPrice: 0.004,
+        pricingUnit: "per_1k_tokens",
+        pricingRules: [],
+        enabled: true,
+        metadata: {
+          requestModality: ["text", "image"],
+          responseModality: ["text"],
+        },
+      },
+    ]);
+
+    createCompletion
+      .mockRejectedValueOnce({
+        status: 503,
+        message: "Model busy",
+      })
+      .mockResolvedValueOnce({
+        choices: [
+          {
+            message: {
+              content: "这是一个网页截图，主要内容是关于产品价格和公告信息。",
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: 210,
+          completion_tokens: 90,
+          total_tokens: 300,
+        },
+      });
+
+    const { POST } = require("@/app/api/chat/multimodal-preprocess/route");
+
+    const response = await POST(
+      new NextRequest("http://localhost:3000/api/chat/multimodal-preprocess", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          message: "总结一下这张图。",
+          attachments: [
+            {
+              id: "image-1",
+              name: "screen.png",
+              mimeType: "image/png",
+              size: 1024,
+              kind: "image",
+              dataUrl: "data:image/png;base64,abc",
+            },
+          ],
+        }),
+      }),
+    );
+
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.summary).toContain("网页截图");
+    expect(createCompletion).toHaveBeenCalledTimes(2);
+    expect(createCompletion.mock.calls[0][0].model).toBe("qwen3-omni-flash");
+    expect(createCompletion.mock.calls[1][0].model).toBe("ep-vision-1");
+    expect(authorizeCreditUsage.mock.calls[0][0].modelKey).toBe("qwen3-omni-flash");
+    expect(settleCreditUsage.mock.calls[0][0].modelKey).toBe("doubao-seed-1.6-vision");
   });
 });

@@ -7,6 +7,7 @@ import { isChinaRegion } from "@/lib/config/region";
 import { BaseAIProvider } from "./providers/base-provider";
 import { OpenRouterProvider } from "./providers/openrouter-provider";
 import { DashScopeProvider } from "./providers/dashscope-provider";
+import { VolcengineProvider } from "./providers/volcengine-provider";
 import { AIProviderError } from "./types";
 
 class AIRouter {
@@ -30,6 +31,9 @@ class AIRouter {
       if (isChinaRegion()) {
         if (process.env.DASHSCOPE_API_KEY) {
           this.registerProvider(new DashScopeProvider());
+        }
+        if (process.env.VOLCENGINE_API_KEY) {
+          this.registerProvider(new VolcengineProvider());
         }
       } else if (process.env.OPENROUTER_API) {
         try {

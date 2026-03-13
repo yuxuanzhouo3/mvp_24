@@ -19,6 +19,7 @@ export interface VolcengineBillingImportItem {
   currency: "CNY";
   inputPrice: number;
   outputPrice: number;
+  pricingUnit: string;
   enabled: boolean;
   pricingRules: BillingRule[];
   metadata?: Record<string, unknown>;
@@ -47,6 +48,20 @@ type ModelSeed = {
   metadata?: Record<string, unknown>;
 };
 
+type CuratedVolcengineModel = {
+  modelKey: string;
+  providerModel: string;
+  displayName: string;
+  modality: string;
+  inputPrice: number;
+  outputPrice: number;
+  cacheHitPrice: number;
+  description: string;
+  releaseTag: string;
+  requestModality?: string[];
+  responseModality?: string[];
+};
+
 type ArkFoundationModelRecord = {
   Name?: string;
   DisplayName?: string;
@@ -70,36 +85,88 @@ type ArkListResult = {
   Items?: ArkFoundationModelRecord[];
 };
 
-// 火山引擎价格表 - 从官方文档手动维护
-// 来源: https://www.volcengine.com/docs/82379/1544106
-// 更新时间: 2026-03-13
-// 注意: 火山引擎价格页面完全动态渲染，无法通过爬虫自动获取，需手动更新
-const VOLCENGINE_PRICES: Record<string, { input: number; output: number; modality: string }> = {
-  "doubao-seed-1.8": { input: 0.0004, output: 0.004, modality: "text" },
-  "doubao-seed-1.6-vision": { input: 0.0004, output: 0.004, modality: "multimodal" },
-  "doubao-seed-1.6-lite": { input: 0.00015, output: 0.0012, modality: "text" },
-  "doubao-seed-1.6": { input: 0.0004, output: 0.004, modality: "text" },
-  "doubao-seed-1.6-thinking": { input: 0.0004, output: 0.004, modality: "text" },
-  "doubao-seed-1.6-flash": { input: 0.000075, output: 0.00075, modality: "text" },
-  "doubao-1.5-thinking-pro": { input: 0.002, output: 0.008, modality: "text" },
-  "doubao-1.5-thinking-vision-pro": { input: 0.0015, output: 0.0045, modality: "multimodal" },
-  "doubao-seed-translation": { input: 0.0006, output: 0.0018, modality: "text" },
-  "doubao-1.5-pro-32k": { input: 0.0004, output: 0.001, modality: "text" },
-  "doubao-1.5-lite-32k": { input: 0.00015, output: 0.0003, modality: "text" },
-  "doubao-pro-32k": { input: 0.0008, output: 0.002, modality: "text" },
-  "doubao-lite-32k": { input: 0.0003, output: 0.0006, modality: "text" },
-  "deepseek-v3.2": { input: 0.001, output: 0.0015, modality: "text" },
-  "deepseek-v3.1": { input: 0.002, output: 0.006, modality: "text" },
-  "deepseek-v3": { input: 0.001, output: 0.004, modality: "text" },
-  "deepseek-r1": { input: 0.002, output: 0.008, modality: "text" },
-  "kimi-k2": { input: 0.002, output: 0.008, modality: "text" },
-};
+// 火山引擎精选模型清单 - 按官方价格手动维护
+// 来源: 用户提供的火山方舟定价说明（2026-03-13）
+// 说明: 当前仅保留这 4 个 Doubao Seed 2.0 模型，不再导入旧火山模型。
+const VOLCENGINE_CURATED_MODELS: CuratedVolcengineModel[] = [
+  {
+    modelKey: "doubao-seed-2-0-pro-260215",
+    providerModel: "doubao-seed-2-0-pro-260215",
+    displayName: "Doubao-Seed-2.0-pro",
+    modality: "text",
+    inputPrice: 3.2,
+    outputPrice: 16,
+    cacheHitPrice: 0.64,
+    description: "侧重长链路推理能力与复杂任务稳定性，适配真实业务中的复杂场景",
+    releaseTag: "260215",
+    requestModality: ["text"],
+    responseModality: ["text"],
+  },
+  {
+    modelKey: "doubao-seed-2-0-lite-260215",
+    providerModel: "doubao-seed-2-0-lite-260215",
+    displayName: "Doubao-Seed-2.0-lite",
+    modality: "text",
+    inputPrice: 0.6,
+    outputPrice: 3.6,
+    cacheHitPrice: 0.12,
+    description: "兼顾生成质量与响应速度，适合作为通用生产级模型",
+    releaseTag: "260215",
+    requestModality: ["text"],
+    responseModality: ["text"],
+  },
+  {
+    modelKey: "doubao-seed-2-0-mini-260215",
+    providerModel: "doubao-seed-2-0-mini-260215",
+    displayName: "Doubao-Seed-2.0-mini",
+    modality: "multimodal",
+    inputPrice: 0.2,
+    outputPrice: 2,
+    cacheHitPrice: 0.04,
+    description:
+      "面向低时延、高并发与成本敏感场景，强调快速响应与灵活推理部署，支持四档位思考与多模态理解能力。",
+    releaseTag: "260215",
+    requestModality: ["text", "image"],
+    responseModality: ["text"],
+  },
+  {
+    modelKey: "doubao-seed-2-0-code-preview-260215",
+    providerModel: "doubao-seed-2-0-code-preview-260215",
+    displayName: "Doubao-Seed-2.0-Code",
+    modality: "text",
+    inputPrice: 3.2,
+    outputPrice: 16,
+    cacheHitPrice: 0.64,
+    description: "Seed 2.0 的编程加强版，更适合 Agentic Coding",
+    releaseTag: "preview-260215",
+    requestModality: ["text"],
+    responseModality: ["text"],
+  },
+];
+
+function buildCuratedVolcengineSeeds(): ModelSeed[] {
+  return VOLCENGINE_CURATED_MODELS.map((item) => ({
+    modelKey: item.modelKey,
+    providerModel: item.providerModel,
+    displayName: item.displayName,
+    modality: item.modality,
+    metadata: {
+      source: "volcengine-curated",
+      description: item.description,
+      releaseTag: item.releaseTag,
+      requestModality: item.requestModality || ["text"],
+      responseModality: item.responseModality || ["text"],
+      recommended: true,
+    },
+  }));
+}
 
 function getVolcenginePrice(modelKey: string) {
   const normalized = modelKey.toLowerCase();
-  for (const [key, value] of Object.entries(VOLCENGINE_PRICES)) {
-    if (normalized.includes(key) || key.includes(normalized)) {
-      return value;
+  for (const item of VOLCENGINE_CURATED_MODELS) {
+    const key = item.modelKey.toLowerCase();
+    if (normalized === key || normalized.includes(key) || key.includes(normalized)) {
+      return item;
     }
   }
   return null;
@@ -288,22 +355,66 @@ function parseModelSeedsFromHtml(html: string): ModelSeed[] {
   return Array.from(seeds.values());
 }
 
-function buildRules(modality: string, inputPrice: number, outputPrice: number): BillingRule[] {
+function buildRules(
+  modality: string,
+  inputPrice: number,
+  outputPrice: number,
+  cacheHitPrice = 0,
+): BillingRule[] {
   const rules: BillingRule[] = [];
+  const tokenUnitSize = 1_000_000;
   if (inputPrice > 0) {
     rules.push({
-      metricKey: modality === "image" ? "image_count" : modality === "video" ? "video_output_seconds" : modality === "audio" ? "audio_output_seconds" : "input_tokens",
-      unitSize: modality === "image" ? 1 : modality === "video" || modality === "audio" ? 1 : 1000,
+      metricKey:
+        modality === "image"
+          ? "image_count"
+          : modality === "video"
+            ? "video_output_seconds"
+            : modality === "audio"
+              ? "audio_output_seconds"
+              : "input_tokens",
+      unitSize:
+        modality === "image" ? 1 : modality === "video" || modality === "audio" ? 1 : tokenUnitSize,
       price: inputPrice,
-      label: modality === "image" ? "CNY/张" : modality === "video" ? "CNY/秒" : modality === "audio" ? "CNY/秒" : "CNY/1K 输入Token",
+      label:
+        modality === "image"
+          ? "CNY/张"
+          : modality === "video"
+            ? "CNY/秒"
+            : modality === "audio"
+              ? "CNY/秒"
+              : "CNY/1M 推理输入Token",
     });
   }
   if (outputPrice > 0) {
     rules.push({
-      metricKey: modality === "image" ? "image_count" : modality === "video" ? "video_output_seconds" : modality === "audio" ? "audio_output_seconds" : "output_tokens",
-      unitSize: modality === "image" ? 1 : modality === "video" || modality === "audio" ? 1 : 1000,
+      metricKey:
+        modality === "image"
+          ? "image_count"
+          : modality === "video"
+            ? "video_output_seconds"
+            : modality === "audio"
+              ? "audio_output_seconds"
+              : "output_tokens",
+      unitSize:
+        modality === "image" ? 1 : modality === "video" || modality === "audio" ? 1 : tokenUnitSize,
       price: outputPrice,
-      label: modality === "image" ? "CNY/张" : modality === "video" ? "CNY/秒" : modality === "audio" ? "CNY/秒" : "CNY/1K 输出Token",
+      label:
+        modality === "image"
+          ? "CNY/张"
+          : modality === "video"
+            ? "CNY/秒"
+            : modality === "audio"
+              ? "CNY/秒"
+              : "CNY/1M 推理输出Token",
+    });
+  }
+  if (cacheHitPrice > 0 && modality !== "image" && modality !== "video" && modality !== "audio") {
+    rules.push({
+      metricKey: "input_tokens_cache_read",
+      unitSize: tokenUnitSize,
+      price: cacheHitPrice,
+      label: "CNY/1M 缓存命中Token",
     });
   }
   return rules;
@@ -498,29 +609,14 @@ function mergeSeeds(primary: ModelSeed[], fallback: ModelSeed[]) {
 export async function fetchVolcengineBillingImportItems(
   options: FetchVolcengineBillingImportItemsOptions = {}
 ): Promise<FetchVolcengineBillingImportItemsResult> {
-  const [listRes, arkSeedsResult] = await Promise.all([
-    fetch(VOLCENGINE_MODEL_LIST_PAGE, {
-      headers: { accept: "text/html,application/xhtml+xml", "user-agent": "volcengine-import-script/1.0" },
-      signal: options.signal,
-      cache: "no-store",
-    }),
-    listArkFoundationModels(options.signal)
-      .then((items) => ({ ok: true as const, items }))
-      .catch((error) => ({ ok: false as const, items: [] as ModelSeed[], error })),
-  ]);
-
-  if (!listRes.ok) throw new Error(`火山引擎模型列表抓取失败：${listRes.status} ${listRes.statusText}`);
-
-  const listHtml = await listRes.text();
-  const docSeeds = parseModelSeedsFromHtml(listHtml);
-  const seeds = mergeSeeds(arkSeedsResult.items, docSeeds);
-
-  const items = seeds
+  const curatedSeeds = buildCuratedVolcengineSeeds();
+  const items = curatedSeeds
     .map((seed, index) => {
       const priceData = getVolcenginePrice(seed.modelKey);
       const modality = priceData?.modality || seed.modality;
-      const inputPrice = priceData?.input || 0;
-      const outputPrice = priceData?.output || 0;
+      const inputPrice = priceData?.inputPrice || 0;
+      const outputPrice = priceData?.outputPrice || 0;
+      const cacheHitPrice = priceData?.cacheHitPrice || 0;
 
       return {
         modelKey: seed.modelKey,
@@ -531,23 +627,29 @@ export async function fetchVolcengineBillingImportItems(
         currency: "CNY" as const,
         inputPrice,
         outputPrice,
+        pricingUnit: "per_1m_tokens",
         enabled: true,
-        pricingRules: buildRules(modality, inputPrice, outputPrice),
+        pricingRules: buildRules(modality, inputPrice, outputPrice, cacheHitPrice),
         metadata: {
           ...(seed.metadata || {}),
-          source: arkSeedsResult.ok ? "volcengine-ark-api+manual" : "volcengine-manual",
+          source: "volcengine-curated",
           sourceListUrl: VOLCENGINE_MODEL_LIST_PAGE,
           sourcePriceUrl: VOLCENGINE_MODEL_PRICE_PAGE,
           sourceConsoleUrl: VOLCENGINE_ARK_CONSOLE_PAGE,
-          sourceApiHost: arkSeedsResult.ok ? VOLCENGINE_ARK_OPENAPI_HOST : null,
+          sourceApiHost: null,
           sourceOrder: index + 1,
-          priceSource: priceData ? "manual" : "none",
-          arkApiEnabled: arkSeedsResult.ok,
-          arkApiError: arkSeedsResult.ok
-            ? null
-            : arkSeedsResult.error instanceof Error
-              ? arkSeedsResult.error.message
-              : "ARK API unavailable",
+          priceSource: "manual-curated",
+          arkApiEnabled: false,
+          arkApiError: null,
+          cacheHitPrice,
+          pricingTier: "input_lte_32k",
+          pricingTierLabel: "输入 <= 32K",
+          description: priceData?.description || (seed.metadata as any)?.description || null,
+          releaseTag: priceData?.releaseTag || (seed.metadata as any)?.releaseTag || null,
+          requestModality:
+            priceData?.requestModality || (seed.metadata as any)?.requestModality || ["text"],
+          responseModality:
+            priceData?.responseModality || (seed.metadata as any)?.responseModality || ["text"],
         },
       };
     })
@@ -575,7 +677,7 @@ export async function fetchVolcengineBillingImportItems(
     fetchedAt: new Date().toISOString(),
     totalAvailable: allItems.length,
     returned: limited.length,
-    sourcePageUrl: arkSeedsResult.ok ? VOLCENGINE_ARK_CONSOLE_PAGE : VOLCENGINE_MODEL_LIST_PAGE,
+    sourcePageUrl: VOLCENGINE_MODEL_PRICE_PAGE,
     items: limited,
   };
 }

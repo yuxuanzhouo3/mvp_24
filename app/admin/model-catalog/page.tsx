@@ -29,6 +29,8 @@ type ModelRow = {
   currency: string;
   inputPrice: number;
   outputPrice: number;
+  pricingUnit: string;
+  pricingRules: Array<Record<string, unknown>>;
   pricingRulesText: string;
   enabled: boolean;
 };
@@ -42,6 +44,7 @@ type OpenRouterImportItem = {
   currency: string;
   inputPrice: number;
   outputPrice: number;
+  pricingUnit?: string;
   enabled: boolean;
   pricingRules?: Array<Record<string, unknown>>;
   metadata?: Record<string, unknown>;
@@ -107,6 +110,7 @@ function buildImportExample(currency: string) {
         currency,
         inputPrice: 0.0008,
         outputPrice: 0.0032,
+        pricingUnit: "per_1k_tokens",
         enabled: true,
         pricingRules: [
           { metricKey: "input_tokens", unitSize: 1000, price: 0.0008, label: `${currency}/1K 输入Token` },
@@ -119,19 +123,79 @@ function buildImportExample(currency: string) {
   );
 }
 
+function normalizePricingRules(raw: unknown) {
+  return Array.isArray(raw) ? raw : [];
+}
+
+function inferPricingUnitFromRules(pricingRules: Array<Record<string, unknown>>) {
+  const tokenUnitSizes = pricingRules
+    .filter((rule) => {
+      const metricKey = String((rule as any)?.metricKey || "");
+      return metricKey === "input_tokens" || metricKey === "output_tokens";
+    })
+    .map((rule) => Number((rule as any)?.unitSize || 0))
+    .filter((unitSize) => Number.isFinite(unitSize) && unitSize > 0)
+    .sort((a, b) => b - a);
+
+  const tokenUnitSize = tokenUnitSizes[0] || 0;
+  if (tokenUnitSize === 1_000_000) return "per_1m_tokens";
+  if (tokenUnitSize === 1000) return "per_1k_tokens";
+
+  const firstRule = pricingRules[0] as any;
+  const metricKey = String(firstRule?.metricKey || "");
+  const unitSize = Number(firstRule?.unitSize || 0);
+  if (metricKey === "tts_characters" && unitSize === 10_000) return "per_10k_characters";
+  if (metricKey === "image_count") return "per_image";
+  if (metricKey === "audio_input_seconds" || metricKey === "audio_output_seconds" || metricKey === "video_input_seconds" || metricKey === "video_output_seconds") {
+    return "per_second";
+  }
+  return "per_unit";
+}
+
+function resolvePricingUnit(item: {
+  pricingUnit?: string | null;
+  pricingRules?: Array<Record<string, unknown>>;
+}) {
+  const direct = String(item.pricingUnit || "").trim();
+  if (direct) return direct;
+  return inferPricingUnitFromRules(normalizePricingRules(item.pricingRules));
+}
+
+function formatPricingUnitLabel(pricingUnit: string) {
+  switch (pricingUnit) {
+    case "per_1m_tokens":
+      return "每百万 Tokens";
+    case "per_1k_tokens":
+      return "每 1K Tokens";
+    case "per_image":
+      return "每张";
+    case "per_second":
+      return "每秒";
+    case "per_10k_characters":
+      return "每万字符";
+    default:
+      return "原始单位";
+  }
+}
+
 function mapModelRows(rows: any): ModelRow[] {
-  return (Array.isArray(rows) ? rows : []).map((row: any) => ({
-    modelKey: row.modelKey,
-    provider: row.provider,
-    providerModel: row.providerModel,
-    displayName: row.displayName,
-    modality: row.modality,
-    currency: row.currency,
-    inputPrice: row.inputPrice,
-    outputPrice: row.outputPrice,
-    pricingRulesText: JSON.stringify(row.pricingRules || [], null, 2),
-    enabled: row.enabled !== false,
-  }));
+  return (Array.isArray(rows) ? rows : []).map((row: any) => {
+    const pricingRules = normalizePricingRules(row.pricingRules);
+    return {
+      modelKey: row.modelKey,
+      provider: row.provider,
+      providerModel: row.providerModel,
+      displayName: row.displayName,
+      modality: row.modality,
+      currency: row.currency,
+      inputPrice: row.inputPrice,
+      outputPrice: row.outputPrice,
+      pricingUnit: resolvePricingUnit({ pricingUnit: row.pricingUnit, pricingRules }),
+      pricingRules,
+      pricingRulesText: JSON.stringify(pricingRules, null, 2),
+      enabled: row.enabled !== false,
+    };
+  });
 }
 
 function exportableModelRows(models: ModelRow[]) {
@@ -144,6 +208,7 @@ function exportableModelRows(models: ModelRow[]) {
     currency: normalizeCurrency(row.currency),
     inputPrice: row.inputPrice,
     outputPrice: row.outputPrice,
+    pricingUnit: row.pricingUnit,
     enabled: row.enabled,
     pricingRules: safeParseRules(row.pricingRulesText),
   }));
@@ -164,19 +229,44 @@ function formatRange(page: number, total: number, pageSize: number) {
 }
 
 
-function totalUnitPrice(item: { inputPrice?: number; outputPrice?: number }) {
-  return Number(item.inputPrice || 0) + Number(item.outputPrice || 0);
+function comparablePriceScore(item: {
+  inputPrice?: number;
+  outputPrice?: number;
+  pricingUnit?: string | null;
+  pricingRules?: Array<Record<string, unknown>>;
+}) {
+  const total = Number(item.inputPrice || 0) + Number(item.outputPrice || 0);
+  const pricingUnit = resolvePricingUnit(item);
+  if (pricingUnit === "per_1m_tokens") return total / 1000;
+  if (pricingUnit === "per_10k_characters") return total / 10;
+  return total;
 }
 
-function matchesChargeFilter(item: { inputPrice?: number; outputPrice?: number }, filter: ChargeFilter) {
-  const isFree = totalUnitPrice(item) === 0;
+function matchesChargeFilter(
+  item: {
+    inputPrice?: number;
+    outputPrice?: number;
+    pricingUnit?: string | null;
+    pricingRules?: Array<Record<string, unknown>>;
+  },
+  filter: ChargeFilter
+) {
+  const isFree = comparablePriceScore(item) === 0;
   if (filter === "free") return isFree;
   if (filter === "paid") return !isFree;
   return true;
 }
 
-function matchesPriceFilter(item: { inputPrice?: number; outputPrice?: number }, filter: PriceFilter) {
-  const total = totalUnitPrice(item);
+function matchesPriceFilter(
+  item: {
+    inputPrice?: number;
+    outputPrice?: number;
+    pricingUnit?: string | null;
+    pricingRules?: Array<Record<string, unknown>>;
+  },
+  filter: PriceFilter
+) {
+  const total = comparablePriceScore(item);
   if (filter === "all") return true;
   if (filter === "free") return total === 0;
   if (filter === "low") return total > 0 && total <= 0.001;
@@ -195,7 +285,7 @@ function matchesSearch(item: { modelKey?: string; displayName?: string; provider
 
 
 function isFreeModel(item: OpenRouterImportItem) {
-  return Number(item.inputPrice || 0) === 0 && Number(item.outputPrice || 0) === 0;
+  return comparablePriceScore(item) === 0;
 }
 
 function normalizePreviewItems(items: OpenRouterImportItem[]) {
@@ -450,6 +540,29 @@ export default function ModelCatalogAdminPage() {
   };
 
   const importSelectedPreview = async () => {
+    if (isCnRegion && previewProviderSlug === "volcengine") {
+      setSaving("models");
+      setError(null);
+      setSuccess(null);
+      try {
+        if (!selectedPreviewItems.length) throw new Error("请先选择要导入的模型");
+        const res = await fetch(previewProviderEndpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: selectedPreviewItems }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json?.success) throw new Error(json?.error || "导入失败");
+        setModels(mapModelRows(json.data));
+        setSuccess(`已替换火山引擎模型为所选 ${selectedPreviewItems.length} 条`);
+      } catch (err: any) {
+        setError(err?.message || "导入失败");
+      } finally {
+        setSaving(null);
+      }
+      return;
+    }
+
     await importItems(selectedPreviewItems, `已导入选中的${previewProviderName}模型，共 ${selectedPreviewItems.length} 条`);
   };
 
@@ -588,8 +701,9 @@ export default function ModelCatalogAdminPage() {
                     <TableHead>模型</TableHead>
                     <TableHead>Provider</TableHead>
                     <TableHead>模态</TableHead>
-                    <TableHead>{`输入价格（${defaultCurrency} / 1K Tokens）`}</TableHead>
-                    <TableHead>{`输出价格（${defaultCurrency} / 1K Tokens）`}</TableHead>
+                    <TableHead>{`输入价格（${defaultCurrency}）`}</TableHead>
+                    <TableHead>{`输出价格（${defaultCurrency}）`}</TableHead>
+                    <TableHead>计费单位</TableHead>
                     <TableHead>启用</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -604,6 +718,9 @@ export default function ModelCatalogAdminPage() {
                       <TableCell className="font-mono text-xs">{row.modality || "text"}</TableCell>
                       <TableCell className="font-mono text-xs">{row.inputPrice ?? 0}</TableCell>
                       <TableCell className="font-mono text-xs">{row.outputPrice ?? 0}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {formatPricingUnitLabel(row.pricingUnit)}
+                      </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.enabled ? "启用" : "停用"}</TableCell>
                     </TableRow>
                   ))}
@@ -727,6 +844,7 @@ export default function ModelCatalogAdminPage() {
                         <TableHead>模态</TableHead>
                         <TableHead>{`输入价格（${defaultCurrency}）`}</TableHead>
                         <TableHead>{`输出价格（${defaultCurrency}）`}</TableHead>
+                        <TableHead>计费单位</TableHead>
                         <TableHead>类型</TableHead>
                         <TableHead>状态</TableHead>
                         <TableHead className="w-28">操作</TableHead>
@@ -749,6 +867,9 @@ export default function ModelCatalogAdminPage() {
                           <TableCell className="font-mono text-xs">{row.modality || "text"}</TableCell>
                           <TableCell className="font-mono text-xs">{row.inputPrice ?? 0}</TableCell>
                           <TableCell className="font-mono text-xs">{row.outputPrice ?? 0}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {formatPricingUnitLabel(resolvePricingUnit(row))}
+                          </TableCell>
                           <TableCell className="text-xs text-muted-foreground">{isFreeModel(row) ? "免费" : "付费"}</TableCell>
                           <TableCell className="text-xs">
                             {currentModelKeySet.has(row.modelKey) ? (

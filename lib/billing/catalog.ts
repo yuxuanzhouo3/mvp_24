@@ -35,6 +35,71 @@ function normalizeRuleRounding(metricKey: string, rawRounding: unknown): Billing
   return rawRounding === "none" ? "none" : "ceil";
 }
 
+function parseTokenUnitSize(value: unknown): number | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  const compact = normalized.replace(/\s+/g, "");
+
+  if (
+    compact.includes("per_1m_token") ||
+    compact.includes("per1mtoken") ||
+    compact.includes("/1mtoken") ||
+    compact.includes("milliontoken") ||
+    compact.includes("百万token")
+  ) {
+    return 1_000_000;
+  }
+
+  if (
+    compact.includes("per_1k_token") ||
+    compact.includes("per1ktoken") ||
+    compact.includes("/1ktoken") ||
+    compact.includes("千token")
+  ) {
+    return 1_000;
+  }
+
+  return null;
+}
+
+function pricingUnitFromTokenUnitSize(unitSize: number): string | null {
+  if (unitSize === 1_000_000) return "per_1m_tokens";
+  if (unitSize === 1_000) return "per_1k_tokens";
+  return null;
+}
+
+function inferTokenUnitSizeFromRules(rules: BillingRule[]): number | null {
+  const tokenRules = rules
+    .filter((rule) => isCanonicalTextTokenMetric(rule.metricKey))
+    .map((rule) => Math.max(1, toNumber(rule.unitSize, 0)))
+    .filter((unitSize) => unitSize > 0);
+
+  if (tokenRules.length === 0) return null;
+  return tokenRules.sort((a, b) => b - a)[0] || null;
+}
+
+function inferTokenUnitSizeFromMetadata(metadata: unknown): number | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const priceRows = Array.isArray((metadata as any).priceRows)
+    ? (metadata as any).priceRows
+    : [];
+
+  for (const row of priceRows) {
+    const rowUnit = parseTokenUnitSize(row?.priceUnit);
+    if (rowUnit) return rowUnit;
+
+    const prices = Array.isArray(row?.prices) ? row.prices : [];
+    for (const price of prices) {
+      const type = String(price?.type || "").toLowerCase();
+      if (!type.includes("token")) continue;
+      const priceUnit = parseTokenUnitSize(price?.priceUnit ?? row?.priceUnit);
+      if (priceUnit) return priceUnit;
+    }
+  }
+
+  return null;
+}
+
 export function normalizePricingRules(raw: unknown): BillingRule[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -53,13 +118,27 @@ export function normalizePricingRules(raw: unknown): BillingRule[] {
     .filter((item): item is BillingRule => item !== null);
 }
 
-function synthesizeTokenRules(inputPrice: number, outputPrice: number): BillingRule[] {
+function synthesizeTokenRules(
+  inputPrice: number,
+  outputPrice: number,
+  tokenUnitSize = 1000
+): BillingRule[] {
   const rules: BillingRule[] = [];
   if (inputPrice > 0) {
-    rules.push({ metricKey: "input_tokens", unitSize: 1000, price: inputPrice, rounding: "none" });
+    rules.push({
+      metricKey: "input_tokens",
+      unitSize: tokenUnitSize,
+      price: inputPrice,
+      rounding: "none",
+    });
   }
   if (outputPrice > 0) {
-    rules.push({ metricKey: "output_tokens", unitSize: 1000, price: outputPrice, rounding: "none" });
+    rules.push({
+      metricKey: "output_tokens",
+      unitSize: tokenUnitSize,
+      price: outputPrice,
+      rounding: "none",
+    });
   }
   return rules;
 }
@@ -151,14 +230,40 @@ export function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): Model
   const region = (typeof row?.region === "string" ? row.region : fallback?.region) || currentRegion();
   const inputPrice = Math.max(0, toNumber(row?.input_price ?? row?.inputPrice, fallback?.inputPrice || 0));
   const outputPrice = Math.max(0, toNumber(row?.output_price ?? row?.outputPrice, fallback?.outputPrice || 0));
+  const rawPricingUnit =
+    typeof (row?.pricing_unit ?? row?.pricingUnit) === "string"
+      ? String(row?.pricing_unit ?? row?.pricingUnit)
+      : fallback?.pricingUnit || "per_1k_tokens";
   const explicitRules = normalizePricingRules(row?.pricing_rules ?? row?.pricingRules);
+  const tokenUnitSizeFromPricingUnit = parseTokenUnitSize(rawPricingUnit);
+  const tokenUnitSizeFromMetadata = inferTokenUnitSizeFromMetadata(
+    row?.metadata ?? fallback?.metadata
+  );
+  const tokenUnitSizeFromRules = inferTokenUnitSizeFromRules(explicitRules);
+  const fallbackTokenUnitSize =
+    parseTokenUnitSize(fallback?.pricingUnit) ||
+    inferTokenUnitSizeFromRules(fallback?.pricingRules || []);
+  const canonicalTokenUnitSize =
+    tokenUnitSizeFromPricingUnit ||
+    tokenUnitSizeFromMetadata ||
+    tokenUnitSizeFromRules ||
+    fallbackTokenUnitSize ||
+    1000;
   const explicitNonCanonicalRules = explicitRules.filter(
     (rule) => !isCanonicalTextTokenMetric(rule.metricKey)
   );
   const pricingRules = dedupeRules([
     ...explicitNonCanonicalRules,
-    ...synthesizeTokenRules(inputPrice, outputPrice),
+    ...synthesizeTokenRules(inputPrice, outputPrice, canonicalTokenUnitSize),
   ]);
+  const normalizedPricingUnit =
+    (tokenUnitSizeFromPricingUnit ||
+      tokenUnitSizeFromMetadata ||
+      tokenUnitSizeFromRules ||
+      fallbackTokenUnitSize) &&
+    (inputPrice > 0 || outputPrice > 0)
+      ? pricingUnitFromTokenUnitSize(canonicalTokenUnitSize) || rawPricingUnit
+      : rawPricingUnit;
   return {
     modelKey:
       typeof (row?.model_key ?? row?.modelKey) === "string"
@@ -191,10 +296,7 @@ export function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): Model
         : fallback?.currency || (region === "CN" ? "CNY" : "USD"),
     inputPrice,
     outputPrice,
-    pricingUnit:
-      typeof (row?.pricing_unit ?? row?.pricingUnit) === "string"
-        ? String(row?.pricing_unit ?? row?.pricingUnit)
-        : fallback?.pricingUnit || "per_1k_tokens",
+    pricingUnit: normalizedPricingUnit,
     pricingRules,
     enabled: row?.enabled === undefined ? fallback?.enabled ?? true : Boolean(row?.enabled),
     metadata:
@@ -307,8 +409,16 @@ export async function listModelCatalogEntries(
         return entries;
       }
 
-      return rows.map((row) => buildCatalogEntry(row, makeBuiltinEntry(String(row?.model_key ?? row?.modelKey ?? ""), region)))
-        .sort((a, b) => a.modelKey.localeCompare(b.modelKey));
+      return rows
+        .map((row: any) =>
+          buildCatalogEntry(
+            row,
+            makeBuiltinEntry(String(row?.model_key ?? row?.modelKey ?? ""), region)
+          )
+        )
+        .sort((a: ModelCatalogEntry, b: ModelCatalogEntry) =>
+          a.modelKey.localeCompare(b.modelKey)
+        );
     } catch (error) {
       console.error("[billing-catalog] CloudBase list failed:", error);
       const cached = getCachedData<ModelCatalogEntry[]>(BAILIAN_CACHE_KEY);
@@ -363,6 +473,56 @@ export async function getModelCatalogEntry(
   const list = await listModelCatalogEntries(region);
   const found = list.find((item) => item.modelKey === modelKey);
   return found || makeBuiltinEntry(modelKey, region);
+}
+
+export async function deleteModelCatalogEntriesByProvider(
+  provider: string,
+  region: BillingRegion = currentRegion()
+): Promise<{ success: boolean; deleted: number; error?: string }> {
+  const normalizedProvider = String(provider || "").trim().toLowerCase();
+  if (!normalizedProvider) {
+    return { success: false, deleted: 0, error: "provider is required" };
+  }
+
+  try {
+    if (isChinaRegion()) {
+      await ensureCloudbaseCollection(COLLECTION);
+      const db = getDatabase();
+      const result = await db
+        .collection(COLLECTION)
+        .where({ region, provider: normalizedProvider })
+        .limit(1000)
+        .get();
+
+      let deleted = 0;
+      for (const doc of Array.isArray(result?.data) ? result.data : []) {
+        if (!doc?._id) continue;
+        await db.collection(COLLECTION).doc(doc._id).remove();
+        deleted += 1;
+      }
+      return { success: true, deleted };
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from(COLLECTION)
+      .delete()
+      .eq("region", region)
+      .eq("provider", normalizedProvider)
+      .select("model_key");
+
+    if (error) {
+      return { success: false, deleted: 0, error: error.message };
+    }
+
+    return { success: true, deleted: Array.isArray(data) ? data.length : 0 };
+  } catch (error) {
+    return {
+      success: false,
+      deleted: 0,
+      error:
+        error instanceof Error ? error.message : "Failed to delete provider model catalog entries",
+    };
+  }
 }
 
 async function createSnapshot(entry: ModelCatalogEntry) {

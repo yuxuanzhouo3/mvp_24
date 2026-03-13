@@ -144,6 +144,8 @@ export enum StreamStatus {
 export type AIProviderName =
   | "openai"
   | "anthropic"
+  | "dashscope"
+  | "volcengine"
   | "qwen" // 阿里云通义千问 (DashScope)
   | "google"
   | "deepseek"

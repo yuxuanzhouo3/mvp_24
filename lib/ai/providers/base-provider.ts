@@ -11,6 +11,7 @@ import {
   AIProviderError,
   ModelInfo,
 } from '../types';
+import { isChinaRegion } from "@/lib/config/region";
 
 /**
  * 抽象AI Provider基类
@@ -94,8 +95,57 @@ export abstract class BaseAIProvider {
     }
 
     if (error instanceof Error) {
-      // 根据错误消息判断错误类型
-      const message = error.message.toLowerCase();
+      const providerError = error as Error & {
+        status?: number;
+        statusCode?: number;
+        code?: string;
+        type?: string;
+        error?: {
+          code?: string;
+          type?: string;
+          message?: string;
+        };
+      };
+
+      const rawMessage = String(
+        providerError.error?.message || providerError.message || ""
+      );
+      const message = rawMessage.toLowerCase();
+      const rawCode = String(
+        providerError.error?.code || providerError.code || ""
+      ).toLowerCase();
+      const statusCode =
+        typeof providerError.status === "number"
+          ? providerError.status
+          : typeof providerError.statusCode === "number"
+            ? providerError.statusCode
+            : undefined;
+
+      if (
+        rawCode === "modelnotopen" ||
+        message.includes("has not activated the model") ||
+        message.includes("activate the model service")
+      ) {
+        return new AIProviderError(
+          isChinaRegion()
+            ? "当前账号尚未开通这个模型，请先到火山方舟控制台开通后再试，或切换到已开通的模型。"
+            : "This model is not activated for your account. Please enable it in the provider console or switch to another model.",
+          "model_not_activated",
+          403,
+          error
+        );
+      }
+
+      if (message.includes("not available in your region")) {
+        return new AIProviderError(
+          isChinaRegion()
+            ? "该模型在当前地区不可用，请切换其他模型。"
+            : "This model is not available in your region. Please switch to another model.",
+          "region_not_supported",
+          403,
+          error
+        );
+      }
 
       if (message.includes('api key') || message.includes('unauthorized')) {
         return new AIProviderError(
@@ -146,15 +196,15 @@ export abstract class BaseAIProvider {
         return new AIProviderError(
           'Model not found or not supported. Please check the model name.',
           'model_not_found',
-          404,
+          statusCode || 404,
           error
         );
       }
 
       return new AIProviderError(
-        error.message,
+        rawMessage || error.message,
         'provider_error',
-        500,
+        statusCode || 500,
         error
       );
     }

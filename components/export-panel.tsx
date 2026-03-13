@@ -412,80 +412,23 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     return data.url;
   };
 
+  const triggerBrowserDownload = (url: string) => {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+  };
+
   const handleExport = async () => {
     if (selectedSessions.length === 0) {
       toast.error(t.export.selectSessionsFirst);
       return;
     }
 
-    let pdfWindow: Window | null = null;
-
     try {
       const platform = detectPlatform();
-
-      if (platform.isWechatMiniProgram) {
-        // 获取认证 token - 根据区域使用正确的认证客户端
-        const authClient = getAuthClient();
-        const { data: sessionData, error: sessionError } =
-          await authClient.getSession();
-
-        if (sessionError || !sessionData.session) {
-          console.error("获取会话失败:", sessionError);
-          toast.error("请先登录");
-          return;
-        }
-
-        const accessToken = sessionData.session.access_token;
-        if (!accessToken) {
-          console.error("没有访问令牌");
-          toast.error("请先登录");
-          return;
-        }
-
-        toast.loading(t.exportMessages.exporting);
-        const downloadLink = await createExportDownloadLink(accessToken);
-        const copied = await copyTextToClipboard(downloadLink);
-        toast.dismiss();
-
-        if (copied) {
-          toast.success(
-            language === "zh"
-              ? "已复制下载链接，请到浏览器打开"
-              : "Download link copied. Open it in your browser."
-          );
-        } else {
-          toast.error(
-            language === "zh"
-              ? "复制失败，请手动复制下载链接后到浏览器打开"
-              : "Copy failed. Manually copy the download link and open it in your browser."
-          );
-          alert(downloadLink);
-        }
-        return;
-      }
-
-      if (exportFormat === "pdf") {
-        pdfWindow = window.open("", "_blank");
-        if (!pdfWindow) {
-          toast.error(
-            language === "zh"
-              ? "无法打开PDF窗口，请允许弹出窗口"
-              : "Cannot open PDF window, please allow popups"
-          );
-          return;
-        }
-
-        const preparingText =
-          language === "zh" ? "正在生成 PDF，请稍候..." : "Preparing PDF...";
-        pdfWindow.document.write(`<!DOCTYPE html>
-<html>
-  <head><meta charset="UTF-8"><title>PDF Export</title></head>
-  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px;">
-    <p>${preparingText}</p>
-  </body>
-</html>`);
-        pdfWindow.document.close();
-      }
 
       // 获取认证 token - 根据区域使用正确的认证客户端
       const authClient = getAuthClient();
@@ -495,9 +438,6 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       if (sessionError || !sessionData.session) {
         console.error("获取会话失败:", sessionError);
         toast.error("请先登录");
-        if (pdfWindow && !pdfWindow.closed) {
-          pdfWindow.close();
-        }
         return;
       }
 
@@ -505,64 +445,39 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       if (!accessToken) {
         console.error("没有访问令牌");
         toast.error("请先登录");
-        if (pdfWindow && !pdfWindow.closed) {
-          pdfWindow.close();
-        }
         return;
       }
 
       toast.loading(t.exportMessages.exporting);
-
-      // 获取所有选中会话的消息
-      const allMessages: any[] = [];
-      for (const sessionId of selectedSessions) {
-        const response = await fetch(
-          `/api/chat/sessions/${sessionId}/messages`,
-          {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-            },
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          const sessionData = sessions.find((s) => s.id === sessionId);
-          const messages = Array.isArray(data.messages) ? data.messages : [];
-          const nowIso = new Date().toISOString();
-          allMessages.push({
-            session:
-              sessionData ||
-              ({
-                id: sessionId,
-                title: language === "zh" ? "未命名会话" : "Untitled Session",
-                model: "Unknown",
-                created_at: nowIso,
-                updated_at: nowIso,
-              } as ChatSession),
-            messages,
-          });
-        }
-      }
-
-      // 根据格式导出
-      if (exportFormat === "markdown") {
-        exportAsMarkdown(allMessages);
-      } else if (exportFormat === "pdf") {
-        const pdfExported = exportAsPdf(allMessages, pdfWindow);
-        if (!pdfExported) {
-          throw new Error("PDF export failed");
-        }
-        pdfWindow = null;
-      }
+      const downloadLink = await createExportDownloadLink(accessToken);
 
       toast.dismiss();
-      toast.success(t.export.exportSuccess);
-    } catch (error) {
-      if (pdfWindow && !pdfWindow.closed) {
-        pdfWindow.close();
+      if (platform.isWechatMiniProgram) {
+        const copied = await copyTextToClipboard(downloadLink);
+        if (copied) {
+          toast.success(
+            language === "zh"
+              ? "已复制下载链接，请到浏览器打开下载"
+              : "Download link copied. Open it in your browser to download."
+          );
+        } else {
+          toast.error(
+            language === "zh"
+              ? "复制失败，请手动复制下载链接后到浏览器打开下载"
+              : "Copy failed. Manually copy the download link and open it in your browser to download."
+          );
+          alert(downloadLink);
+        }
+        return;
       }
+
+      triggerBrowserDownload(downloadLink);
+      toast.success(
+        language === "zh"
+          ? "已开始下载，请查看浏览器下载列表"
+          : "Download started. Check your browser downloads."
+      );
+    } catch (error) {
       console.error("Export failed:", error);
       toast.dismiss();
       toast.error(t.export.exportFailed);

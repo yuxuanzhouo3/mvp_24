@@ -23,8 +23,10 @@ import {
 import type { AIMessage } from "@/lib/ai/types";
 import { coercePlanId } from "@/lib/plan-quota-settings";
 import { listModelCatalogEntries } from "@/lib/billing/catalog";
+import type { ModelCatalogEntry } from "@/lib/billing/types";
 import {
   buildPreprocessUnavailableMessage,
+  resolveCnPreprocessModelCandidates,
   resolveIntlPreprocessModelCandidates,
   resolvePreprocessBillingModelKey,
   shouldRetryPreprocessModel,
@@ -38,6 +40,16 @@ const MAX_DATA_URL_CHARS = 3 * 1024 * 1024;
 const MAX_TOTAL_ATTACHMENT_BYTES = 24 * 1024 * 1024;
 const CN_QWEN_OMNI_MODEL = "qwen3-omni-flash";
 const CN_QWEN_OMNI_AUDIO_MODEL = "qwen3-omni-flash-2025-12-01";
+const VOLCENGINE_MULTIMODAL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+
+type PreprocessProvider = "openrouter" | "dashscope" | "volcengine";
+
+type ResolvedPreprocessCandidate = {
+  modelKey: string;
+  requestModel: string;
+  provider: PreprocessProvider;
+  displayName: string;
+};
 
 class MultimodalPreprocessRouteError extends Error {
   statusCode: number;
@@ -251,14 +263,110 @@ function summarizePreprocessError(error: unknown) {
   };
 }
 
+function createCatalogFallbackEntry(
+  input: Partial<ModelCatalogEntry> &
+    Pick<
+      ModelCatalogEntry,
+      "modelKey" | "provider" | "providerModel" | "displayName" | "region" | "modality"
+    >,
+): ModelCatalogEntry {
+  return {
+    modelKey: input.modelKey,
+    provider: input.provider,
+    providerModel: input.providerModel,
+    displayName: input.displayName,
+    region: input.region,
+    modality: input.modality,
+    billingMode: input.billingMode || "metered",
+    currency: input.currency || (input.region === "CN" ? "CNY" : "USD"),
+    inputPrice: input.inputPrice ?? 0,
+    outputPrice: input.outputPrice ?? 0,
+    pricingUnit: input.pricingUnit || "per_1k_tokens",
+    pricingRules: input.pricingRules || [],
+    enabled: input.enabled ?? true,
+    metadata: input.metadata || {},
+    updatedAt: input.updatedAt || null,
+  };
+}
+
+function buildCnFallbackPreprocessCatalogEntries(): ModelCatalogEntry[] {
+  return [
+    createCatalogFallbackEntry({
+      modelKey: CN_QWEN_OMNI_AUDIO_MODEL,
+      provider: "dashscope",
+      providerModel: CN_QWEN_OMNI_AUDIO_MODEL,
+      displayName: CN_QWEN_OMNI_AUDIO_MODEL,
+      region: "CN",
+      modality: "multimodal",
+      inputPrice: 0.000008,
+      outputPrice: 0.000008,
+      metadata: {
+        inputModalities: ["text", "image", "audio"],
+        outputModalities: ["text"],
+        capabilities: ["multimodal", "audio", "image", "vision", "omni"],
+      },
+    }),
+    createCatalogFallbackEntry({
+      modelKey: CN_QWEN_OMNI_MODEL,
+      provider: "dashscope",
+      providerModel: CN_QWEN_OMNI_MODEL,
+      displayName: CN_QWEN_OMNI_MODEL,
+      region: "CN",
+      modality: "multimodal",
+      inputPrice: 0.000008,
+      outputPrice: 0.000008,
+      metadata: {
+        inputModalities: ["text", "image"],
+        outputModalities: ["text"],
+        capabilities: ["multimodal", "image", "vision", "omni"],
+      },
+    }),
+  ];
+}
+
+function resolvePreprocessProvider(provider?: string): PreprocessProvider {
+  if (!isChinaRegion()) return "openrouter";
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (normalized.includes("volc")) return "volcengine";
+  return "dashscope";
+}
+
+function hasConfiguredPreprocessProvider(provider: PreprocessProvider): boolean {
+  if (provider === "openrouter") return Boolean(process.env.OPENROUTER_API);
+  if (provider === "volcengine") return Boolean(process.env.VOLCENGINE_API_KEY);
+  return Boolean(process.env.DASHSCOPE_API_KEY);
+}
+
+function toResolvedPreprocessCandidate(
+  entry: ModelCatalogEntry,
+): ResolvedPreprocessCandidate {
+  const provider = resolvePreprocessProvider(entry.provider);
+  return {
+    modelKey: entry.modelKey,
+    requestModel: entry.providerModel || entry.modelKey,
+    provider,
+    displayName: entry.displayName || entry.modelKey,
+  };
+}
+
 async function resolvePreprocessModels(
   attachments: MultimodalAttachmentPayload[],
-): Promise<string[]> {
-  const hasAudioAttachment = attachments.some(
-    (item) => item.kind === "audio" || item.kind === "video",
-  );
+): Promise<ResolvedPreprocessCandidate[]> {
   if (isChinaRegion()) {
-    return [hasAudioAttachment ? CN_QWEN_OMNI_AUDIO_MODEL : CN_QWEN_OMNI_MODEL];
+    const catalog = await listModelCatalogEntries("CN");
+    const candidates = resolveCnPreprocessModelCandidates(
+      [...catalog, ...buildCnFallbackPreprocessCatalogEntries()],
+      attachments,
+    )
+      .map(toResolvedPreprocessCandidate)
+      .filter((candidate) => hasConfiguredPreprocessProvider(candidate.provider));
+    if (candidates.length === 0) {
+      throw new MultimodalPreprocessRouteError(
+        buildPreprocessUnavailableMessage(attachments),
+        503,
+      );
+    }
+    return candidates;
   }
 
   const catalog = await listModelCatalogEntries("INTL");
@@ -269,11 +377,11 @@ async function resolvePreprocessModels(
       503,
     );
   }
-  return candidates.map((item) => item.modelKey);
+  return candidates.map(toResolvedPreprocessCandidate);
 }
 
-function createPreprocessClient() {
-  if (isChinaRegion()) {
+function createPreprocessClient(provider: PreprocessProvider) {
+  if (provider === "dashscope") {
     const apiKey = process.env.DASHSCOPE_API_KEY;
     if (!apiKey) {
       throw new Error("DASHSCOPE_API_KEY is not configured");
@@ -283,6 +391,17 @@ function createPreprocessClient() {
       baseURL:
         process.env.DASHSCOPE_BASE_URL ||
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    });
+  }
+
+  if (provider === "volcengine") {
+    const apiKey = process.env.VOLCENGINE_API_KEY;
+    if (!apiKey) {
+      throw new Error("VOLCENGINE_API_KEY is not configured");
+    }
+    return new OpenAI({
+      apiKey,
+      baseURL: process.env.VOLCENGINE_BASE_URL || VOLCENGINE_MULTIMODAL_BASE_URL,
     });
   }
 
@@ -305,11 +424,11 @@ async function runMultimodalPreprocess(params: {
   userId: string;
   message: string;
   attachments: MultimodalAttachmentPayload[];
-  candidateModels: string[];
+  candidateModels: ResolvedPreprocessCandidate[];
 }) {
   const { userId, message, attachments, candidateModels } = params;
   const hasAudioAttachment = attachments.some((item) => item.kind === "audio");
-  const client = createPreprocessClient();
+  const clientCache = new Map<PreprocessProvider, OpenAI>();
 
   const promptContext = buildPromptContext(message, attachments);
   const richParts: any[] = [{ type: "text", text: promptContext }];
@@ -365,35 +484,43 @@ async function runMultimodalPreprocess(params: {
     ].join("\n");
   }
 
-  const makeRequest = async (content: any, model: string) => {
-    return client.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "system",
-          content:
-            "你负责把多模态输入转换成可供其他文本模型继续使用的高质量文本语义。请保持准确、简洁、结构化。",
-        },
-        {
-          role: "user",
-          content,
-        },
-      ] as any,
-      temperature: 0.2,
-      max_tokens: 1400,
-      user: userId,
-    });
-  };
-
   const hasRichMediaPayload = richParts.some(
     (part) => part?.type === "image_url" || part?.type === "input_audio",
   );
   const requestContent = hasRichMediaPayload ? richParts : textOnlyContext;
 
-  for (const candidateModel of candidateModels) {
-    attemptedModels.push(candidateModel);
+  for (const candidate of candidateModels) {
+    attemptedModels.push(candidate.modelKey);
     try {
-      const completion = await makeRequest(requestContent, candidateModel);
+      const client =
+        clientCache.get(candidate.provider) ||
+        createPreprocessClient(candidate.provider);
+      if (!clientCache.has(candidate.provider)) {
+        clientCache.set(candidate.provider, client);
+      }
+      const requestPayload: Record<string, unknown> = {
+        model: candidate.requestModel,
+        messages: [
+          {
+            role: "system",
+            content:
+              "你负责把多模态输入转换成可供其他文本模型继续使用的高质量文本语义。请保持准确、简洁、结构化。",
+          },
+          {
+            role: "user",
+            content: requestContent,
+          },
+        ] as any,
+        temperature: 0.2,
+        max_tokens: 1400,
+      };
+      if (candidate.provider !== "volcengine") {
+        requestPayload.user = userId;
+      }
+
+      const completion = await client.chat.completions.create(
+        requestPayload as Parameters<OpenAI["chat"]["completions"]["create"]>[0],
+      );
       const rawContent = completion?.choices?.[0]?.message?.content;
       const usage = {
         promptTokens: Math.max(0, Number(completion?.usage?.prompt_tokens || 0)),
@@ -404,7 +531,7 @@ async function runMultimodalPreprocess(params: {
       if (typeof rawContent === "string" && rawContent.trim()) {
         return {
           summary: rawContent.trim(),
-          model: candidateModel,
+          model: candidate.modelKey,
           usage,
         };
       }
@@ -422,13 +549,13 @@ async function runMultimodalPreprocess(params: {
         if (text) {
           return {
             summary: text,
-            model: candidateModel,
+            model: candidate.modelKey,
             usage,
           };
         }
       }
 
-      lastError = new Error(`${candidateModel} returned empty content`);
+      lastError = new Error(`${candidate.modelKey} returned empty content`);
       if (!shouldRetryPreprocessModel(lastError)) {
         throw lastError;
       }
@@ -437,7 +564,9 @@ async function runMultimodalPreprocess(params: {
       console.warn(
         "[multimodal-preprocess] candidate failed, trying next model if available:",
         {
-          candidateModel,
+          candidateModel: candidate.modelKey,
+          requestModel: candidate.requestModel,
+          provider: candidate.provider,
           ...summarizePreprocessError(error),
         },
       );
@@ -608,7 +737,7 @@ export async function POST(req: NextRequest) {
 
     const { imageCount, videoAudioCount } = countQuotaDemand(attachments);
     const preprocessModels = await resolvePreprocessModels(attachments);
-    const billingModelKey = resolvePreprocessBillingModelKey(preprocessModels[0] || "");
+    const billingModelKey = resolvePreprocessBillingModelKey(preprocessModels[0]?.modelKey || "");
     const billingRequestId = `multimodal:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
     const estimatedMetrics = await buildMultimodalBillingMetrics({
       message: rawMessage,

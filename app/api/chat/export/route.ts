@@ -1,4 +1,5 @@
 import cloudbase from "@cloudbase/node-sdk";
+import { existsSync } from "node:fs";
 import { NextRequest, NextResponse } from "next/server";
 import { getGptMessages as getCloudBaseMessages } from "@/lib/cloudbase-db";
 import { isChinaRegion } from "@/lib/config/region";
@@ -13,6 +14,15 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 const GET_MESSAGES_PAGE_RPC = "get_gpt_session_messages_page";
 const MAX_EXPORT_SESSIONS = 100;
 const PAGE_SIZE = 500;
+export const runtime = "nodejs";
+const PUPPETEER_EXECUTABLE_CANDIDATES = [
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+].filter((value): value is string => typeof value === "string" && value.length > 0);
 
 type ExportFormat = "markdown" | "pdf";
 type ExportLanguage = "zh" | "en";
@@ -360,7 +370,7 @@ function buildMarkdown(data: ExportSession[], language: ExportLanguage) {
   return markdown;
 }
 
-function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
+export function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
   const labels = getExportLabels(language);
   const locale = language === "zh" ? "zh-CN" : "en-US";
   const totalTokens = data.reduce(
@@ -458,23 +468,9 @@ function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
       padding-top: 8px;
       border-top: 1px solid #e0e0e0;
     }
-    .print-button {
-      position: fixed;
-      top: 20px;
-      right: 20px;
-      padding: 12px 24px;
-      background: #3498db;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-size: 14px;
-      cursor: pointer;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
   </style>
 </head>
 <body>
-  <button class="print-button no-print" onclick="window.print()">${labels.printButton}</button>
   <h1>${labels.reportTitle}</h1>
   <div class="header-info">
     <p><strong>${labels.exportTime}:</strong> ${new Date().toLocaleString(locale)}</p>
@@ -545,16 +541,47 @@ function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
   }
   html += `<li><strong>${labels.exportTime}:</strong> ${new Date().toLocaleString(locale)}</li>`;
   html += `</ul></div>`;
-  html += `<script>
-    setTimeout(() => {
-      if (confirm(${JSON.stringify(labels.printConfirm)})) {
-        window.print();
-      }
-    }, 500);
-  </script>`;
   html += `</body></html>`;
 
   return html;
+}
+
+async function renderPdfBuffer(html: string): Promise<Buffer> {
+  const puppeteerModule = await import("puppeteer");
+  const puppeteer = (puppeteerModule as any).default ?? puppeteerModule;
+
+  const launchOptions: Record<string, unknown> = {
+    headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  };
+
+  const executablePath = PUPPETEER_EXECUTABLE_CANDIDATES.find((candidate) =>
+    existsSync(candidate)
+  );
+  if (executablePath) {
+    launchOptions.executablePath = executablePath;
+  }
+
+  const browser = await puppeteer.launch(launchOptions);
+
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: "networkidle0" });
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: {
+        top: "18mm",
+        right: "14mm",
+        bottom: "18mm",
+        left: "14mm",
+      },
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close();
+  }
 }
 
 async function getChinaExportSessions(
@@ -788,10 +815,13 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    return new NextResponse(buildPdfHtml(data, language), {
+    const filename = `ai-chat-${today}-${Date.now()}.pdf`;
+    const pdfBuffer = await renderPdfBuffer(buildPdfHtml(data, language));
+    return new NextResponse(pdfBuffer, {
       status: 200,
       headers: {
-        "Content-Type": "text/html; charset=utf-8",
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="${filename}"`,
         "Cache-Control": "no-store",
       },
     });

@@ -259,9 +259,25 @@ function inferMetricKey(type: string) {
 }
 
 function inferUnitSize(priceUnit: string) {
-  const normalized = String(priceUnit || "").toLowerCase();
-  if (normalized.includes("每百万token") || normalized.includes("per 1m token")) return 1_000_000;
-  if (normalized.includes("每千token") || normalized.includes("per 1k token")) return 1_000;
+  const normalized = String(priceUnit || "").toLowerCase().trim();
+  const compact = normalized.replace(/\s+/g, "");
+  if (
+    compact.includes("每百万token") ||
+    compact.includes("百万token") ||
+    compact.includes("per1mtoken") ||
+    compact.includes("/1mtoken") ||
+    compact.includes("milliontoken")
+  ) {
+    return 1_000_000;
+  }
+  if (
+    compact.includes("每千token") ||
+    compact.includes("千token") ||
+    compact.includes("per1ktoken") ||
+    compact.includes("/1ktoken")
+  ) {
+    return 1_000;
+  }
   if (normalized.includes("每万字符")) return 10_000;
   if (normalized.includes("千次调用")) return 1_000;
   return 1;
@@ -323,8 +339,9 @@ function selectRepresentativePrice(
 function inferPricingUnit(modality: string, inputRule: BillingRule | null, outputRule: BillingRule | null) {
   const primary = inputRule || outputRule;
   if (!primary) return "per_unit";
-  if ((primary.metricKey === "input_tokens" || primary.metricKey === "output_tokens") && primary.unitSize === 1000) {
-    return "per_1k_tokens";
+  if (primary.metricKey === "input_tokens" || primary.metricKey === "output_tokens") {
+    if (primary.unitSize === 1_000_000) return "per_1m_tokens";
+    if (primary.unitSize === 1000) return "per_1k_tokens";
   }
   if (primary.metricKey === "image_count") return "per_image";
   if (primary.metricKey === "audio_input_seconds" || primary.metricKey === "video_output_seconds") {

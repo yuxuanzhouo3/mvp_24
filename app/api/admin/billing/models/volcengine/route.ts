@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminSession } from "@/lib/admin/session";
-import { listModelCatalogEntries, upsertModelCatalogEntries } from "@/lib/billing/catalog";
+import {
+  deleteModelCatalogEntriesByProvider,
+  listModelCatalogEntries,
+  upsertModelCatalogEntries,
+} from "@/lib/billing/catalog";
 import { fetchVolcengineBillingImportItems } from "@/lib/importers/volcengine";
 
 export const runtime = "nodejs";
@@ -49,7 +53,25 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => null);
     const limit = resolveLimit(body?.limit != null ? String(body.limit) : null);
-    const fetched = await fetchVolcengineBillingImportItems({ limit });
+    const requestedItems = Array.isArray(body?.items) ? body.items : null;
+    const fetched = requestedItems
+      ? {
+          fetchedAt: new Date().toISOString(),
+          totalAvailable: requestedItems.length,
+          returned: requestedItems.length,
+          sourcePageUrl: "manual-selection",
+          items: requestedItems,
+        }
+      : await fetchVolcengineBillingImportItems({ limit });
+
+    const deleteResult = await deleteModelCatalogEntriesByProvider("volcengine", session!.region);
+    if (!deleteResult.success) {
+      return NextResponse.json(
+        { success: false, error: deleteResult.error || "清理旧火山模型失败" },
+        { status: 500 }
+      );
+    }
+
     const result = await upsertModelCatalogEntries(fetched.items, session!.region);
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error || "保存失败" }, { status: 500 });
@@ -62,6 +84,7 @@ export async function POST(req: NextRequest) {
         fetchedAt: fetched.fetchedAt,
         imported: fetched.items.length,
         totalAvailable: fetched.totalAvailable,
+        deleted: deleteResult.deleted,
       },
     });
   } catch (error) {
