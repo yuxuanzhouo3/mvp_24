@@ -202,7 +202,7 @@ export async function POST(req: NextRequest) {
       | { modelKey: string; metrics: Record<string, number> }
       | null = null;
 
-    const addEstimate = (
+    const addEstimate = async (
       runtimeModel: string,
       messagesForEstimate: AIMessage[],
       multiplier: number,

@@ -442,7 +442,7 @@ function buildEnhancedMessage(
   ].join("\n");
 }
 
-function buildMultimodalBillingMetrics(params: {
+async function buildMultimodalBillingMetrics(params: {
   message: string;
   attachments: MultimodalAttachmentPayload[];
   modelKey: string;
@@ -579,7 +579,7 @@ export async function POST(req: NextRequest) {
     const preprocessModel = resolvePreprocessModel(attachments);
     const billingModelKey = normalizeBillingModelKey(preprocessModel);
     const billingRequestId = `multimodal:${userId}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
-    const estimatedMetrics = buildMultimodalBillingMetrics({
+    const estimatedMetrics = await buildMultimodalBillingMetrics({
       message: rawMessage,
       attachments,
       modelKey: billingModelKey,
@@ -630,7 +630,7 @@ export async function POST(req: NextRequest) {
     }
 
     const actualBillingModelKey = normalizeBillingModelKey(preprocessResult.model);
-    const actualMetrics = buildMultimodalBillingMetrics({
+    const actualMetrics = await buildMultimodalBillingMetrics({
       message: rawMessage,
       attachments,
       modelKey: actualBillingModelKey,
