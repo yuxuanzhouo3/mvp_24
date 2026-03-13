@@ -7,7 +7,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ACTION_BODY_LIMIT = 1000 * 1024 * 1024;
 
 const nextConfig = {
-  output: "standalone",
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },
