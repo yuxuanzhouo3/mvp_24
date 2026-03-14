@@ -44,19 +44,20 @@ async function getOpenRouterPopularityMap(): Promise<Map<string, number>> {
     return openRouterPopularityCache;
   }
 
-  try {
-    const result = await fetchOpenRouterModels({ order: "most-popular", limit: 200 });
-    const entries = result.models
-      .map((item) => ({ modelKey: item.slug, rank: item.rank }))
-      .filter((item) => item.modelKey && Number.isFinite(item.rank) && item.rank > 0);
-    if (entries.length > 0) {
-      setCachedData(OPENROUTER_POPULARITY_CACHE_KEY, entries, OPENROUTER_POPULARITY_CACHE_TTL_SECONDS);
-      openRouterPopularityCache = new Map(entries.map((item) => [item.modelKey, item.rank]));
-      return openRouterPopularityCache;
-    }
-  } catch {}
-
   openRouterPopularityCache = loadOpenRouterPopularitySnapshot();
+
+  fetchOpenRouterModels({ order: "most-popular", limit: 200 })
+    .then((result) => {
+      const entries = result.models
+        .map((item) => ({ modelKey: item.slug, rank: item.rank }))
+        .filter((item) => item.modelKey && Number.isFinite(item.rank) && item.rank > 0);
+      if (entries.length > 0) {
+        setCachedData(OPENROUTER_POPULARITY_CACHE_KEY, entries, OPENROUTER_POPULARITY_CACHE_TTL_SECONDS);
+        openRouterPopularityCache = new Map(entries.map((item) => [item.modelKey, item.rank]));
+      }
+    })
+    .catch(() => {});
+
   return openRouterPopularityCache;
 }
 

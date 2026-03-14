@@ -7,10 +7,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ACTION_BODY_LIMIT = 1000 * 1024 * 1024;
 
 const nextConfig = {
-  output: "standalone",
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },
+  assetPrefix: process.env.ASSET_PREFIX || undefined,
   experimental: {
     // When `proxy.ts` is present, Next may buffer the request body so it can be
     // read both in the proxy and in the underlying route handler / server action.

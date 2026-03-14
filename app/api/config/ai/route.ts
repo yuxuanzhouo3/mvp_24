@@ -24,29 +24,25 @@ export async function GET(request: NextRequest) {
     const models = await listEnabledRuntimeModels(country);
     const agents = await Promise.all(models.map((entry, index) => buildCatalogAgent(entry, index)));
 
-    if (isChinaRegion()) {
-      return NextResponse.json({
-        success: true,
-        region: "china",
-        country,
-        agents,
-        totalAgents: agents.length,
-        providers: [
-          {
-            provider: "bailian",
-            enabled: Boolean(process.env.DASHSCOPE_API_KEY),
-            baseURL: process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1",
-          },
-          {
-            provider: "volcengine",
-            enabled: Boolean(process.env.VOLCENGINE_API_KEY),
-            baseURL: process.env.VOLCENGINE_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3",
-          },
-        ],
-      });
-    }
-
-    return NextResponse.json({
+    const responseData = isChinaRegion() ? {
+      success: true,
+      region: "china",
+      country,
+      agents,
+      totalAgents: agents.length,
+      providers: [
+        {
+          provider: "bailian",
+          enabled: Boolean(process.env.DASHSCOPE_API_KEY),
+          baseURL: process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        },
+        {
+          provider: "volcengine",
+          enabled: Boolean(process.env.VOLCENGINE_API_KEY),
+          baseURL: process.env.VOLCENGINE_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3",
+        },
+      ],
+    } : {
       success: true,
       region: "global",
       country,
@@ -59,7 +55,11 @@ export async function GET(request: NextRequest) {
           baseURL: "https://openrouter.ai/api/v1",
         },
       ],
-    });
+    };
+
+    const response = NextResponse.json(responseData);
+    response.headers.set("Cache-Control", "public, max-age=300, s-maxage=300");
+    return response;
   } catch (error) {
     console.error("❌ AI 配置加载失败:", error);
     return NextResponse.json(
