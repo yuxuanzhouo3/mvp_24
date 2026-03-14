@@ -676,12 +676,15 @@ public class MainActivity extends AppCompatActivity implements Observer,
         AppConfig appConfig = AppConfig.getInstance(this);
 
         // Show terms and policies dialog on first launch (root activity only)
+        // Disabled by user request
+        /*
         if (isRoot) {
             TermsAndPoliciesDialog termsDialog = new TermsAndPoliciesDialog(this);
             if (!termsDialog.hasTermsBeenShown()) {
                 termsDialog.show();
             }
         }
+        */
 
         if (isActivityPaused) {
             this.isActivityPaused = false;

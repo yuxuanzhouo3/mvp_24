@@ -114,7 +114,7 @@ export function ChatInputPanel({
   };
 
   return (
-    <div className="p-2 pt-0 sm:p-3 sm:pt-0 bg-white">
+    <div className="p-2 pt-0 sm:p-3 sm:pt-0 bg-white sticky bottom-0 left-0 right-0 z-50 pb-safe">
       <div className="max-w-4xl mx-auto rounded-2xl sm:rounded-[1.75rem] overflow-visible bg-white flex flex-col relative text-sm sm:text-base">
         <textarea
           value={input}
