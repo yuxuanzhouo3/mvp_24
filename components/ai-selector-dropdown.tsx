@@ -34,6 +34,7 @@ interface AISelectorDropdownProps {
   onSelectionChange: (ais: AIAgent[]) => void;
   onClose: () => void;
   triggerRef?: RefObject<HTMLElement | null>;
+  collaborationMode?: "normal" | "parallel" | "sequential" | "deep" | "graph";
 }
 
 const SWIPE_CLOSE_DISTANCE = 90;
@@ -54,6 +55,7 @@ export function AISelectorDropdown({
   onSelectionChange,
   onClose,
   triggerRef,
+  collaborationMode = "normal",
 }: AISelectorDropdownProps) {
   const { language } = useLanguage();
   const { user } = useUser();
@@ -81,6 +83,12 @@ export function AISelectorDropdown({
 
   const isSmartModel = (ai: AIAgent) =>
     ai.model === "smart-auto" || ai.id.includes("smart-model");
+  const maxSelectable =
+    collaborationMode === "normal" ||
+    collaborationMode === "deep" ||
+    collaborationMode === "graph"
+      ? 1
+      : 4;
 
   const favoriteIdSet = useMemo(() => new Set(favoriteIds), [favoriteIds]);
 
@@ -205,8 +213,13 @@ export function AISelectorDropdown({
       return;
     }
 
+    if (maxSelectable === 1) {
+      onSelectionChange([ai]);
+      return;
+    }
+
     const withoutSmart = selectedAIs.filter((selected) => !isSmartModel(selected));
-    if (withoutSmart.length >= 4) {
+    if (withoutSmart.length >= maxSelectable) {
       return;
     }
 
@@ -287,8 +300,12 @@ export function AISelectorDropdown({
           </h3>
           <p className="text-[10px] text-gray-500 mt-0.5">
             {language === "zh"
-              ? "按收藏和热门度排序，最多可选 4 个模型；智能模型会独占选择。"
-              : "Sorted by favorites and popularity. Select up to 4 models; smart mode is exclusive."}
+              ? maxSelectable === 1
+                ? "当前模式仅可选择 1 个模型；智能模型会独占选择。"
+                : "按收藏和热门度排序，最多可选 4 个模型；智能模型会独占选择。"
+              : maxSelectable === 1
+                ? "This mode allows only 1 model; smart mode is exclusive."
+                : "Sorted by favorites and popularity. Select up to 4 models; smart mode is exclusive."}
           </p>
         </div>
         <Button
@@ -365,7 +382,7 @@ export function AISelectorDropdown({
                       (item) => !isSmartModel(item),
                     ).length;
                     const disabledByLimit =
-                      !selected && !smart && selectedNonSmartCount >= 4;
+                      !selected && !smart && selectedNonSmartCount >= maxSelectable;
                     const disabled = disabledByLimit;
                     const favorite = favoriteIdSet.has(ai.id) || favoriteIdSet.has(ai.model);
 
@@ -476,7 +493,7 @@ export function AISelectorDropdown({
           <div className="flex flex-col">
             <div className="text-xs font-medium text-gray-600">
               {language === "zh" ? "已选择 " : "Selected "}
-              <span className="text-blue-600 font-bold">{selectedAIs.length}</span> / 4
+              <span className="text-blue-600 font-bold">{selectedAIs.length}</span> / {maxSelectable}
             </div>
             {selectedAIs.length > 0 && (
               <button
@@ -489,7 +506,7 @@ export function AISelectorDropdown({
           </div>
 
           <div className="flex items-center gap-2">
-            {selectedAIs.length >= 4 && (
+            {selectedAIs.length >= maxSelectable && (
               <div className="hidden xs:block text-[10px] px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full font-medium">
                 {language === "zh" ? "已达上限" : "Limit reached"}
               </div>

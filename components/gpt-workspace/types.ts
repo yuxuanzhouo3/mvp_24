@@ -36,6 +36,9 @@ export interface AIAgent {
   maxTokens?: number;
   temperature?: number;
   icon?: string;
+  pricingLevel?: "free" | "low" | "medium" | "high";
+  unitPrice?: number;
+  releaseDate?: string | null;
 }
 
 export type CollaborationMode =

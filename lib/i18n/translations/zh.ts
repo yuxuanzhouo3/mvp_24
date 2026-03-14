@@ -145,7 +145,7 @@ export const zh = {
     currentSession: "当前会话",
     participatingAIs: "参与AI：",
     messages: "消息数量",
-    totalTokens: "总Token",
+    totalTokens: "消耗的积分",
     duration: "协作时长",
     minutesShort: "分钟",
     selectConversations: "选择对话",

@@ -21,8 +21,12 @@ import { appendSessionMessages } from "@/lib/chat-session-store";
 import { resolveIntlUserPlan } from "@/lib/user-plan";
 import { coercePlanId } from "@/lib/plan-quota-settings";
 import { createMessageId } from "@/lib/chat/message-id";
-import { resolveSmartModel } from "@/lib/ai/smart-model-router";
-import { getDefaultRuntimeModel, listEnabledRuntimeModelKeys } from "@/lib/ai/runtime-models";
+import { isSmartModel, resolveSmartModel } from "@/lib/ai/smart-model-router";
+import {
+  getDefaultRuntimeModel,
+  isChatSelectableRuntimeModel,
+  listEnabledRuntimeModels,
+} from "@/lib/ai/runtime-models";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
 import {
   authorizeCreditUsage,
@@ -32,6 +36,8 @@ import {
   releaseCreditUsageReservation,
   settleCreditUsage,
 } from "@/lib/billing/engine";
+import { getModelCatalogEntry } from "@/lib/billing/catalog";
+import type { ModelCatalogEntry } from "@/lib/billing/types";
 
 // 使用Node.js Runtime以支持winston日志库
 export const runtime = "nodejs";
@@ -136,7 +142,9 @@ function buildSmartModelAttemptList(input: {
   message: string;
   collaborationMode?: string;
   availableModels: string[];
+  availableEntries?: ModelCatalogEntry[];
   fallbackModel?: string;
+  userPlan?: string;
   maxAttempts?: number;
 }): string[] {
   const {
@@ -145,7 +153,9 @@ function buildSmartModelAttemptList(input: {
     message,
     collaborationMode,
     availableModels,
+    availableEntries,
     fallbackModel,
+    userPlan,
     maxAttempts = MAX_SMART_MODEL_ATTEMPTS,
   } = input;
 
@@ -163,8 +173,12 @@ function buildSmartModelAttemptList(input: {
       requestedModel,
       message,
       collaborationMode,
+      availableEntries: (availableEntries || []).filter(
+        (entry) => !used.has(entry.modelKey)
+      ),
       availableModels: availableModels.filter((modelId) => !used.has(modelId)),
       fallbackModel,
+      userPlan,
     });
     const nextModel = (nextResolved.model || "").trim();
     if (!nextModel || used.has(nextModel)) {
@@ -387,22 +401,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const availableModels = await listEnabledRuntimeModelKeys();
-    const routerDefaultModel = await getDefaultRuntimeModel();
-    const collaborationModeForRouting =
-      typeof sessionConfig?.collaborationMode === "string"
-        ? sessionConfig.collaborationMode
-        : undefined;
-
-    const resolvedModel = resolveSmartModel({
-      requestedModel: model,
-      message,
-      collaborationMode: collaborationModeForRouting,
-      availableModels,
-      fallbackModel: routerDefaultModel,
-    });
-    const effectiveModel = resolvedModel.model;
-
     // ========================================
     // 4. 获取用户订阅信息并检查限额
     // ========================================
@@ -457,6 +455,65 @@ export async function POST(req: NextRequest) {
 
     const planId = coercePlanId(subscriptionPlan);
 
+    const requestedModel = String(model || "").trim();
+    const collaborationModeForRouting =
+      typeof sessionConfig?.collaborationMode === "string"
+        ? sessionConfig.collaborationMode
+        : undefined;
+    const needsRuntimeCatalog =
+      isSmartModel(requestedModel) ||
+      (isChinaRegion() && CHINA_SMART_COLLAB_MODEL_SET.has(requestedModel));
+    let availableEntries: ModelCatalogEntry[] = [];
+    let availableModels: string[] = requestedModel ? [requestedModel] : [];
+    let routerDefaultModel = requestedModel || "";
+    let explicitModelAllowed = false;
+
+    if (needsRuntimeCatalog) {
+      availableEntries = await listEnabledRuntimeModels();
+      availableModels = availableEntries.map((entry) => entry.modelKey).filter(Boolean);
+      routerDefaultModel = await getDefaultRuntimeModel();
+    } else if (requestedModel) {
+      routerDefaultModel = await getDefaultRuntimeModel();
+      availableModels = Array.from(
+        new Set([requestedModel, routerDefaultModel].filter(Boolean))
+      );
+      const explicitEntry = await getModelCatalogEntry(requestedModel);
+      explicitModelAllowed = isChatSelectableRuntimeModel(explicitEntry);
+      if (!explicitModelAllowed) {
+        availableModels = Array.from(
+          new Set([routerDefaultModel, requestedModel].filter(Boolean))
+        );
+      }
+    } else {
+      routerDefaultModel = await getDefaultRuntimeModel();
+      availableModels = routerDefaultModel ? [routerDefaultModel] : [];
+    }
+
+    const finalResolvedModel =
+      needsRuntimeCatalog
+        ? resolveSmartModel({
+            requestedModel: model,
+            message,
+            collaborationMode: collaborationModeForRouting,
+            availableEntries,
+            availableModels,
+            fallbackModel: routerDefaultModel,
+            userPlan: subscriptionPlan,
+          })
+        : requestedModel && explicitModelAllowed
+          ? {
+              model: requestedModel,
+              routedFromSmart: false,
+              reason: "explicit_model",
+            }
+          : {
+              model: routerDefaultModel || requestedModel || "gpt-3.5-turbo",
+              routedFromSmart: false,
+              reason: "explicit_model_unavailable_fallback",
+            };
+    const resolvedModel = finalResolvedModel;
+    const effectiveModel = resolvedModel.model;
+
     // ========================================
     // 5. 获取会话历史消息（带过滤）
     // ========================================
@@ -474,39 +531,38 @@ export async function POST(req: NextRequest) {
     // ========================================
     // 6. 保存用户消息到数据库
     // ========================================
-    if (!skipSave) {
-      if (isChinaRegion()) {
-        // 国内版：保存到 CloudBase（但只在非多AI模式下直接保存）
-        // 多AI模式由前端统一调用 save-multi-ai
-        if (!agentName) {
-          await saveCloudBaseMessage({
-            session_id: sessionId,
-            user_id: userId,
-            role: "user",
-            content: message,
-          });
-        }
-      } else {
-        // 国际版：保存用户消息到 gpt_sessions.messages（和国内版相同结构）
-        const userMsg = {
-          id: createMessageId("msg"),
-          content: message,
-          role: "user",
-          timestamp: new Date().toISOString(),
-          tokens_used: 0,
-        };
+    const persistUserMessagePromise =
+      skipSave
+        ? null
+        : (async () => {
+            if (isChinaRegion()) {
+              if (!agentName) {
+                await saveCloudBaseMessage({
+                  session_id: sessionId,
+                  user_id: userId,
+                  role: "user",
+                  content: message,
+                });
+              }
+              return;
+            }
 
-        try {
-          await appendSessionMessages({
-            sessionId,
-            userId,
-            messages: [userMsg],
+            const userMsg = {
+              id: createMessageId("msg"),
+              content: message,
+              role: "user",
+              timestamp: new Date().toISOString(),
+              tokens_used: 0,
+            };
+
+            await appendSessionMessages({
+              sessionId,
+              userId,
+              messages: [userMsg],
+            });
+          })().catch((saveError) => {
+            console.error("Failed to save user message:", saveError);
           });
-        } catch (saveError) {
-          console.error("Failed to save user message:", saveError);
-        }
-      }
-    }
 
     // ========================================
     // 7. 解析模型尝试链路并准备流式响应
@@ -516,19 +572,25 @@ export async function POST(req: NextRequest) {
       typeof model === "string" &&
       CHINA_SMART_COLLAB_MODEL_SET.has(model.trim()) &&
       availableModels.some((m) => CHINA_SMART_COLLAB_MODEL_SET.has(m));
+    const attemptRequestedModel =
+      resolvedModel.routedFromSmart
+        ? String(model || "")
+        : resolvedModel.reason === "explicit_model"
+          ? requestedModel
+          : effectiveModel;
 
     const smartAttemptModels = shouldUseChinaCollabFallback
       ? buildChinaCollabFallbackAttempts(model, availableModels, MAX_SMART_MODEL_ATTEMPTS)
-      : resolvedModel.routedFromSmart
-        ? buildSmartModelAttemptList({
-            requestedModel: model,
-            primaryModel: effectiveModel,
-            message,
-            collaborationMode: collaborationModeForRouting,
-            availableModels,
-            fallbackModel: routerDefaultModel,
-          })
-        : [effectiveModel];
+      : buildSmartModelAttemptList({
+          requestedModel: attemptRequestedModel,
+          primaryModel: effectiveModel,
+          message,
+          collaborationMode: collaborationModeForRouting,
+          availableEntries,
+          availableModels,
+          fallbackModel: routerDefaultModel,
+          userPlan: subscriptionPlan,
+        });
 
     console.log(
       `[Chat API] Model plan: ${smartAttemptModels.join(" -> ")}` +
@@ -536,6 +598,8 @@ export async function POST(req: NextRequest) {
           ? ` (requested=${model}, reason=china_collab_fallback)`
           : resolvedModel.routedFromSmart
             ? ` (requested=${model}, reason=${resolvedModel.reason})`
+            : smartAttemptModels.length > 1
+              ? ` (requested=${model}, reason=explicit_model_runtime_fallback)`
             : "")
     );
 
@@ -547,6 +611,8 @@ export async function POST(req: NextRequest) {
         ? "china_collab_fallback"
         : resolvedModel.routedFromSmart
           ? resolvedModel.reason
+          : smartAttemptModels.length > 1
+            ? "explicit_model_runtime_fallback"
           : undefined,
       temperature: temperature,
       maxTokens: maxTokens,
@@ -567,7 +633,7 @@ export async function POST(req: NextRequest) {
       maxTokens: validMaxTokens,
     });
 
-    for (const candidateModel of smartAttemptModels) {
+    for (const candidateModel of smartAttemptModels.slice(1)) {
       try {
         const candidateMetrics = await estimateTextMetrics({
           messages,
@@ -640,8 +706,7 @@ export async function POST(req: NextRequest) {
           let responseModel = effectiveModel;
           let streamResolved = false;
           let lastStreamError: unknown = null;
-          const isFallbackRetryEnabled =
-            resolvedModel.routedFromSmart || shouldUseChinaCollabFallback;
+          const isFallbackRetryEnabled = smartAttemptModels.length > 1;
 
           for (
             let attemptIndex = 0;
@@ -858,6 +923,9 @@ export async function POST(req: NextRequest) {
 
           // 保存AI响应到数据库
           if (!skipSave) {
+            if (persistUserMessagePromise) {
+              await persistUserMessagePromise;
+            }
             if (isChinaRegion()) {
               // 国内版：保存到 CloudBase（但只在非多AI模式下直接保存）
               // 多AI模式由前端统一调用 save-multi-ai

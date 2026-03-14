@@ -1,4 +1,5 @@
 import type { BillingRule } from "@/lib/billing/types";
+import { resolveModelReleaseDate } from "@/lib/model-release-date";
 
 const BAILIAN_CONSOLE_PAGE_URL = "https://bailian.console.aliyun.com/cn-beijing/?tab=model#/model-market/all";
 const BAILIAN_CONSOLE_ORIGIN = "https://bailian.console.aliyun.com";
@@ -610,6 +611,11 @@ export async function fetchBailianBillingImportItems(
       ["output_tokens"],
       (metricKey) => metricKey.includes("output") || metricKey === "image_count" || metricKey.endsWith("_seconds") || metricKey === "tts_characters"
     );
+    const releaseDate = resolveModelReleaseDate({
+      modelKey,
+      versionTag: metadata?.versionTag,
+      collectionTag: metadata?.collectionTag,
+    });
 
     items.push({
       modelKey,
@@ -644,6 +650,7 @@ export async function fetchBailianBillingImportItems(
         modelAlias: metadata?.modelAlias || null,
         versionTag: metadata?.versionTag || null,
         collectionTag: metadata?.collectionTag || null,
+        releaseDate,
         capabilities: metadata?.capabilities || [],
         categories: metadata?.categories || [],
         features: metadata?.features || [],

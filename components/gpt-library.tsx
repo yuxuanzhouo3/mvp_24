@@ -24,6 +24,7 @@ import { useUser } from "@/components/user-context";
 import { fetchClientAIConfig, type ClientAIAgent } from "@/lib/ai/client-config";
 import { isChinaRegion } from "@/lib/config/region";
 import { getStoredModelFavorites, toggleStoredModelFavorite, MODEL_FAVORITES_EVENT } from "@/lib/ai/model-favorites";
+import { localizeSmartAgent } from "@/lib/ai/smart-model-localization";
 
 type AIAgent = ClientAIAgent;
 
@@ -74,7 +75,7 @@ export function GPTLibrary({
         setLoading(true);
         const data = await fetchClientAIConfig();
         if (mounted) {
-          setEnabledAgents(data.agents || []);
+          setEnabledAgents((data.agents || []).map((agent) => localizeSmartAgent(agent, language)));
         }
       } catch {
         if (mounted) setEnabledAgents([]);
@@ -85,7 +86,17 @@ export function GPTLibrary({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [language]);
+
+  useEffect(() => {
+    setEnabledAgents((prev) => prev.map((agent) => localizeSmartAgent(agent, language)));
+  }, [language]);
+
+  function isSmartModel(agent: Pick<AIAgent, "id" | "model">): boolean {
+    const id = String(agent.id || "").trim().toLowerCase();
+    const model = String(agent.model || "").trim().toLowerCase();
+    return id === "smart-model" || model === "smart-auto" || id.includes("smart-model");
+  }
 
   function getIconIdForAgent(agent: AIAgent): string {
     if (agent.capabilities?.includes("coding")) return "code";
@@ -200,9 +211,41 @@ export function GPTLibrary({
   }, [activeCategory, favoriteIds, filteredGPTs]);
 
   const addGPT = (gpt: any) => {
+    const singleSelectMode =
+      collaborationMode === "normal" ||
+      collaborationMode === "deep" ||
+      collaborationMode === "graph";
+    const isSmart = isSmartModel(gpt);
+
+    if (singleSelectMode) {
+      const cleanGPT = { ...gpt };
+      delete cleanGPT.task;
+      delete cleanGPT.templateStep;
+      delete cleanGPT.iconId;
+      delete cleanGPT.color;
+      delete cleanGPT.category;
+      delete cleanGPT.systemPrompt;
+      setSelectedGPTs([cleanGPT]);
+      return;
+    }
+
+    if (isSmart) {
+      const cleanGPT = { ...gpt };
+      delete cleanGPT.task;
+      delete cleanGPT.templateStep;
+      delete cleanGPT.iconId;
+      delete cleanGPT.color;
+      delete cleanGPT.category;
+      delete cleanGPT.systemPrompt;
+      setSelectedGPTs([cleanGPT]);
+      return;
+    }
+
+    const withoutSmart = selectedGPTs.filter((selected) => !isSmartModel(selected));
+
     if (
-      selectedGPTs.length < 4 &&
-      !selectedGPTs.find((selected) => selected.id === gpt.id)
+      withoutSmart.length < 4 &&
+      !withoutSmart.find((selected) => selected.id === gpt.id)
     ) {
       const cleanGPT = { ...gpt };
       delete cleanGPT.task;
@@ -211,7 +254,7 @@ export function GPTLibrary({
       delete cleanGPT.color;
       delete cleanGPT.category;
       delete cleanGPT.systemPrompt;
-      setSelectedGPTs([...selectedGPTs, cleanGPT]);
+      setSelectedGPTs([...withoutSmart, cleanGPT]);
     }
   };
 
@@ -282,6 +325,12 @@ export function GPTLibrary({
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {visibleGPTs.map((gpt: any) => {
                   const isSelected = selectedGPTs.find((selected) => selected.id === gpt.id);
+                  const canAddMore =
+                    collaborationMode === "normal" ||
+                    collaborationMode === "deep" ||
+                    collaborationMode === "graph" ||
+                    selectedGPTs.filter((selected) => !isSmartModel(selected)).length < 4 ||
+                    selectedGPTs.some((selected) => isSmartModel(selected));
                   const Icon = getIconComponent(gpt.iconId);
                   return (
                     <Card key={gpt.id} className={`p-6 transition-all hover:shadow-lg flex h-full flex-col ${isSelected ? "ring-2 ring-blue-500" : ""}`}>
@@ -328,7 +377,12 @@ export function GPTLibrary({
                         </div>
                       </div>
 
-                      <Button className="mt-auto w-full" variant={isSelected ? "secondary" : "default"} onClick={() => isSelected ? removeGPT(gpt.id) : addGPT(gpt)} disabled={!isSelected && selectedGPTs.length >= 4}>
+                      <Button
+                        className="mt-auto w-full"
+                        variant={isSelected ? "secondary" : "default"}
+                        onClick={() => isSelected ? removeGPT(gpt.id) : addGPT(gpt)}
+                        disabled={!isSelected && !canAddMore}
+                      >
                         {isSelected ? <span>{t.library.remove}</span> : <><Plus className="w-4 h-4 mr-2" />{t.library.add}</>}
                       </Button>
                     </Card>

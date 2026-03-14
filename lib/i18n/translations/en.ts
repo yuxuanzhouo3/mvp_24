@@ -149,7 +149,7 @@ export const en = {
     currentSession: "Current Session",
     participatingAIs: "Participating AIs:",
     messages: "Messages",
-    totalTokens: "Total Tokens",
+    totalTokens: "Credits Spent",
     duration: "Duration",
     minutesShort: "min",
     selectConversations: "Select Conversations",

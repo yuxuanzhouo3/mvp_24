@@ -6,6 +6,7 @@ import { chinaAIConfig } from "./china-ai.config";
 import { globalAIConfig } from "./global-ai.config";
 import { isChinaRegion } from "@/lib/config/region";
 import type { AIAgent } from "./types";
+import { SMART_AGENT_ID, SMART_MODEL_ID } from "./smart-model-router";
 
 export interface AIAgentConfig {
   id: string;
@@ -117,11 +118,51 @@ function getRegionAgentLibrary(): AIAgentConfig[] {
   return isChinaRegion() ? CHINA_AI_AGENTS_LIBRARY : GLOBAL_AI_AGENTS_LIBRARY;
 }
 
+function buildSmartAutoAgent(): AIAgentConfig {
+  const chinaRegion = isChinaRegion();
+  return {
+    id: SMART_AGENT_ID,
+    name: chinaRegion ? "自动" : "Auto",
+    provider: "auto",
+    model: SMART_MODEL_ID,
+    description: chinaRegion
+      ? "自动选择最优模型"
+      : "Automatically choose the best model",
+    role: chinaRegion ? "自动路由" : "Auto Router",
+    color: "bg-gray-500",
+    systemPrompt: "You are the automatic model router.",
+    temperature: 0.7,
+    maxTokens: 4096,
+    capabilities: {
+      analysis: true,
+      creative: true,
+      research: true,
+      translation: true,
+      coding: true,
+    },
+    tags: ["analysis", "creative", "research", "translation", "coding"],
+    enabled: true,
+    isPremium: false,
+    order: 0,
+    region: chinaRegion ? "china" : "global",
+  };
+}
+
+function withSmartAutoAgent(agents: AIAgentConfig[]): AIAgentConfig[] {
+  if (agents.some((agent) => agent.id === SMART_AGENT_ID)) {
+    return agents;
+  }
+  return [buildSmartAutoAgent(), ...agents];
+}
+
 export function getEnabledAgents(): AIAgentConfig[] {
-  return getRegionAgentLibrary().filter((a) => a.enabled);
+  return withSmartAutoAgent(getRegionAgentLibrary().filter((a) => a.enabled));
 }
 
 export function getAgentById(id: string): AIAgentConfig | undefined {
+  if (id === SMART_AGENT_ID) {
+    return buildSmartAutoAgent();
+  }
   const regionMatched = getRegionAgentLibrary().find((a) => a.id === id);
   if (regionMatched) return regionMatched;
   const globalMatched = AI_AGENTS_LIBRARY.find((a) => a.id === id);

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useLanguage } from "@/components/language-provider";
+import { useUser } from "@/components/user-context";
 import { useTranslations } from "@/lib/i18n";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { useWorkspaceMessages } from "@/components/workspace-messages-context";
@@ -52,6 +53,11 @@ import {
   ensureUserUsageLoaded,
   refreshUserUsage,
 } from "@/lib/usage/client-cache";
+import {
+  resolveSmartModelPlan,
+  SMART_AGENT_ID,
+  SMART_MODEL_ID,
+} from "@/lib/ai/smart-model-router";
 
 interface ChatApiErrorPayload {
   error?: string;
@@ -75,23 +81,12 @@ interface ChatApiErrorPayload {
 }
 
 const SMART_RUNTIME_AGENT_PREFIX = "smart-model-runtime";
-const SMART_DEEPSEEK_MODEL = "deepseek-v3.2";
-const SMART_COLLABORATION_MODELS = [
-  { key: "deepseek", model: "deepseek-v3.2" },
-  { key: "qwen3-max", model: "qwen3-max-2026-01-23" },
-  { key: "qwen-plus", model: "qwen-plus-2025-12-01" },
-] as const;
 
 const isSmartAIAgent = (agent?: AIAgent | null) => {
   if (!agent) return false;
   const normalizedId = (agent.id || "").trim().toLowerCase();
   const normalizedModel = (agent.model || "").trim().toLowerCase();
-  return normalizedId === "smart-model" || normalizedModel === "smart-auto";
-};
-
-const isChinaSmartAIAgent = (agent?: AIAgent | null) => {
-  if (!isSmartAIAgent(agent)) return false;
-  return (agent?.provider || "").trim().toLowerCase() === "qwen";
+  return normalizedId === SMART_AGENT_ID || normalizedModel === SMART_MODEL_ID;
 };
 
 const isSmartRuntimeAgent = (agent?: AIAgent | null) => {
@@ -102,36 +97,59 @@ const isSmartRuntimeAgent = (agent?: AIAgent | null) => {
 
 const buildSmartRuntimeAgents = (
   smartAgent: AIAgent,
-  mode: CollaborationMode
+  mode: CollaborationMode,
+  availableAIs: AIAgent[],
+  userPlan: string
 ): AIAgent[] => {
-  const deepseekRuntimeAgent: AIAgent = {
-    ...smartAgent,
-    id: `${SMART_RUNTIME_AGENT_PREFIX}-deepseek`,
-    model: SMART_DEEPSEEK_MODEL,
-  };
+  const catalogCandidates = availableAIs.filter((agent) => !isSmartAIAgent(agent));
+  const selectedModels = resolveSmartModelPlan({
+    requestedModel: smartAgent.model,
+    collaborationMode: mode,
+    availableEntries: catalogCandidates.map((agent) => ({
+      model: agent.model,
+      id: agent.id,
+      name: agent.name,
+      provider: agent.provider,
+      releaseDate: agent.releaseDate,
+      unitPrice: agent.unitPrice,
+      pricingLevel: agent.pricingLevel,
+      enabled: true,
+    })),
+    availableModels: catalogCandidates.map((agent) => agent.model),
+    fallbackModel: catalogCandidates[0]?.model,
+    userPlan,
+  }).models;
 
-  if (mode === "normal" || mode === "deep" || mode === "graph") {
-    return [deepseekRuntimeAgent];
-  }
+  const modelToAgent = new Map(catalogCandidates.map((agent) => [agent.model, agent]));
 
-  if (mode === "parallel" || mode === "sequential") {
-    return SMART_COLLABORATION_MODELS.map((entry, index) => ({
-      ...smartAgent,
-      id: `${SMART_RUNTIME_AGENT_PREFIX}-${entry.key}`,
-      name: `${smartAgent.name} ${String.fromCharCode(65 + index)}`,
-      model: entry.model,
-    }));
-  }
-
-  return [deepseekRuntimeAgent];
+  return selectedModels.map((modelId, index) => {
+    const matched = modelToAgent.get(modelId);
+    return {
+      ...(matched || smartAgent),
+      id: `${SMART_RUNTIME_AGENT_PREFIX}-${index + 1}-${modelId}`,
+      name: matched?.name || `${smartAgent.name} ${index + 1}`,
+      model: modelId,
+      provider: matched?.provider || smartAgent.provider,
+      description: matched?.description || smartAgent.description,
+      capabilities: matched?.capabilities || smartAgent.capabilities,
+      maxTokens: matched?.maxTokens || smartAgent.maxTokens,
+      temperature: matched?.temperature || smartAgent.temperature,
+      icon: matched?.icon || smartAgent.icon,
+      pricingLevel: matched?.pricingLevel,
+      unitPrice: matched?.unitPrice,
+      releaseDate: matched?.releaseDate,
+    };
+  });
 };
 
 const resolveExecutionAgents = (
   lockedAIs: AIAgent[],
-  mode: CollaborationMode
+  mode: CollaborationMode,
+  availableAIs: AIAgent[],
+  userPlan: string
 ) => {
-  if (lockedAIs.length === 1 && isChinaSmartAIAgent(lockedAIs[0])) {
-    return buildSmartRuntimeAgents(lockedAIs[0], mode);
+  if (lockedAIs.length === 1 && isSmartAIAgent(lockedAIs[0])) {
+    return buildSmartRuntimeAgents(lockedAIs[0], mode, availableAIs, userPlan);
   }
   return lockedAIs;
 };
@@ -191,7 +209,14 @@ export function GPTWorkspace({
   const recordingIntervalRef = useRef<number | null>(null);
   const shouldPersistRecordingRef = useRef(false);
   const { language } = useLanguage();
+  const { user } = useUser();
   const t = useTranslations(language);
+  const smartRoutingUserPlan =
+    String(
+      user?.subscription_plan ||
+        user?.subscription_tier ||
+        (user?.hasActiveSubscription || user?.isPaid ? "pro" : "free")
+    ).trim() || "free";
   const MAX_ATTACHMENTS = 8;
   const MAX_SINGLE_FILE_BYTES = 12 * 1024 * 1024;
   const MAX_TOTAL_FILE_BYTES = 24 * 1024 * 1024;
@@ -1866,6 +1891,12 @@ export function GPTWorkspace({
   const handleCollaborationModeChange = async (
     mode: CollaborationMode
   ) => {
+    if (
+      (mode === "normal" || mode === "deep" || mode === "graph") &&
+      selectedGPTs.length > 1
+    ) {
+      setSelectedGPTs(selectedGPTs.slice(0, 1));
+    }
     setCollaborationMode(mode);
     setModeMenuOpen(false);
 
@@ -2113,7 +2144,12 @@ export function GPTWorkspace({
         return;
       }
 
-      const runtimeAIs = resolveExecutionAgents(lockedAIs, effectiveCollaborationMode);
+      const runtimeAIs = resolveExecutionAgents(
+        lockedAIs,
+        effectiveCollaborationMode,
+        availableAIs,
+        smartRoutingUserPlan
+      );
       const runtimeAgentMap = new Map(runtimeAIs.map((ai) => [ai.id, ai]));
 
       const requestedModalities = detectInputModalities(effectiveMessageForModels);
@@ -2218,20 +2254,16 @@ export function GPTWorkspace({
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${authToken}`,
               },
-                body: JSON.stringify({
-                  sessionId: sessId,
-                  userMessageId: userMessage.id,
-                  assistantMessageId: finalMessage.id,
-                  userMessage: userMessage.content,
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-              userAttachments: userMessage.attachments || [],
-                  userModelInput: effectiveMessageForModels,
-                  collaborationMode: "graph",
-                  aiResponses: nodeResponses.map((r) => ({
-                    agentId: r.agentId,
+              body: JSON.stringify({
+                sessionId: sessId,
+                userMessageId: userMessage.id,
+                assistantMessageId: finalMessage.id,
+                userMessage: userMessage.content,
+                userAttachments: userMessage.attachments || [],
+                userModelInput: effectiveMessageForModels,
+                collaborationMode: "graph",
+                aiResponses: nodeResponses.map((r) => ({
+                  agentId: r.agentId,
                   agentName: r.agentName,
                   content: r.content,
                   model: r.model || runtimeAgentMap.get(r.agentId)?.model || "",
@@ -2313,10 +2345,6 @@ export function GPTWorkspace({
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
                   userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "normal",
                   aiResponses: finalResponses.map((r) => ({
@@ -2393,10 +2421,6 @@ export function GPTWorkspace({
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
                   userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "parallel",
                   aiResponses: finalResponses.map((r) => ({
@@ -2502,10 +2526,6 @@ export function GPTWorkspace({
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
                   userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "deep",
                   aiResponses: finalResponses.map((r) => ({
@@ -2576,10 +2596,6 @@ export function GPTWorkspace({
                   assistantMessageId: finalMessage.id,
                   userMessage: userMessage.content,
                   userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-                  userAttachments: userMessage.attachments || [],
-              userAttachments: userMessage.attachments || [],
                   userModelInput: effectiveMessageForModels,
                   collaborationMode: "sequential",
                   aiResponses: result.allResponses.map((r) => ({
@@ -2629,8 +2645,6 @@ export function GPTWorkspace({
           role: "assistant",
           content: errorMessage,
           timestamp: new Date(),
-          model: "system/error",
-          finalAgentName: "System",
         };
         appendMessageForSession(sessId!, errorAssistantMessage);
 

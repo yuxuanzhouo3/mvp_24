@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactElement } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,9 @@ export function WorkspaceMessageList({
   onCopyContent,
   onDownloadContent,
 }: WorkspaceMessageListProps) {
+  const [expandedSequentialItems, setExpandedSequentialItems] = useState<
+    Record<string, boolean>
+  >({});
   const isSmartAgentId = (value?: string) => {
     const normalized = (value || "").trim().toLowerCase();
     return normalized === "smart-model" || normalized.includes("smart-model");
@@ -180,6 +183,42 @@ export function WorkspaceMessageList({
     }
     return false;
   };
+
+  useEffect(() => {
+    setExpandedSequentialItems((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const message of messages) {
+        if (
+          !message.isMultiAI ||
+          !Array.isArray(message.content) ||
+          (message as any).collaborationMode !== "sequential" ||
+          message.content.length === 0
+        ) {
+          continue;
+        }
+
+        const anchorIds = (message.content as AIResponse[]).map((response, index) =>
+          getMultiAIResponseAnchorId(message.id, response, index)
+        );
+        const hasInitializedState = anchorIds.some((anchorId) => anchorId in next);
+        if (hasInitializedState) {
+          continue;
+        }
+
+        const lastAnchorId = anchorIds[anchorIds.length - 1];
+        if (!lastAnchorId) {
+          continue;
+        }
+
+        next[lastAnchorId] = true;
+        changed = true;
+      }
+
+      return changed ? next : prev;
+    });
+  }, [getMultiAIResponseAnchorId, messages]);
 
   return (
     <>
@@ -329,7 +368,17 @@ export function WorkspaceMessageList({
 
                     <div className="flex-1 max-w-xs sm:max-w-2xl lg:max-w-3xl">
                       {isSequentialMessage ? (
-                        <details className="rounded-md border border-gray-200 bg-white px-3 py-2">
+                        <details
+                          className="rounded-md border border-gray-200 bg-white px-3 py-2"
+                          open={expandedSequentialItems[anchorId] === true}
+                          onToggle={(event) => {
+                            const isOpen = (event.currentTarget as HTMLDetailsElement).open;
+                            setExpandedSequentialItems((prev) => ({
+                              ...prev,
+                              [anchorId]: isOpen,
+                            }));
+                          }}
+                        >
                           <summary className="cursor-pointer list-none">
                             <div className="flex items-center space-x-2">
                               <span className="font-medium text-sm">

@@ -24,6 +24,7 @@ describe("volcengine curated import items", () => {
 
     const mini = result.items.find((item: any) => item.modelKey === "doubao-seed-2-0-mini-260215");
     expect(mini?.modality).toBe("multimodal");
+    expect(mini?.metadata?.releaseDate).toBe("2026-02-15T00:00:00.000Z");
 
     const pro = result.items.find((item: any) => item.modelKey === "doubao-seed-2-0-pro-260215");
     const cacheRule = pro?.pricingRules.find(
@@ -31,5 +32,6 @@ describe("volcengine curated import items", () => {
     );
     expect(cacheRule?.unitSize).toBe(1_000_000);
     expect(cacheRule?.price).toBe(0.64);
+    expect(pro?.metadata?.releaseDate).toBe("2026-02-15T00:00:00.000Z");
   });
 });

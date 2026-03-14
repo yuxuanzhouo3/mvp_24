@@ -22,8 +22,16 @@ import { coercePlanId } from "@/lib/plan-quota-settings";
 import { appendSessionMessages } from "@/lib/chat-session-store";
 import { createMessageId } from "@/lib/chat/message-id";
 import { grantReferralFirstUseReward } from "@/lib/market/referrals";
-import { resolveSmartModel } from "@/lib/ai/smart-model-router";
-import { buildCatalogAgent, getDefaultRuntimeModel, listEnabledRuntimeModelKeys, listEnabledRuntimeModels } from "@/lib/ai/runtime-models";
+import {
+  resolveSmartModel,
+  SMART_AGENT_ID,
+  SMART_MODEL_ID,
+} from "@/lib/ai/smart-model-router";
+import {
+  buildCatalogAgent,
+  getDefaultRuntimeModel,
+  listEnabledRuntimeModels,
+} from "@/lib/ai/runtime-models";
 import {
   authorizeCreditUsage,
   buildCreditReservationErrorPayload,
@@ -190,7 +198,8 @@ export async function POST(req: NextRequest) {
       return Response.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const availableModels = await listEnabledRuntimeModelKeys();
+    const availableEntries = await listEnabledRuntimeModels();
+    const availableModels = availableEntries.map((entry) => entry.modelKey).filter(Boolean);
     const routerDefaultModel = await getDefaultRuntimeModel();
     const billingBatchId = `multi:${sessionId}:${Date.now()}:${Math.random()
       .toString(36)
@@ -232,15 +241,17 @@ export async function POST(req: NextRequest) {
         requestedModel: agent.model,
         message,
         collaborationMode: mode,
+        availableEntries,
         availableModels,
         fallbackModel: routerDefaultModel,
+        userPlan,
       }).model;
       const messagesForEstimate: AIMessage[] = [
         { role: "system", content: agent.systemPrompt || "" },
         { role: "user", content: message },
       ];
       const multiplier = mode === "debate" ? Math.max(1, rounds) : 1;
-      addEstimate(runtimeModel, messagesForEstimate, multiplier, agent.maxTokens);
+      await addEstimate(runtimeModel, messagesForEstimate, multiplier, agent.maxTokens);
     }
 
     if (mode === "synthesis") {
@@ -250,10 +261,12 @@ export async function POST(req: NextRequest) {
           requestedModel: synthesizer.model,
           message,
           collaborationMode: mode,
+          availableEntries,
           availableModels,
           fallbackModel: routerDefaultModel,
+          userPlan,
         }).model;
-        const metrics = addEstimate(
+        const metrics = await addEstimate(
           synthesisModel,
           [
             { role: "system", content: synthesizer.systemPrompt || "" },
@@ -617,15 +630,50 @@ export async function GET(req: NextRequest) {
     const { getEnabledAgents, COLLABORATION_MODES } = await import(
       "@/lib/ai/ai-agents.config"
     );
-    const agents = isChinaRegion()
+    const baseAgents = isChinaRegion()
       ? getEnabledAgents()
-      : (await listEnabledRuntimeModels("INTL")).map((entry, index) => buildCatalogAgent(entry, index));
+      : await Promise.all(
+          (await listEnabledRuntimeModels("INTL")).map((entry, index) =>
+            buildCatalogAgent(entry, index)
+          )
+        );
+    const agents = baseAgents.some((agent) => agent.id === SMART_AGENT_ID)
+      ? baseAgents
+      : [
+          {
+            id: SMART_AGENT_ID,
+            name: isChinaRegion() ? "自动" : "Auto",
+            provider: "auto",
+            model: SMART_MODEL_ID,
+            description: isChinaRegion()
+              ? "自动选择最优模型"
+              : "Automatically choose the best model",
+            role: isChinaRegion() ? "自动路由" : "Auto Router",
+            color: "bg-gray-500",
+            systemPrompt: "You are the automatic model router.",
+            temperature: 0.7,
+            maxTokens: 4096,
+            capabilities: {
+              analysis: true,
+              creative: true,
+              research: true,
+              translation: true,
+              coding: true,
+            },
+            tags: ["analysis", "creative", "research", "translation", "coding"],
+            enabled: true,
+            isPremium: false,
+            order: 0,
+          },
+          ...baseAgents,
+        ];
 
     // 标记哪些AI需要付费
     const agentsWithAccess = agents.map((agent) => ({
       ...agent,
-      available: !agent.isPremium || userPlan !== "free",
-      requiresUpgrade: agent.isPremium && userPlan === "free",
+      available: !("isPremium" in agent && agent.isPremium) || userPlan !== "free",
+      requiresUpgrade:
+        Boolean("isPremium" in agent && agent.isPremium) && userPlan === "free",
     }));
 
     return Response.json({

@@ -58,12 +58,11 @@ export function ChatToolbar({
     language === "zh"
       ? "当前对话已锁定模型，如需切换模型，请新建新对话"
       : "This chat is locked to its current model. Create a new chat to switch models.";
-  const getShortDisplayName = (ai?: AIAgent) => {
+  const getShortDisplayName = (ai?: AIAgent, maxLength = 18) => {
     const fallback = language === "zh" ? "选择AI模型" : "Choose AI Model";
     const rawName = String(ai?.name || ai?.model || fallback).trim();
     const simplified = rawName.includes(":") ? rawName.split(":").slice(1).join(":").trim() : rawName;
     const displayName = simplified || rawName || fallback;
-    const maxLength = 18;
     return displayName.length > maxLength ? `${displayName.slice(0, maxLength)}…` : displayName;
   };
 
@@ -103,7 +102,7 @@ export function ChatToolbar({
         >
           <Button
             variant="outline"
-            className={`h-7 sm:h-8 min-w-[126px] sm:min-w-[190px] justify-between px-2.5 sm:px-3 gap-1 sm:gap-2 text-[11px] sm:text-sm font-normal rounded-full transition-all ${
+            className={`h-7 sm:h-8 min-w-[110px] sm:min-w-[148px] justify-between px-2 sm:px-2.5 gap-1 text-[11px] sm:text-sm font-normal rounded-full transition-all ${
               isSingleSmartModel
                 ? `${smartGradientSoftClass} ${smartGradientHoverClass} border-violet-200 text-slate-700 shadow-[0_10px_24px_-16px_rgba(168,85,247,0.65)]`
                 : "border-gray-200 hover:bg-gray-50"
@@ -111,29 +110,33 @@ export function ChatToolbar({
             onClick={() => !isSessionLocked && setShowAISelector((prev) => !prev)}
             disabled={isSessionLocked}
           >
-            {isSingleSmartModel ? (
-              <Sparkles className="w-3.5 h-3.5 text-fuchsia-500 flex-shrink-0" />
-            ) : (
-              <Bot className="w-3.5 h-3.5 text-gray-500 flex-shrink-0" />
-            )}
+            <span className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center">
+              {isSingleSmartModel ? (
+                <Sparkles className="h-3.5 w-3.5 text-fuchsia-500" />
+              ) : (
+                <Bot className="h-3.5 w-3.5 text-gray-500" />
+              )}
+            </span>
             <span
-              className={`min-w-0 flex-1 truncate text-left ${
+              className={`min-w-0 flex-1 truncate text-center ${
                 isSingleSmartModel ? smartGradientTextClass : "text-gray-700"
               }`}
             >
               {selectedAIs.length === 0
                 ? (language === "zh" ? "模型" : "Model")
                 : selectedAIs.length === 1
-                ? getShortDisplayName(selectedAIs[0])
+                ? getShortDisplayName(selectedAIs[0], 12)
                 : language === "zh"
                   ? `${selectedAIs.length}个`
                   : `${selectedAIs.length}`}
             </span>
-            <ChevronDown
-              className={`w-3 h-3 flex-shrink-0 ${
-                isSingleSmartModel ? "text-fuchsia-500" : "text-gray-400"
-              }`}
-            />
+            <span className="flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center">
+              <ChevronDown
+                className={`h-3.5 w-3.5 ${
+                  isSingleSmartModel ? "text-fuchsia-500" : "text-gray-400"
+                }`}
+              />
+            </span>
           </Button>
 
           {isSessionLocked && (
@@ -147,6 +150,7 @@ export function ChatToolbar({
               availableAIs={availableAIs}
               selectedAIs={selectedAIs}
               onSelectionChange={onAIsChange}
+              collaborationMode={collaborationMode}
               onClose={() => setShowAISelector(false)}
               triggerRef={selectorTriggerRef}
             />
@@ -234,6 +238,7 @@ export function ChatToolbar({
             availableAIs={availableAIs}
             selectedAIs={selectedAIs}
             onSelectionChange={onAIsChange}
+            collaborationMode={collaborationMode}
             onClose={() => setShowAISelector(false)}
             triggerRef={selectorTriggerRef}
           />

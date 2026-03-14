@@ -4,13 +4,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import {
-  loadAIConfig,
-  getEnabledAgents,
-  hasEnabledAI,
-} from "@/lib/ai/ai-config-loader";
 import { isChinaRegion, DEPLOY_REGION } from "@/lib/config/region";
 import { buildCatalogAgent, listEnabledRuntimeModels } from "@/lib/ai/runtime-models";
+import { SMART_AGENT_ID, SMART_MODEL_ID } from "@/lib/ai/smart-model-router";
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,7 +18,36 @@ export async function GET(request: NextRequest) {
     );
 
     const models = await listEnabledRuntimeModels(country);
-    const agents = await Promise.all(models.map((entry, index) => buildCatalogAgent(entry, index)));
+    const catalogAgents = await Promise.all(
+      models.map((entry, index) => buildCatalogAgent(entry, index))
+    );
+    const agents = [
+      {
+        id: SMART_AGENT_ID,
+        name: country === "CN" ? "自动" : "Auto",
+        provider: "auto",
+        model: SMART_MODEL_ID,
+        description:
+          country === "CN"
+            ? "自动选择最优模型"
+            : "Automatically choose the best model",
+        capabilities: [
+          "analysis",
+          "conversation",
+          "coding",
+          "creative",
+          "research",
+          "translation",
+        ],
+        maxTokens: 16000,
+        temperature: 0.7,
+        icon: "⭐",
+        pricingLevel: "medium" as const,
+        unitPrice: 0,
+        releaseDate: null,
+      },
+      ...catalogAgents,
+    ];
 
     const responseData = isChinaRegion() ? {
       success: true,

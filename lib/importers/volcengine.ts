@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { BillingRule } from "@/lib/billing/types";
+import { resolveModelReleaseDate } from "@/lib/model-release-date";
 
 const VOLCENGINE_MODEL_LIST_PAGE = "https://www.volcengine.com/docs/82379/1330310?lang=zh";
 const VOLCENGINE_MODEL_PRICE_PAGE = "https://www.volcengine.com/docs/82379/1544106?lang=zh";
@@ -145,20 +146,28 @@ const VOLCENGINE_CURATED_MODELS: CuratedVolcengineModel[] = [
 ];
 
 function buildCuratedVolcengineSeeds(): ModelSeed[] {
-  return VOLCENGINE_CURATED_MODELS.map((item) => ({
-    modelKey: item.modelKey,
-    providerModel: item.providerModel,
-    displayName: item.displayName,
-    modality: item.modality,
-    metadata: {
-      source: "volcengine-curated",
-      description: item.description,
+  return VOLCENGINE_CURATED_MODELS.map((item) => {
+    const releaseDate = resolveModelReleaseDate({
       releaseTag: item.releaseTag,
-      requestModality: item.requestModality || ["text"],
-      responseModality: item.responseModality || ["text"],
-      recommended: true,
-    },
-  }));
+      modelKey: item.modelKey,
+    });
+
+    return {
+      modelKey: item.modelKey,
+      providerModel: item.providerModel,
+      displayName: item.displayName,
+      modality: item.modality,
+      metadata: {
+        source: "volcengine-curated",
+        description: item.description,
+        releaseTag: item.releaseTag,
+        releaseDate,
+        requestModality: item.requestModality || ["text"],
+        responseModality: item.responseModality || ["text"],
+        recommended: true,
+      },
+    };
+  });
 }
 
 function getVolcenginePrice(modelKey: string) {
@@ -613,6 +622,11 @@ export async function fetchVolcengineBillingImportItems(
   const items = curatedSeeds
     .map((seed, index) => {
       const priceData = getVolcenginePrice(seed.modelKey);
+      const releaseDate = resolveModelReleaseDate({
+        releaseDate: (seed.metadata as any)?.releaseDate,
+        releaseTag: priceData?.releaseTag || (seed.metadata as any)?.releaseTag,
+        modelKey: seed.modelKey,
+      });
       const modality = priceData?.modality || seed.modality;
       const inputPrice = priceData?.inputPrice || 0;
       const outputPrice = priceData?.outputPrice || 0;
@@ -646,6 +660,7 @@ export async function fetchVolcengineBillingImportItems(
           pricingTierLabel: "输入 <= 32K",
           description: priceData?.description || (seed.metadata as any)?.description || null,
           releaseTag: priceData?.releaseTag || (seed.metadata as any)?.releaseTag || null,
+          releaseDate,
           requestModality:
             priceData?.requestModality || (seed.metadata as any)?.requestModality || ["text"],
           responseModality:

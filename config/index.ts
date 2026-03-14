@@ -13,8 +13,9 @@ export const IS_DOMESTIC_VERSION = DEFAULT_LANGUAGE === "zh";
 export const MODEL_CONFIG = {
   // Domestic version models (Chinese)
   domestic: {
-    defaultModel: "qwen3-omni-flash", // 优先多模态，保证图片/视频可用
+    defaultModel: "doubao-seed-2-0-lite-260215",
     availableModels: [
+      "doubao-seed-2-0-lite-260215",
       "qwen3-omni-flash",
       "qwen3-max",
       "qwen-plus",

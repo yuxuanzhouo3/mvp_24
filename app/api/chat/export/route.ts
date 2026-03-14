@@ -1,6 +1,7 @@
 import cloudbase from "@cloudbase/node-sdk";
 import { existsSync } from "node:fs";
 import { NextRequest, NextResponse } from "next/server";
+import { getBillingSettings } from "@/lib/billing/settings";
 import { getGptMessages as getCloudBaseMessages } from "@/lib/cloudbase-db";
 import { isChinaRegion } from "@/lib/config/region";
 import { extractTokenFromHeader, verifyAuthToken } from "@/lib/auth-utils";
@@ -36,6 +37,20 @@ type ExportSession = {
     updated_at: string;
   };
   messages: any[];
+};
+
+type ExportPayloadInput = {
+  userId: string;
+  region: "CN" | "INTL";
+  sessionIds: string[];
+};
+
+type ExportSummary = {
+  sessionCount: number;
+  messageCount: number;
+  totalTokens: number;
+  totalCostUsd: number;
+  totalCredits: number;
 };
 
 type IntlSessionRow = {
@@ -284,6 +299,51 @@ function getExportLabels(language: ExportLanguage) {
   };
 }
 
+function calculateCreditsFromCost(costUsd: number, settings: Awaited<ReturnType<typeof getBillingSettings>>) {
+  if (!Number.isFinite(costUsd) || costUsd <= 0) {
+    return 0;
+  }
+
+  return Math.max(
+    settings.minimumChargeCredits,
+    Math.ceil(costUsd * settings.profitMultiplier * settings.creditExchangeRate)
+  );
+}
+
+async function buildExportSummary(
+  data: ExportSession[],
+  region: "CN" | "INTL"
+): Promise<ExportSummary> {
+  const settings = await getBillingSettings(region);
+
+  return data.reduce<ExportSummary>(
+    (summary, item) => {
+      summary.sessionCount += 1;
+      summary.messageCount += item.messages.length;
+
+      for (const message of item.messages) {
+        const tokensUsed =
+          typeof message?.tokens_used === "number" ? message.tokens_used : 0;
+        const costUsd =
+          typeof message?.cost_usd === "number" ? message.cost_usd : 0;
+
+        summary.totalTokens += tokensUsed;
+        summary.totalCostUsd += costUsd;
+        summary.totalCredits += calculateCreditsFromCost(costUsd, settings);
+      }
+
+      return summary;
+    },
+    {
+      sessionCount: 0,
+      messageCount: 0,
+      totalTokens: 0,
+      totalCostUsd: 0,
+      totalCredits: 0,
+    }
+  );
+}
+
 function buildMarkdown(data: ExportSession[], language: ExportLanguage) {
   const labels = getExportLabels(language);
   const locale = language === "zh" ? "zh-CN" : "en-US";
@@ -370,7 +430,7 @@ function buildMarkdown(data: ExportSession[], language: ExportLanguage) {
   return markdown;
 }
 
-export function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
+function buildPdfHtml(data: ExportSession[], language: ExportLanguage) {
   const labels = getExportLabels(language);
   const locale = language === "zh" ? "zh-CN" : "en-US";
   const totalTokens = data.reduce(
@@ -712,7 +772,7 @@ async function getIntlExportSessions(
   return exported;
 }
 
-async function getExportSessions(payload: ChatExportTokenPayload) {
+async function getExportSessions(payload: ExportPayloadInput) {
   if (payload.region === "CN") {
     return getChinaExportSessions(payload.userId, payload.sessionIds);
   }
@@ -740,8 +800,8 @@ export async function POST(req: NextRequest) {
     const format: ExportFormat = body?.format === "pdf" ? "pdf" : "markdown";
     const language: ExportLanguage = body?.language === "en" ? "en" : "zh";
     const sessionIds: string[] = Array.isArray(body?.sessionIds)
-      ? Array.from(
-          new Set(
+      ? Array.from<string>(
+          new Set<string>(
             body.sessionIds.filter(
               (sessionId: unknown): sessionId is string =>
                 typeof sessionId === "string" && sessionId.trim().length > 0
@@ -755,6 +815,19 @@ export async function POST(req: NextRequest) {
     }
 
     const region = authResult.region || (isChinaRegion() ? "CN" : "INTL");
+
+    if (body?.summaryOnly === true) {
+      const data = await getExportSessions({
+        userId: authResult.userId,
+        region,
+        sessionIds,
+      });
+
+      return NextResponse.json({
+        summary: await buildExportSummary(data, region),
+      });
+    }
+
     const exportToken = signChatExportToken({
       userId: authResult.userId,
       region,
@@ -817,7 +890,7 @@ export async function GET(req: NextRequest) {
 
     const filename = `ai-chat-${today}-${Date.now()}.pdf`;
     const pdfBuffer = await renderPdfBuffer(buildPdfHtml(data, language));
-    return new NextResponse(pdfBuffer, {
+    return new NextResponse(new Uint8Array(pdfBuffer), {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",

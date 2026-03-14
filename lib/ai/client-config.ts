@@ -11,6 +11,7 @@ export interface ClientAIAgent {
   isFree?: boolean;
   pricingLevel?: "free" | "low" | "medium" | "high";
   unitPrice?: number;
+  releaseDate?: string | null;
   openrouterRank?: number;
   openrouterOrder?: string;
 }

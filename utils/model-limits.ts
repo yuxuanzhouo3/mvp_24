@@ -10,10 +10,10 @@ import { IS_DOMESTIC_VERSION } from "@/config";
 // =============================================================================
 
 // 默认通用模型（前端展示为 General Model）：
-// - 国内版使用 Qwen-Turbo
+// - 国内版使用 Doubao-Seed-2.0-lite
 // - 国际版使用 Mistral-small-latest
 export const GENERAL_MODEL_ID = IS_DOMESTIC_VERSION
-  ? "qwen-turbo"
+  ? "doubao-seed-2-0-lite-260215"
   : "mistral-small-latest";
 
 /**

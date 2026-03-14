@@ -117,6 +117,47 @@ describe("billing catalog pricing normalization", () => {
     ]);
   });
 
+  it("normalizes release dates from importer metadata", () => {
+    const entry = buildCatalogEntry(
+      {
+        model_key: "doubao-seed-2-0-lite-260215",
+        provider: "volcengine",
+        provider_model: "doubao-seed-2-0-lite-260215",
+        display_name: "Doubao-Seed-2.0-lite",
+        region: "CN",
+        modality: "text",
+        currency: "CNY",
+        input_price: 0.6,
+        output_price: 3.6,
+        pricing_unit: "per_1m_tokens",
+        pricing_rules: [],
+        metadata: {
+          source: "volcengine-curated",
+          releaseTag: "260215",
+        },
+      },
+      {
+        modelKey: "doubao-seed-2-0-lite-260215",
+        provider: "volcengine",
+        providerModel: "doubao-seed-2-0-lite-260215",
+        displayName: "Doubao-Seed-2.0-lite",
+        region: "CN",
+        modality: "text",
+        billingMode: "metered",
+        currency: "CNY",
+        inputPrice: 0.6,
+        outputPrice: 3.6,
+        pricingUnit: "per_1m_tokens",
+        pricingRules: [],
+        enabled: true,
+        metadata: {},
+      }
+    );
+
+    expect(entry.releaseDate).toBe("2026-02-15T00:00:00.000Z");
+    expect(entry.metadata?.releaseDate).toBe("2026-02-15T00:00:00.000Z");
+  });
+
   it("repairs legacy Bailian rows using source price metadata", () => {
     const entry = buildCatalogEntry(
       {

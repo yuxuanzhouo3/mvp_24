@@ -23,6 +23,7 @@
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { resolveModelReleaseDate } from '@/lib/model-release-date';
 
 const OPENROUTER_MODELS_PAGE = 'https://openrouter.ai/models';
 const OPENROUTER_MODELS_FIND_API = 'https://openrouter.ai/api/frontend/models/find';
@@ -680,6 +681,11 @@ export function buildOpenRouterBillingImportItems(
   result: FetchOpenRouterModelsResult,
 ): OpenRouterBillingImportItem[] {
   return result.models.map((model) => {
+    const releaseDate = resolveModelReleaseDate({
+      createdAt: model.createdAt,
+      updatedAt: model.updatedAt,
+      modelKey: model.slug,
+    });
     const inputPrice = toFixedPrice(shiftDecimalString(model.inputPriceUsdPerMillionTokens, -3));
     const outputPrice = toFixedPrice(shiftDecimalString(model.outputPriceUsdPerMillionTokens, -3));
     const pricingRules =
@@ -722,6 +728,9 @@ export function buildOpenRouterBillingImportItems(
         sourceApiUrl: result.sourceApiUrl,
         sourceListUrl: result.sourcePageUrl,
         fetchedAt: result.fetchedAt,
+        createdAt: model.createdAt,
+        updatedAt: model.updatedAt,
+        releaseDate,
       },
     };
   });

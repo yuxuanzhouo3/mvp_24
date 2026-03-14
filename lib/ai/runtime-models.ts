@@ -9,10 +9,15 @@ import { isChinaRegion } from "@/lib/config/region";
 let openRouterPopularityCache: Map<string, number> | null = null;
 const OPENROUTER_POPULARITY_CACHE_KEY = "openrouter:models:most-popular:intl";
 const OPENROUTER_POPULARITY_CACHE_TTL_SECONDS = 15 * 24 * 60 * 60;
+const DEFAULT_CN_MODEL_KEY = "doubao-seed-2-0-lite-260215";
 const DEFAULT_INTL_MODEL_KEY = "x-ai/grok-4.1-fast";
 
 function currentBillingRegion(): BillingRegion {
   return isChinaRegion() ? "CN" : "INTL";
+}
+
+function toLowerText(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 function loadOpenRouterPopularitySnapshot(): Map<string, number> {
@@ -69,26 +74,81 @@ async function getOpenRouterPopularityRank(entry: ModelCatalogEntry): Promise<nu
   return popularityMap.get(entry.modelKey);
 }
 
-function inferCapabilities(entry: ModelCatalogEntry): string[] {
-  const modality = String(entry.modality || "text").toLowerCase();
-  const text = `${entry.modelKey} ${entry.displayName} ${entry.provider} ${entry.modality}`.toLowerCase();
+function getRuntimeMetadataTokens(entry: ModelCatalogEntry): Set<string> {
   const metadata = entry.metadata && typeof entry.metadata === "object" ? entry.metadata : {};
-  const metadataModalities = new Set<string>();
-  const metadataArrays = [
+  const tokens = new Set<string>();
+  const candidateArrays = [
     (metadata as any).inputModalities,
     (metadata as any).outputModalities,
     (metadata as any).capabilities,
+    (metadata as any).requestModality,
+    (metadata as any).responseModality,
+    (metadata as any).request_modality,
+    (metadata as any).response_modality,
   ];
-  const capabilities = new Set<string>();
 
-  for (const candidate of metadataArrays) {
+  for (const candidate of candidateArrays) {
     if (!Array.isArray(candidate)) continue;
     for (const item of candidate) {
-      if (typeof item !== "string") continue;
-      const normalized = item.trim().toLowerCase();
-      if (normalized) metadataModalities.add(normalized);
+      const normalized = toLowerText(item);
+      if (normalized) tokens.add(normalized);
     }
   }
+
+  return tokens;
+}
+
+function isDedicatedSpeechOrVideoModel(entry: ModelCatalogEntry, tokens: Set<string>): boolean {
+  const text = `${entry.modelKey} ${entry.displayName} ${entry.provider}`.toLowerCase();
+  const joinedTokens = [...tokens].join(" ");
+  return /asr|stt|tts|speech|transcrib|transcription|subtitle|caption|语音识别|语音转写|音频转写|文本转语音|视频理解|视频识别|视频分析|字幕/.test(
+    `${text} ${joinedTokens}`
+  );
+}
+
+function isDedicatedUtilityModel(entry: ModelCatalogEntry, tokens: Set<string>): boolean {
+  const text = `${entry.modelKey} ${entry.displayName} ${entry.provider}`.toLowerCase();
+  const joinedTokens = [...tokens].join(" ");
+  return /ocr|embedding|embed|rerank|re-rank|moderation|guardrail|classifier|classification|detector|layout|parse|parser|extractor|文档解析|文档抽取|识别专用|向量|重排|审核/.test(
+    `${text} ${joinedTokens}`
+  );
+}
+
+export function isChatSelectableRuntimeModel(entry: ModelCatalogEntry): boolean {
+  const modality = toLowerText(entry.modality || "text");
+  const tokens = getRuntimeMetadataTokens(entry);
+  const isTextLike =
+    modality.includes("text") ||
+    (tokens.has("text") &&
+      !modality.includes("audio") &&
+      !modality.includes("video") &&
+      !modality.includes("image"));
+  const isMultimodalLike =
+    modality.includes("multi") ||
+    modality.includes("omni") ||
+    tokens.has("multimodal") ||
+    tokens.has("omni");
+
+  if (!isTextLike && !isMultimodalLike) {
+    return false;
+  }
+
+  if (isDedicatedUtilityModel(entry, tokens)) {
+    return false;
+  }
+
+  if (!isMultimodalLike && isDedicatedSpeechOrVideoModel(entry, tokens)) {
+    return false;
+  }
+
+  return true;
+}
+
+function inferCapabilities(entry: ModelCatalogEntry): string[] {
+  const modality = String(entry.modality || "text").toLowerCase();
+  const text = `${entry.modelKey} ${entry.displayName} ${entry.provider} ${entry.modality}`.toLowerCase();
+  const metadataModalities = getRuntimeMetadataTokens(entry);
+  const capabilities = new Set<string>();
 
   if (modality.includes("image")) {
     capabilities.add("vision");
@@ -199,8 +259,17 @@ export async function listEnabledRuntimeModels(
 ): Promise<ModelCatalogEntry[]> {
   const items = await listModelCatalogEntries(region);
   const enabled = items.filter((item) => item.enabled !== false);
-  const selected = enabled.length > 0 ? enabled : items;
-  if (region !== "INTL") return selected;
+  const chatSelectable = enabled.filter((item) => isChatSelectableRuntimeModel(item));
+  const selected =
+    chatSelectable.length > 0 ? chatSelectable : enabled.length > 0 ? enabled : items;
+  if (region !== "INTL") {
+    return [...selected].sort((a, b) => {
+      const aPreferred = a.modelKey === DEFAULT_CN_MODEL_KEY ? 1 : 0;
+      const bPreferred = b.modelKey === DEFAULT_CN_MODEL_KEY ? 1 : 0;
+      if (aPreferred !== bPreferred) return bPreferred - aPreferred;
+      return String(a.displayName || a.modelKey).localeCompare(String(b.displayName || b.modelKey));
+    });
+  }
 
   const popularityMap = await getOpenRouterPopularityMap();
   return [...selected].sort((a, b) => {
@@ -222,11 +291,15 @@ export async function getDefaultRuntimeModel(
   region: BillingRegion = currentBillingRegion()
 ): Promise<string> {
   const items = await listEnabledRuntimeModels(region);
+  if (region === "CN") {
+    const preferred = items.find((item) => item.modelKey === DEFAULT_CN_MODEL_KEY);
+    if (preferred) return preferred.modelKey;
+  }
   if (region === "INTL") {
     const preferred = items.find((item) => item.modelKey === DEFAULT_INTL_MODEL_KEY);
     if (preferred) return preferred.modelKey;
   }
-  return items[0]?.modelKey || (region === "CN" ? "deepseek-v3.2" : DEFAULT_INTL_MODEL_KEY);
+  return items[0]?.modelKey || (region === "CN" ? DEFAULT_CN_MODEL_KEY : DEFAULT_INTL_MODEL_KEY);
 }
 
 export async function buildCatalogAgent(entry: ModelCatalogEntry, index = 0) {
@@ -244,6 +317,7 @@ export async function buildCatalogAgent(entry: ModelCatalogEntry, index = 0) {
     isFree: isFreeEntry(entry),
     pricingLevel: getPricingLevel(entry),
     unitPrice: getUnitPrice(entry),
+    releaseDate: entry.releaseDate || (entry.metadata as any)?.releaseDate || null,
     openrouterRank,
     openrouterOrder:
       typeof (entry.metadata as any)?.openrouterOrder === "string"

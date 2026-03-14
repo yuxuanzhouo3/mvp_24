@@ -13,6 +13,9 @@ import { fetchClientAIConfig, type ClientAIAgent } from "@/lib/ai/client-config"
 import { isChinaRegion } from "@/lib/config/region";
 import { toast } from "sonner";
 import { saveAuthState } from "@/lib/auth-state-manager";
+import { SMART_AGENT_ID, SMART_MODEL_ID } from "@/lib/ai/smart-model-router";
+import { localizeSmartAgent } from "@/lib/ai/smart-model-localization";
+import { useLanguage } from "@/components/language-provider";
 
 type AIAgent = ClientAIAgent;
 
@@ -96,6 +99,7 @@ function PlatformContent() {
 
   const { activeView, setActiveView } = useApp();
   const { loading, refreshUser } = useUser();
+  const { language } = useLanguage();
   const {
     clearMessages,
     currentSessionId: contextSessionId,
@@ -183,10 +187,19 @@ function PlatformContent() {
   const resolveDefaultAgent = useCallback(
     (agents: AIAgent[]) => {
       if (!Array.isArray(agents) || agents.length === 0) return null;
+      const smartAgent =
+        agents.find(
+          (agent) => agent.id === SMART_AGENT_ID || agent.model === SMART_MODEL_ID
+        ) || null;
+      if (smartAgent) {
+        return smartAgent;
+      }
       if (!isChinaRegion()) {
         return (
-          agents.find((agent) => agent.model === "x-ai/grok-4.1-fast" || agent.id === "x-ai/grok-4.1-fast") ||
-          agents[0]
+          agents.find(
+            (agent) =>
+              agent.model === "x-ai/grok-4.1-fast" || agent.id === "x-ai/grok-4.1-fast"
+          ) || agents[0]
         );
       }
       return agents[0];
@@ -197,7 +210,9 @@ function PlatformContent() {
   const loadAvailableAIs = useCallback(async () => {
     try {
       const data = await fetchClientAIConfig();
-      const agents = Array.isArray(data.agents) ? data.agents : [];
+      const agents = Array.isArray(data.agents)
+        ? data.agents.map((agent) => localizeSmartAgent(agent, language))
+        : [];
       setAvailableAIs(agents);
 
       const defaultAgent = resolveDefaultAgent(agents);
@@ -208,12 +223,17 @@ function PlatformContent() {
       console.error("加载AI配置失败:", error);
       toast.error("加载AI配置失败");
     }
-  }, [resolveDefaultAgent]);
+  }, [language, resolveDefaultAgent]);
 
   // 从API加载可用的AI模型
   useEffect(() => {
     void loadAvailableAIs();
   }, [loadAvailableAIs]);
+
+  useEffect(() => {
+    setAvailableAIs((prev) => prev.map((agent) => localizeSmartAgent(agent, language)));
+    setSelectedGPTs((prev) => prev.map((agent) => localizeSmartAgent(agent, language)));
+  }, [language]);
 
   // 同步 Context 的 sessionId 到本地 state
   useEffect(() => {

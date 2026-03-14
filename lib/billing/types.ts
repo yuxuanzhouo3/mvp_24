@@ -48,6 +48,7 @@ export interface ModelCatalogEntry {
   pricingRules: BillingRule[];
   enabled: boolean;
   metadata?: Record<string, unknown>;
+  releaseDate?: string | null;
   updatedAt?: string | null;
 }
 

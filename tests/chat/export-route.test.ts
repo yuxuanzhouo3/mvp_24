@@ -1,4 +1,4 @@
-const { buildPdfHtml } = require("@/app/api/chat/export/route");
+const { buildPdfHtml } = require("@/lib/chat-export-pdf");
 
 describe("chat export pdf rendering", () => {
   it("does not include preview-only print UI in downloadable pdf html", () => {

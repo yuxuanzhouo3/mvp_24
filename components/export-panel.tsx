@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -35,6 +35,11 @@ interface ExportPanelProps {
   selectedGPTs: any[];
 }
 
+interface ExportSummaryStats {
+  messageCount: number;
+  totalCredits: number;
+}
+
 export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
   const { language } = useLanguage();
   const t = useTranslations(language);
@@ -45,19 +50,13 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedSessions, setSelectedSessions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [summaryStats, setSummaryStats] = useState<ExportSummaryStats>({
+    messageCount: 0,
+    totalCredits: 0,
+  });
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
-  useEffect(() => {
-    loadSessions();
-  }, []);
-
-  // 根据地理位置更新默认分享方式
-  useEffect(() => {
-    if (!geoLoading) {
-      setShareTarget(isChina ? "wechat" : "link");
-    }
-  }, [isChina, geoLoading]);
-
-  const loadSessions = async () => {
+  const loadSessions = useCallback(async () => {
     try {
       setLoading(true);
 
@@ -109,7 +108,92 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t.errors.loadSessionsFailed, t.errors.loginRequired]);
+
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  // 根据地理位置更新默认分享方式
+  useEffect(() => {
+    if (!geoLoading) {
+      setShareTarget(isChina ? "wechat" : "link");
+    }
+  }, [isChina, geoLoading]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSummary = async () => {
+      if (selectedSessions.length === 0) {
+        setSummaryStats({
+          messageCount: 0,
+          totalCredits: 0,
+        });
+        setSummaryLoading(false);
+        return;
+      }
+
+      try {
+        setSummaryLoading(true);
+
+        const authClient = getAuthClient();
+        const { data: sessionData, error: sessionError } =
+          await authClient.getSession();
+
+        if (sessionError || !sessionData.session?.access_token) {
+          throw sessionError || new Error("Missing access token");
+        }
+
+        const response = await fetch("/api/chat/export", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${sessionData.session.access_token}`,
+          },
+          body: JSON.stringify({
+            sessionIds: selectedSessions,
+            summaryOnly: true,
+            language,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const summary = data?.summary;
+
+        if (!cancelled) {
+          setSummaryStats({
+            messageCount:
+              typeof summary?.messageCount === "number" ? summary.messageCount : 0,
+            totalCredits:
+              typeof summary?.totalCredits === "number" ? summary.totalCredits : 0,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to load export summary:", error);
+        if (!cancelled) {
+          setSummaryStats({
+            messageCount: 0,
+            totalCredits: 0,
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setSummaryLoading(false);
+        }
+      }
+    };
+
+    loadSummary();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [language, selectedSessions]);
 
   const handleSessionSelect = (sessionId: string, checked: boolean) => {
     if (checked) {
@@ -126,16 +210,6 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       setSelectedSessions([]);
     }
   };
-
-  const selectedSessionData = sessions.filter((s) =>
-    selectedSessions.includes(s.id)
-  );
-  const totalMessages = selectedSessionData.reduce(
-    (sum, s) => sum + (s.message_count || 0),
-    0
-  );
-  const totalTokens = selectedSessionData.length * 2847; // 模拟数据
-  const totalDuration = selectedSessionData.length * 15; // 模拟数据
 
   const exportFormats = [
     {
@@ -167,25 +241,6 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
       color: "bg-red-500",
       description: t.export.shareDescriptions.email,
     },
-    // 根据 IP 地区显示中国特定的分享选项
-    ...(isChina
-      ? [
-          {
-            id: "wechat",
-            name: t.export.shareChannels.wechat,
-            icon: MessageCircle,
-            color: "bg-green-500",
-            description: t.export.shareDescriptions.wechat,
-          },
-          {
-            id: "dingtalk",
-            name: t.export.shareChannels.dingtalk,
-            icon: MessageCircle,
-            color: "bg-blue-600",
-            description: t.export.shareDescriptions.dingtalk,
-          },
-        ]
-      : []),
   ];
 
   const formatDate = (dateString: string) => {
@@ -1317,25 +1372,21 @@ export function ExportPanel({ selectedGPTs }: ExportPanelProps) {
             <h3 className="font-semibold text-lg mb-4">
               {t.export.exportSummary}
             </h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
               <div>
                 <div className="text-gray-500">{t.export.selectedSessions}</div>
                 <div className="font-semibold">{selectedSessions.length}</div>
               </div>
               <div>
                 <div className="text-gray-500">{t.export.messages}</div>
-                <div className="font-semibold">{totalMessages}</div>
+                <div className="font-semibold">
+                  {summaryLoading ? "--" : summaryStats.messageCount.toLocaleString()}
+                </div>
               </div>
               <div>
                 <div className="text-gray-500">{t.export.totalTokens}</div>
                 <div className="font-semibold">
-                  {totalTokens.toLocaleString()}
-                </div>
-              </div>
-              <div>
-                <div className="text-gray-500">{t.export.duration}</div>
-                <div className="font-semibold">
-                  {totalDuration} {t.export.minutesShort}
+                  {summaryLoading ? "--" : summaryStats.totalCredits.toLocaleString()}
                 </div>
               </div>
             </div>

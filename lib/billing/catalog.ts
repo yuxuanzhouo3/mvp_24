@@ -5,6 +5,7 @@ import { MODEL_PRICING } from "@/lib/ai/token-counter";
 import type { BillingRegion, BillingRule, ModelCatalogEntry } from "./types";
 import { getBillingSettings } from "./settings";
 import { getCachedData, setCachedData } from "@/lib/admin/cache";
+import { resolveModelReleaseDate } from "@/lib/model-release-date";
 
 const COLLECTION = "ai_model_catalog";
 const SNAPSHOT_COLLECTION = "ai_model_price_snapshots";
@@ -183,6 +184,7 @@ function inferModality(modelKey: string): string {
 }
 
 function makeBuiltinEntry(modelKey: string, region: BillingRegion): ModelCatalogEntry {
+  const releaseDate = resolveModelReleaseDate({ modelKey });
   const pricing =
     MODEL_PRICING[modelKey as keyof typeof MODEL_PRICING] ||
     (modelKey === "qwen3-omni-flash-2025-12-01"
@@ -209,7 +211,8 @@ function makeBuiltinEntry(modelKey: string, region: BillingRegion): ModelCatalog
       toNumber(pricing.completion, 0)
     ),
     enabled: true,
-    metadata: {},
+    metadata: releaseDate ? { releaseDate } : {},
+    releaseDate,
   };
 }
 
@@ -264,11 +267,34 @@ export function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): Model
     (inputPrice > 0 || outputPrice > 0)
       ? pricingUnitFromTokenUnitSize(canonicalTokenUnitSize) || rawPricingUnit
       : rawPricingUnit;
+  const sourceMetadata =
+    row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+  const fallbackMetadata =
+    fallback?.metadata && typeof fallback.metadata === "object" ? fallback.metadata : {};
+  const mergedMetadata = { ...fallbackMetadata, ...sourceMetadata };
+  const resolvedModelKey =
+    typeof (row?.model_key ?? row?.modelKey) === "string"
+      ? String(row?.model_key ?? row?.modelKey)
+      : fallback?.modelKey || "unknown-model";
+  const updatedAt =
+    typeof (row?.updated_at ?? row?.updatedAt) === "string"
+      ? String(row?.updated_at ?? row?.updatedAt)
+      : fallback?.updatedAt ?? null;
+  const releaseDate = resolveModelReleaseDate({
+    releaseDate: row?.release_date ?? row?.releaseDate ?? fallback?.releaseDate,
+    createdAt: row?.created_at ?? row?.createdAt,
+    updatedAt,
+    modelKey: resolvedModelKey,
+    versionTag: row?.version_tag ?? row?.versionTag,
+    releaseTag: row?.release_tag ?? row?.releaseTag,
+    collectionTag: row?.collection_tag ?? row?.collectionTag,
+    metadata: mergedMetadata,
+  });
+  const normalizedMetadata = releaseDate
+    ? { ...mergedMetadata, releaseDate }
+    : mergedMetadata;
   return {
-    modelKey:
-      typeof (row?.model_key ?? row?.modelKey) === "string"
-        ? String(row?.model_key ?? row?.modelKey)
-        : fallback?.modelKey || "unknown-model",
+    modelKey: resolvedModelKey,
     provider:
       typeof (row?.provider) === "string"
         ? row.provider
@@ -299,14 +325,9 @@ export function buildCatalogEntry(row: any, fallback?: ModelCatalogEntry): Model
     pricingUnit: normalizedPricingUnit,
     pricingRules,
     enabled: row?.enabled === undefined ? fallback?.enabled ?? true : Boolean(row?.enabled),
-    metadata:
-      row?.metadata && typeof row.metadata === "object"
-        ? row.metadata
-        : fallback?.metadata || {},
-    updatedAt:
-      typeof (row?.updated_at ?? row?.updatedAt) === "string"
-        ? String(row?.updated_at ?? row?.updatedAt)
-        : fallback?.updatedAt ?? null,
+    metadata: normalizedMetadata,
+    releaseDate,
+    updatedAt,
   };
 }
 
@@ -470,9 +491,58 @@ export async function getModelCatalogEntry(
   options?: { region?: BillingRegion }
 ): Promise<ModelCatalogEntry> {
   const region = options?.region || currentRegion();
-  const list = await listModelCatalogEntries(region);
-  const found = list.find((item) => item.modelKey === modelKey);
-  return found || makeBuiltinEntry(modelKey, region);
+  const normalizedModelKey = String(modelKey || "").trim();
+  const fallback = makeBuiltinEntry(normalizedModelKey, region);
+
+  if (!normalizedModelKey) {
+    return fallback;
+  }
+
+  if (isChinaRegion()) {
+    try {
+      await ensureCloudbaseCollection(COLLECTION);
+      const db = getDatabase();
+      const result = await db
+        .collection(COLLECTION)
+        .where({ region, model_key: normalizedModelKey })
+        .limit(1)
+        .get();
+      const row = Array.isArray(result?.data) ? result.data[0] : null;
+      if (row) {
+        return buildCatalogEntry(row, fallback);
+      }
+
+      const cached = getCachedData<ModelCatalogEntry[]>(BAILIAN_CACHE_KEY);
+      const cachedEntry = Array.isArray(cached)
+        ? cached.find((item) => item?.modelKey === normalizedModelKey)
+        : null;
+      if (cachedEntry) {
+        return buildCatalogEntry(cachedEntry, fallback);
+      }
+    } catch (error) {
+      console.error("[billing-catalog] CloudBase single fetch failed:", error);
+    }
+
+    return fallback;
+  }
+
+  try {
+    await seedBuiltinsIfNeeded(region);
+    const { data, error } = await supabaseAdmin
+      .from(COLLECTION)
+      .select("*")
+      .eq("region", region)
+      .eq("model_key", normalizedModelKey)
+      .maybeSingle();
+    if (error) {
+      console.error("[billing-catalog] Supabase single fetch failed:", error);
+      return fallback;
+    }
+    return data ? buildCatalogEntry(data, fallback) : fallback;
+  } catch (error) {
+    console.error("[billing-catalog] Supabase single fetch exception:", error);
+    return fallback;
+  }
 }
 
 export async function deleteModelCatalogEntriesByProvider(

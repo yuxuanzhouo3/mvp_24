@@ -13,7 +13,7 @@ export const CHINA_AI_AGENTS: AIAgent[] = [
     name: "智能模型",
     provider: "qwen",
     model: "smart-auto",
-    description: "系统自动选择最优模型",
+    description: "自动选择最优模型",
     capabilities: [
       "analysis",
       "conversation",
