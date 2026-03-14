@@ -10,7 +10,6 @@ const nextConfig = {
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },
-  assetPrefix: process.env.ASSET_PREFIX || undefined,
   experimental: {
     // When `proxy.ts` is present, Next may buffer the request body so it can be
     // read both in the proxy and in the underlying route handler / server action.
