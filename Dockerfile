@@ -8,7 +8,7 @@ FROM base AS deps
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+    pnpm install --frozen-lockfile --prod=false
 
 FROM base AS builder
 RUN corepack enable
@@ -17,6 +17,12 @@ ENV NODE_ENV=$NODE_ENV
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm exec next build --webpack
+
+FROM base AS prod-deps
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --prod
 
 FROM node:20-alpine AS runner
 WORKDIR /app
@@ -29,7 +35,7 @@ RUN addgroup -S nodejs -g 1001 && adduser -S nextjs -u 1001 -G nodejs
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
+COPY --from=prod-deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 
 USER nextjs
