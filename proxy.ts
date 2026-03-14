@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { geoRouter } from "@/lib/architecture-modules/core/geo-router";
 import { RegionType } from "@/lib/architecture-modules/core/types";
-import {
-  validateEnvironment,
-  checkSensitiveDataExposure,
-} from "@/lib/env-validation";
 import { csrfProtection } from "@/lib/csrf";
 import { verifyAdminSessionToken } from "@/lib/admin/session";
+import {
+  GEO_COOKIE_MAX_AGE_SECONDS,
+  GEO_COUNTRY_COOKIE,
+  GEO_CURRENCY_COOKIE,
+  GEO_REGION_COOKIE,
+  getFallbackGeoDescriptor,
+} from "@/lib/geo/state";
 
 /**
  * IP检测和访问控制中间件
@@ -221,14 +224,11 @@ export async function proxy(request: NextRequest) {
       const clientIP = getClientIP(request);
 
       if (!clientIP) {
-        if (!isDevelopment) {
-          console.warn("无法获取客户端IP，使用默认处理");
-        }
-        return NextResponse.next();
+        geoResult = getFallbackGeoDescriptor();
+      } else {
+        // 检测地理位置
+        geoResult = await geoRouter.detect(clientIP);
       }
-
-      // 检测地理位置
-      geoResult = await geoRouter.detect(clientIP);
     }
 
     console.log(
@@ -281,9 +281,7 @@ export async function proxy(request: NextRequest) {
         response.headers.set("Access-Control-Allow-Credentials", "true");
       }
     }
-    response.headers.set("X-User-Region", geoResult.region);
-    response.headers.set("X-User-Country", geoResult.countryCode);
-    response.headers.set("X-User-Currency", geoResult.currency);
+    applyGeoMetadata(response, request, geoResult);
 
     // 开发环境添加调试模式标识
     if (debugParam && isDevelopment) {
@@ -302,10 +300,68 @@ export async function proxy(request: NextRequest) {
 
     // 出错时使用降级策略：允许访问但记录错误
     const response = NextResponse.next();
+    applyGeoMetadata(response, request, getFallbackGeoDescriptor());
     response.headers.set("X-Geo-Error", "true");
 
     return response;
   }
+}
+
+function applyGeoMetadata(
+  response: NextResponse,
+  request: NextRequest,
+  geoResult: {
+    region: RegionType;
+    countryCode: string;
+    currency?: string;
+  }
+) {
+  response.headers.set("X-User-Region", geoResult.region);
+  response.headers.set("X-User-Country", geoResult.countryCode);
+  response.headers.set("X-User-Currency", geoResult.currency || "");
+
+  const secure = request.nextUrl.protocol === "https:";
+
+  setGeoCookieIfChanged(
+    response,
+    request,
+    GEO_REGION_COOKIE,
+    geoResult.region,
+    secure
+  );
+  setGeoCookieIfChanged(
+    response,
+    request,
+    GEO_COUNTRY_COOKIE,
+    geoResult.countryCode,
+    secure
+  );
+  setGeoCookieIfChanged(
+    response,
+    request,
+    GEO_CURRENCY_COOKIE,
+    geoResult.currency || "",
+    secure
+  );
+}
+
+function setGeoCookieIfChanged(
+  response: NextResponse,
+  request: NextRequest,
+  name: string,
+  value: string,
+  secure: boolean
+) {
+  if (request.cookies.get(name)?.value === value) {
+    return;
+  }
+
+  response.cookies.set(name, value, {
+    path: "/",
+    sameSite: "lax",
+    secure,
+    maxAge: GEO_COOKIE_MAX_AGE_SECONDS,
+  });
 }
 
 /**

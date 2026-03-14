@@ -7,6 +7,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ACTION_BODY_LIMIT = 1000 * 1024 * 1024;
 
 const nextConfig = {
+  output: "standalone",
   compiler: {
     removeConsole: process.env.NODE_ENV === "production",
   },
@@ -26,14 +27,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // 跳过静态错误页面生成
-  generateBuildId: async () => {
-    return "build-" + Date.now();
-  },
   staticPageGenerationTimeout: 120,
-  turbopack: {
-    root: __dirname,
-  },
+  turbopack: {},
   async headers() {
     // Security headers applied to all routes
     const ContentSecurityPolicy = `

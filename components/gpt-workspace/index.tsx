@@ -48,6 +48,10 @@ import type {
   MultimodalAttachmentPayload,
   MultimodalPreprocessResult,
 } from "@/lib/chat/multimodal-types";
+import {
+  ensureUserUsageLoaded,
+  refreshUserUsage,
+} from "@/lib/usage/client-cache";
 
 interface ChatApiErrorPayload {
   error?: string;
@@ -2062,20 +2066,16 @@ export function GPTWorkspace({
 
       // 检查额度
       try {
-        const usageRes = await fetch("/api/user/usage", {
-          signal: abortController.signal,
-          headers: { Authorization: `Bearer ${authToken}` },
+        const usageData = await ensureUserUsageLoaded(authToken, {
+          maxAgeMs: 10_000,
         });
-        if (usageRes.ok) {
-          const usageData = await usageRes.json();
-          const creditBalance = Number(usageData?.credits?.balance ?? 0);
-          if (creditBalance <= 0) {
-            window.dispatchEvent(new CustomEvent("show-subscription-modal"));
-            removeCommittedUserMessage();
-            restoreComposer();
-            setIsProcessing(false);
-            return;
-          }
+        const creditBalance = Number(usageData?.credits?.balance ?? 0);
+        if (creditBalance <= 0) {
+          window.dispatchEvent(new CustomEvent("show-subscription-modal"));
+          removeCommittedUserMessage();
+          restoreComposer();
+          setIsProcessing(false);
+          return;
         }
       } catch (e) {
         console.error("Failed to check usage before sending:", e);
@@ -2677,9 +2677,11 @@ export function GPTWorkspace({
       setProcessingSessionId(null);
       processingSessionIdRef.current = null;
       setAIResponses([]);
-      // 触发额度刷新事件
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("message-sent"));
+
+      if (authTokenForFailure) {
+        void refreshUserUsage(authTokenForFailure).catch((error) => {
+          console.error("Failed to refresh usage after chat send:", error);
+        });
       }
     }
   };

@@ -17,9 +17,20 @@ import {
 } from "@/lib/auth-state-manager";
 import { getAuthClient } from "@/lib/auth/client";
 import { isChinaRegion } from "@/lib/config/region";
-import { supabase } from "@/lib/supabase";
+import { clearUserUsageCache } from "@/lib/usage/client-cache";
 
 const authClient = getAuthClient();
+let supabaseClientPromise: Promise<any> | null = null;
+
+async function loadSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import("@/lib/supabase").then(
+      (module) => module.supabase
+    );
+  }
+
+  return supabaseClientPromise;
+}
 
 function pickFirstString(...values: unknown[]): string {
   for (const value of values) {
@@ -81,6 +92,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const readSupabaseSessionUser = useCallback(async (): Promise<UserProfile | null | undefined> => {
+    const supabase = await loadSupabaseClient();
     const { data, error } = await supabase.auth.getSession();
     if (error) {
       // undefined 表示“临时读取失败”，调用方应保留当前用户，避免误登出
@@ -101,6 +113,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         console.error("❌ [Auth] 登出失败:", error);
       }
       clearAuthState();
+      clearUserUsageCache();
       setUser(null);
     } finally {
       setLoading(false);
@@ -187,6 +200,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
                 `✅ [Auth] 从 Supabase 恢复用户: ${sessionUser.email}`
               );
               authState = { user: sessionUser };
+            } else {
+              clearUserUsageCache();
             }
           }
         }
@@ -196,6 +211,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           setUser(authState.user as UserProfile);
           console.log(`✅ [Auth] 恢复用户: ${authState.user.email}`);
         } else {
+          clearUserUsageCache();
           setUser(null);
           console.log("❌ [Auth] 无有效认证状态");
         }
@@ -210,6 +226,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.error("❌ [Auth] 初始化失败:", error);
+        clearUserUsageCache();
         setUser(null);
         setIsAuthInitialized(true);
         setLoading(false);
@@ -228,6 +245,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
         console.warn(`⚠️ [Auth INTL] ${source} 会话校验失败，保留当前登录状态`);
         return;
       }
+      if (!sessionUser) {
+        clearUserUsageCache();
+      }
       setUser(sessionUser);
     };
 
@@ -237,6 +257,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (event.key === "app-auth-state") {
           console.log("📡 [Auth CN] 检测到其他标签页的认证变化");
           if (!event.newValue) {
+            clearUserUsageCache();
             setUser(null);
           } else {
             try {
@@ -246,6 +267,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
               }
             } catch (error) {
               console.error("❌ [Auth CN] 解析跨标签页数据失败:", error);
+              clearUserUsageCache();
               setUser(null);
             }
           }
@@ -286,6 +308,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
         console.warn(`⚠️ [Auth INTL] ${source} 会话校验失败，保留当前登录状态`);
         return;
       }
+      if (!sessionUser) {
+        clearUserUsageCache();
+      }
       setUser(sessionUser);
     };
 
@@ -298,6 +323,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (authState?.user) {
           setUser(authState.user as UserProfile);
         } else {
+          clearUserUsageCache();
           setUser(null);
         }
       } else {
@@ -339,34 +365,53 @@ export function UserProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isChinaRegion()) {
       console.log("🌍 [Auth] 设置 Supabase auth 状态变化监听器...");
+      let isCancelled = false;
+      let unsubscribe: (() => void) | undefined;
 
-      const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event: string, session: { user?: any } | null) => {
-        console.log(`🔔 [Auth] Supabase 认证事件: ${event}`);
-
-        if (session?.user) {
-          console.log(`✅ [Auth] Supabase 用户登录: ${session.user.email}`);
-          setUser(mapSupabaseUserToProfile(session.user));
+      void (async () => {
+        const supabase = await loadSupabaseClient();
+        if (isCancelled) {
           return;
         }
 
-        if (event === "SIGNED_OUT" || event === "USER_DELETED") {
-          console.log("❌ [Auth] Supabase 用户登出");
-          setUser(null);
-          return;
-        }
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange(
+          async (event: string, session: { user?: any } | null) => {
+            console.log(`🔔 [Auth] Supabase 认证事件: ${event}`);
 
-        const sessionUser = await readSupabaseSessionUser();
-        if (sessionUser === undefined) {
-          console.warn(`⚠️ [Auth INTL] 事件 ${event} 会话读取失败，保留当前登录状态`);
-          return;
-        }
-        setUser(sessionUser);
-      });
+            if (session?.user) {
+              console.log(`✅ [Auth] Supabase 用户登录: ${session.user.email}`);
+              setUser(mapSupabaseUserToProfile(session.user));
+              return;
+            }
+
+            if (event === "SIGNED_OUT" || event === "USER_DELETED") {
+              console.log("❌ [Auth] Supabase 用户登出");
+              clearUserUsageCache();
+              setUser(null);
+              return;
+            }
+
+            const sessionUser = await readSupabaseSessionUser();
+            if (sessionUser === undefined) {
+              console.warn(`⚠️ [Auth INTL] 事件 ${event} 会话读取失败，保留当前登录状态`);
+              return;
+            }
+
+            if (!sessionUser) {
+              clearUserUsageCache();
+            }
+            setUser(sessionUser);
+          }
+        );
+
+        unsubscribe = () => subscription?.unsubscribe();
+      })();
 
       return () => {
-        subscription?.unsubscribe();
+        isCancelled = true;
+        unsubscribe?.();
       };
     }
   }, [mapSupabaseUserToProfile, readSupabaseSessionUser]);

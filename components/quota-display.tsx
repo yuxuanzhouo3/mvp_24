@@ -1,80 +1,64 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Progress } from "@/components/ui/progress";
 import { useUser } from "./user-context";
 import { useLanguage } from "@/components/language-provider";
 import { useTranslations } from "@/lib/i18n";
 import { getClientAuthToken } from "@/lib/client-auth";
 import { Coins, Zap } from "lucide-react";
-
-type UsagePayload = {
-  used: number;
-  limit: number;
-  remaining?: number;
-  plan: string;
-  credits: {
-    balance: number;
-    monthlyGrant: number;
-    dailyCap: number;
-    spentThisMonth: number;
-    spentToday: number;
-    remainingThisMonth: number;
-    monthlyGrantBalance: number;
-    rechargeBalance: number;
-    bonusBalance: number;
-  };
-  multimodal?: {
-    image: { used: number; limit: number; remaining: number };
-    videoAudio: { used: number; limit: number; remaining: number };
-  } | null;
-};
+import {
+  ensureUserUsageLoaded,
+  getUserUsageSnapshot,
+  subscribeToUserUsage,
+  type UsagePayload,
+} from "@/lib/usage/client-cache";
 
 export function QuotaDisplay() {
   const { user } = useUser();
+  const userId = user?.id ?? null;
   const { language } = useLanguage();
   const t = useTranslations(language);
-  const [usage, setUsage] = useState<UsagePayload | null>(null);
+  const usage = useSyncExternalStore<UsagePayload | null>(
+    subscribeToUserUsage,
+    getUserUsageSnapshot,
+    getUserUsageSnapshot
+  );
   const [loading, setLoading] = useState(false);
 
-  const fetchUsage = useCallback(async () => {
-    if (!user) return;
-
-    try {
-      setLoading(true);
-      const { token } = await getClientAuthToken();
-      if (!token) return;
-
-      const response = await fetch("/api/user/usage", {
-        cache: "no-store",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) return;
-      const data = (await response.json()) as UsagePayload;
-      setUsage(data);
-    } catch (error) {
-      console.error("Failed to fetch usage:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [user]);
-
   useEffect(() => {
-    fetchUsage();
-    const handleMessageSent = () => {
-      fetchUsage();
-    };
+    let cancelled = false;
 
-    window.addEventListener("message-sent", handleMessageSent);
+    if (!userId) {
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoading(!usage);
+
+    void (async () => {
+      try {
+        const { token } = await getClientAuthToken();
+        if (!token) return;
+
+        await ensureUserUsageLoaded(token);
+      } catch (error) {
+        console.error("Failed to fetch usage:", error);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    })();
+
     return () => {
-      window.removeEventListener("message-sent", handleMessageSent);
+      cancelled = true;
     };
-  }, [fetchUsage]);
+  }, [userId, usage]);
 
-  if (!user) {
+  if (!userId) {
     return null;
   }
   if (loading && !usage) {
