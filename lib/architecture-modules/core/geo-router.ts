@@ -23,6 +23,10 @@ export class GeoRouter {
   private readonly REQUEST_TIMEOUT = 2000; // 2秒超时，避免前端长时间等待
   private readonly MAX_RETRIES = 1;
 
+  private shouldLogLocalFallback(): boolean {
+    return process.env.NODE_ENV !== "development";
+  }
+
   private isRetryableHttpStatus(status: number): boolean {
     // 5xx 和 429 可重试；其余4xx通常是参数/权限问题，无需重试
     return status >= 500 || status === 429;
@@ -117,7 +121,9 @@ export class GeoRouter {
     try {
       // 如果 IP 为空或无效，直接使用本地检测
       if (!ip || ip === "" || ip === "::1" || ip === "127.0.0.1") {
-        console.log("Empty or localhost IP, using local detection");
+        if (this.shouldLogLocalFallback()) {
+          console.log("Empty or localhost IP, using local detection");
+        }
         return this.detectLocally(ip);
       }
 
@@ -177,7 +183,9 @@ export class GeoRouter {
     try {
       // 如果 IP 为空或无效，直接使用本地检测
       if (!ip || ip === "" || ip === "::1" || ip === "127.0.0.1") {
-        console.log("Empty or localhost IP, using local detection");
+        if (this.shouldLogLocalFallback()) {
+          console.log("Empty or localhost IP, using local detection");
+        }
         return this.detectLocally(ip);
       }
 
@@ -234,7 +242,9 @@ export class GeoRouter {
     try {
       // 如果 IP 为空或无效，直接使用本地检测
       if (!ip || ip === "" || ip === "::1" || ip === "127.0.0.1") {
-        console.log("Empty or localhost IP, using local detection");
+        if (this.shouldLogLocalFallback()) {
+          console.log("Empty or localhost IP, using local detection");
+        }
         return this.detectLocally(ip);
       }
 

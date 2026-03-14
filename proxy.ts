@@ -221,7 +221,9 @@ export async function proxy(request: NextRequest) {
       const clientIP = getClientIP(request);
 
       if (!clientIP) {
-        console.warn("无法获取客户端IP，使用默认处理");
+        if (!isDevelopment) {
+          console.warn("无法获取客户端IP，使用默认处理");
+        }
         return NextResponse.next();
       }
 

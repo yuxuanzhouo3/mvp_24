@@ -6,6 +6,16 @@ import { getCurrentAdminDataProvider } from "@/lib/admin/region";
 export const revalidate = 0;
 export const dynamic = "force-dynamic";
 
+const VALID_AD_POSITIONS = new Set([
+  "top",
+  "bottom",
+  "left",
+  "right",
+  "sidebar",
+  "bottom-left",
+  "bottom-right",
+] as const);
+
 interface Advertisement {
   id: string;
   title: string;
@@ -21,7 +31,17 @@ interface Advertisement {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const position = searchParams.get("position");
+    const rawPosition = searchParams.get("position");
+    const requestedPositions = searchParams
+      .get("positions")
+      ?.split(",")
+      .map((value) => value.trim())
+      .filter((value): value is Advertisement["position"] =>
+        VALID_AD_POSITIONS.has(value as Advertisement["position"])
+      ) || [];
+    const position = VALID_AD_POSITIONS.has(rawPosition as Advertisement["position"])
+      ? (rawPosition as Advertisement["position"])
+      : null;
 
     let ads: Advertisement[] = [];
 
@@ -75,6 +95,11 @@ export async function GET(request: Request) {
           created_at: ad.created_at,
         }));
       }
+    }
+
+    if (requestedPositions.length > 0) {
+      const requestedSet = new Set(requestedPositions);
+      ads = ads.filter((ad) => requestedSet.has(ad.position));
     }
 
     const response = NextResponse.json({ success: true, data: ads, count: ads.length });

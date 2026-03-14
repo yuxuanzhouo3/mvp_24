@@ -3,19 +3,16 @@
 import { useState, useEffect } from "react";
 import { X } from "lucide-react";
 import { useUser } from "@/components/user-context";
-
-interface Advertisement {
-  id: string;
-  title: string;
-  position: "top" | "bottom" | "left" | "right" | "sidebar" | "bottom-left" | "bottom-right";
-  media_type: "image" | "video";
-  media_url: string;
-  target_url: string | null;
-  priority: number;
-}
+import {
+  ensureAdvertisementBatchLoaded,
+  getAdvertisementBatchSnapshot,
+  subscribeToAdvertisementBatch,
+  type Advertisement,
+  type AdvertisementPosition,
+} from "@/lib/ads/client-cache";
 
 interface AdDisplayProps {
-  position: Advertisement["position"];
+  position: AdvertisementPosition;
 }
 
 export function AdDisplay({ position }: AdDisplayProps) {
@@ -47,54 +44,64 @@ export function AdDisplay({ position }: AdDisplayProps) {
       return;
     }
 
-    const loadAds = async () => {
-      try {
-        console.log(`[AdDisplay] Fetching ads for position: ${position}`);
-        const response = await fetch(`/api/advertisements?position=${position}`, {
-          cache: "no-store", // 禁用浏览器缓存
-        });
-        const data = await response.json();
-        console.log(`[AdDisplay] Response for ${position}:`, data);
-        if (data.success && data.data) {
-          setAds(data.data);
-          console.log(`[AdDisplay] Loaded ${data.data.length} ads for position ${position}`);
-        } else {
-          setAds([]);
-          console.log(`[AdDisplay] No ads or error for position ${position}`);
-        }
-      } catch (err) {
-        console.error("Failed to load ads:", err);
-      } finally {
-        setLoading(false);
-      }
+    let cancelled = false;
+
+    const syncAdsFromSnapshot = () => {
+      const snapshot = getAdvertisementBatchSnapshot();
+      if (!snapshot || cancelled) return false;
+      setAds(snapshot[position] || []);
+      setLoading(false);
+      return true;
     };
 
-    loadAds();
-    
-    // 定期检查广告状态（15秒一次），确保禁用的广告能立即移除
-    const interval = setInterval(() => {
-      console.log(`[AdDisplay] Polling ads for position: ${position}`);
-      loadAds();
-    }, 15000);
-    return () => clearInterval(interval);
+    setLoading(true);
+    syncAdsFromSnapshot();
+
+    const unsubscribe = subscribeToAdvertisementBatch(() => {
+      syncAdsFromSnapshot();
+    });
+
+    void ensureAdvertisementBatchLoaded()
+      .then((batch) => {
+        if (cancelled) return;
+        setAds(batch[position] || []);
+        setLoading(false);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (process.env.NODE_ENV === "development") {
+          console.warn(`[ads] failed to load position "${position}":`, error);
+        }
+        setAds([]);
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [position, isMember]);
 
-  // 如果是会员，不显示广告
-  if (isMember) {
+  useEffect(() => {
+    if (isMember) {
+      setDismissed(new Set());
+    }
+  }, [isMember]);
+
+  const availableAds = ads.filter((ad) => !dismissed.has(ad.id));
+
+  if (isMember || loading || availableAds.length === 0) {
     return null;
   }
 
-  const availableAds = ads.filter(ad => !dismissed.has(ad.id));
-
-  if (loading || availableAds.length === 0) {
-    return null;
-  }
-
-  // 获取优先级最高的广告
   const ad = availableAds[0];
 
   const handleDismiss = () => {
-    setDismissed(prev => new Set(prev).add(ad.id));
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      next.add(ad.id);
+      return next;
+    });
   };
 
   const handleClick = () => {
@@ -103,15 +110,14 @@ export function AdDisplay({ position }: AdDisplayProps) {
     }
   };
 
-  // 根据位置应用不同的样式
-  const positionStyles = {
-    top: "w-[728px] h-16 top-16 left-1/2 -translate-x-1/2",     // 顶部：728x64（标准横幅），居中
-    bottom: "w-full h-24 bottom-0 left-0 right-0",      // 底部：全宽，96px高
-    left: "w-48 h-48 left-2 top-1/2 -translate-y-1/2",  // 左侧：192px × 192px，居中
-    right: "w-48 h-48 right-2 top-1/2 -translate-y-1/2", // 右侧：192px × 192px，居中
-    sidebar: "w-full h-32 left-0",                       // 侧边栏：全宽，128px高
-    "bottom-left": "w-64 h-40 bottom-4 left-4",         // 底部左：256px × 160px
-    "bottom-right": "w-64 h-40 bottom-4 right-4",       // 底部右：256px × 160px
+  const positionStyles: Record<AdvertisementPosition, string> = {
+    top: "w-[728px] h-16 top-16 left-1/2 -translate-x-1/2",
+    bottom: "w-full h-24 bottom-0 left-0 right-0",
+    left: "w-48 h-48 left-2 top-1/2 -translate-y-1/2",
+    right: "w-48 h-48 right-2 top-1/2 -translate-y-1/2",
+    sidebar: "w-full h-32 left-0",
+    "bottom-left": "w-64 h-40 bottom-4 left-4",
+    "bottom-right": "w-64 h-40 bottom-4 right-4",
   };
 
   const adContainerClass = positionStyles[position];
@@ -138,7 +144,6 @@ export function AdDisplay({ position }: AdDisplayProps) {
             />
           )}
 
-          {/* 关闭按钮 */}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -150,7 +155,6 @@ export function AdDisplay({ position }: AdDisplayProps) {
             <X className="w-4 h-4" />
           </button>
 
-          {/* 链接提示 */}
           {ad.target_url && (
             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-200 flex items-center justify-center">
               <span className="text-white text-sm font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200">

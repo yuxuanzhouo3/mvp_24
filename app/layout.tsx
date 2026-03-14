@@ -1,19 +1,49 @@
 import type { Metadata, Viewport } from "next";
+import dynamic from "next/dynamic";
 import "./globals.css";
 import { AppProvider } from "@/components/app-context";
 import { UserProvider } from "@/components/user-context";
 import { LanguageProvider } from "@/components/language-provider";
 import { GeoProvider } from "@/components/geo-provider";
-import { Toaster as AppToaster } from "@/components/ui/toaster";
-import { Toaster as SonnerToaster } from "@/components/ui/sonner";
-import { DebugModeIndicator } from "@/components/debug-mode-indicator";
-import { Suspense } from "react";
-import InitializeApp from "@/components/initialize-app";
-import { SubscriptionModal } from "@/components/subscription-modal";
-import { WebLogConsole } from "@/components/web-log-console";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AppearanceProvider } from "@/components/appearance-provider";
 import Script from "next/script";
+
+const AppToaster = dynamic(
+  () => import("@/components/ui/toaster").then((mod) => mod.Toaster),
+  { ssr: false, loading: () => null }
+);
+
+const SonnerToaster = dynamic(
+  () => import("@/components/ui/sonner").then((mod) => mod.Toaster),
+  { ssr: false, loading: () => null }
+);
+
+const DebugModeIndicator = dynamic(
+  () =>
+    import("@/components/debug-mode-indicator").then(
+      (mod) => mod.DebugModeIndicator
+    ),
+  { ssr: false, loading: () => null }
+);
+
+const InitializeApp = dynamic(() => import("@/components/initialize-app"), {
+  ssr: false,
+  loading: () => null,
+});
+
+const SubscriptionModal = dynamic(
+  () =>
+    import("@/components/subscription-modal").then(
+      (mod) => mod.SubscriptionModal
+    ),
+  { ssr: false, loading: () => null }
+);
+
+const WebLogConsole = dynamic(
+  () => import("@/components/web-log-console").then((mod) => mod.WebLogConsole),
+  { ssr: false, loading: () => null }
+);
 
 export const metadata: Metadata = {
   title: "MultiGPT Platform",
@@ -99,9 +129,7 @@ export default function RootLayout({
                     {/* 订阅提示弹窗 */}
                     <SubscriptionModal />
                     {/* Debug mode indicator - 仅开发环境显示 */}
-                    <Suspense fallback={null}>
-                      <DebugModeIndicator />
-                    </Suspense>
+                    <DebugModeIndicator />
                     {/* Global toast portals */}
                     <AppToaster />
                     <SonnerToaster />

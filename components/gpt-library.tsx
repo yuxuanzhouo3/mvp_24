@@ -21,25 +21,11 @@ import {
 import { useLanguage } from "@/components/language-provider";
 import { interpolate, useTranslations } from "@/lib/i18n";
 import { useUser } from "@/components/user-context";
+import { fetchClientAIConfig, type ClientAIAgent } from "@/lib/ai/client-config";
 import { isChinaRegion } from "@/lib/config/region";
 import { getStoredModelFavorites, toggleStoredModelFavorite, MODEL_FAVORITES_EVENT } from "@/lib/ai/model-favorites";
 
-interface AIAgent {
-  id: string;
-  name: string;
-  provider: string;
-  model: string;
-  description: string;
-  capabilities: string[];
-  maxTokens?: number;
-  temperature?: number;
-  icon?: string;
-  isFree?: boolean;
-  pricingLevel?: "free" | "low" | "medium" | "high";
-  unitPrice?: number;
-  openrouterRank?: number;
-  openrouterOrder?: string;
-}
+type AIAgent = ClientAIAgent;
 
 interface GPTLibraryProps {
   selectedGPTs: any[];
@@ -86,12 +72,7 @@ export function GPTLibrary({
     (async () => {
       try {
         setLoading(true);
-        const res = await fetch("/api/config/ai");
-        if (!res.ok) {
-          if (mounted) setEnabledAgents([]);
-          return;
-        }
-        const data = await res.json();
+        const data = await fetchClientAIConfig();
         if (mounted) {
           setEnabledAgents(data.agents || []);
         }

@@ -1,37 +1,89 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState, useEffect, Suspense, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
-import { GPTWorkspace } from "@/components/gpt-workspace";
-import { GPTLibrary } from "@/components/gpt-library";
-import { ExportPanel } from "@/components/export-panel";
-import { ChatHistory } from "@/components/chat-history";
-import { ChatHistorySidebar } from "@/components/chat-history-sidebar";
-import { Header } from "@/components/header";
-import { AdDisplay } from "@/components/ad-display";
 import { useApp } from "@/components/app-context";
 import { useUser } from "@/components/user-context";
 import {
   WorkspaceMessagesProvider,
   useWorkspaceMessages,
 } from "@/components/workspace-messages-context";
+import { fetchClientAIConfig, type ClientAIAgent } from "@/lib/ai/client-config";
 import { isChinaRegion } from "@/lib/config/region";
 import { toast } from "sonner";
 import { saveAuthState } from "@/lib/auth-state-manager";
 
-interface AIAgent {
-  id: string;
-  name: string;
-  provider: string;
-  model: string;
-  description: string;
-  capabilities: string[];
-  maxTokens?: number;
-  temperature?: number;
-  icon?: string;
-}
+type AIAgent = ClientAIAgent;
 
 const WECHAT_PRIVACY_SESSION_KEY = "wechat_privacy_consent";
+
+function PageLoadingFallback({ label }: { label: string }) {
+  return (
+    <div className="flex h-full min-h-[240px] items-center justify-center bg-white dark:bg-[#11131a]">
+      <div className="text-center">
+        <div className="mx-auto h-10 w-10 animate-spin rounded-full border-b-2 border-blue-600" />
+        <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+const GPTWorkspace = dynamic(
+  () => import("@/components/gpt-workspace").then((mod) => mod.GPTWorkspace),
+  {
+    loading: () => <PageLoadingFallback label="正在加载对话工作区..." />,
+  }
+);
+
+const GPTLibrary = dynamic(
+  () => import("@/components/gpt-library").then((mod) => mod.GPTLibrary),
+  {
+    loading: () => <PageLoadingFallback label="正在加载模型库..." />,
+  }
+);
+
+const ExportPanel = dynamic(
+  () => import("@/components/export-panel").then((mod) => mod.ExportPanel),
+  {
+    loading: () => <PageLoadingFallback label="正在加载导出面板..." />,
+  }
+);
+
+const ChatHistory = dynamic(
+  () => import("@/components/chat-history").then((mod) => mod.ChatHistory),
+  {
+    loading: () => <PageLoadingFallback label="正在加载历史记录..." />,
+  }
+);
+
+const ChatHistorySidebar = dynamic(
+  () =>
+    import("@/components/chat-history-sidebar").then(
+      (mod) => mod.ChatHistorySidebar
+    ),
+  {
+    loading: () => (
+      <div className="hidden h-full sm:block sm:w-[320px] sm:min-w-[320px] sm:border-r sm:border-gray-200 sm:bg-white dark:sm:border-gray-800 dark:sm:bg-[#0f1117]" />
+    ),
+  }
+);
+
+const Header = dynamic(
+  () => import("@/components/header").then((mod) => mod.Header),
+  {
+    loading: () => (
+      <div className="h-16 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-[#0b0d12]" />
+    ),
+  }
+);
+
+const AdDisplay = dynamic(
+  () => import("@/components/ad-display").then((mod) => mod.AdDisplay),
+  {
+    loading: () => null,
+  }
+);
 
 function PlatformContent() {
   const [selectedGPTs, setSelectedGPTs] = useState<AIAgent[]>([]);
@@ -142,17 +194,33 @@ function PlatformContent() {
     []
   );
 
+  const loadAvailableAIs = useCallback(async () => {
+    try {
+      const data = await fetchClientAIConfig();
+      const agents = Array.isArray(data.agents) ? data.agents : [];
+      setAvailableAIs(agents);
+
+      const defaultAgent = resolveDefaultAgent(agents);
+      if (defaultAgent) {
+        setSelectedGPTs([defaultAgent]);
+      }
+    } catch (error) {
+      console.error("加载AI配置失败:", error);
+      toast.error("加载AI配置失败");
+    }
+  }, [resolveDefaultAgent]);
+
   // 从API加载可用的AI模型
   useEffect(() => {
-    loadAvailableAIs();
-  }, []);
+    void loadAvailableAIs();
+  }, [loadAvailableAIs]);
 
   // 同步 Context 的 sessionId 到本地 state
   useEffect(() => {
     if (contextSessionId && contextSessionId !== currentSessionId) {
       setCurrentSessionId(contextSessionId);
     }
-  }, [contextSessionId]);
+  }, [contextSessionId, currentSessionId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -171,26 +239,6 @@ function PlatformContent() {
       );
     };
   }, []);
-
-  const loadAvailableAIs = async () => {
-    try {
-      const res = await fetch("/api/config/ai");
-      if (!res.ok) {
-        throw new Error("Failed to load AI config");
-      }
-      const data = await res.json();
-      const agents = Array.isArray(data.agents) ? data.agents : [];
-      setAvailableAIs(agents);
-
-      const defaultAgent = resolveDefaultAgent(agents);
-      if (defaultAgent) {
-        setSelectedGPTs([defaultAgent]);
-      }
-    } catch (error) {
-      console.error("加载AI配置失败:", error);
-      toast.error("加载AI配置失败");
-    }
-  };
 
   // 新建对话
   const handleNewChat = () => {
