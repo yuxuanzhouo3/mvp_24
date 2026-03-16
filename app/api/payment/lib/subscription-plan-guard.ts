@@ -1,6 +1,7 @@
 import { getDatabase } from "@/lib/cloudbase-service";
 import { isChinaRegion } from "@/lib/config/region";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import { executeWithSelectFallback } from "@/app/api/payment/lib/supabase-schema-compat";
 
 export interface ActiveSubscriptionSnapshot {
   planId: string | null;
@@ -10,7 +11,22 @@ export interface ActiveSubscriptionSnapshot {
   transactionId?: string | null;
 }
 
+interface SupabaseActiveSubscriptionRow {
+  plan_id?: string | null;
+  plan?: string | null;
+  current_period_end?: string | null;
+  provider?: string | null;
+  provider_subscription_id?: string | null;
+  transaction_id?: string | null;
+}
+
 const KNOWN_PLAN_IDS = new Set(["free", "basic", "pro", "enterprise"]);
+const SUPABASE_ACTIVE_SUBSCRIPTION_SELECTS = [
+  "plan_id, plan, current_period_end, provider, provider_subscription_id, transaction_id",
+  "plan_id, plan, current_period_end, provider, provider_subscription_id",
+  "plan_id, plan, current_period_end, provider",
+  "plan_id, plan, current_period_end",
+];
 
 export function normalizePlanId(value: unknown): string | null {
   if (typeof value !== "string") {
@@ -70,35 +86,40 @@ export async function getActiveSubscriptionSnapshot(
     };
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("subscriptions")
-    .select(
-      "plan_id, plan, current_period_end, provider, provider_subscription_id, transaction_id"
-    )
-    .eq("user_id", userId)
-    .eq("status", "active")
-    .gte("current_period_end", nowIso)
-    .order("current_period_end", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const { data, error } = await executeWithSelectFallback({
+    selectClauses: SUPABASE_ACTIVE_SUBSCRIPTION_SELECTS,
+    tableName: "subscriptions",
+    execute: (selectClause) =>
+      supabaseAdmin
+        .from("subscriptions")
+        .select(selectClause)
+        .eq("user_id", userId)
+        .eq("status", "active")
+        .gte("current_period_end", nowIso)
+        .order("current_period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+  });
 
   if (error && (error as any)?.code !== "PGRST116") {
     throw error;
   }
-  if (!data) {
+  const row = (data ?? null) as SupabaseActiveSubscriptionRow | null;
+  if (!row) {
     return null;
   }
 
-  const endMs = parseDateMs(data.current_period_end);
+  const endMs = parseDateMs(row.current_period_end);
   if (endMs === null || endMs <= nowMs) {
     return null;
   }
 
   return {
-    planId: normalizePlanId(data.plan_id || data.plan),
-    currentPeriodEnd: data.current_period_end || null,
-    provider: data.provider || null,
-    providerSubscriptionId: data.provider_subscription_id || null,
-    transactionId: data.transaction_id || null,
+    planId: normalizePlanId(row.plan_id || row.plan),
+    currentPeriodEnd: row.current_period_end || null,
+    provider: row.provider || null,
+    providerSubscriptionId:
+      row.provider_subscription_id || null,
+    transactionId: row.transaction_id || null,
   };
 }

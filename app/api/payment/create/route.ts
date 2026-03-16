@@ -19,6 +19,10 @@ import {
   getActiveSubscriptionSnapshot,
   normalizePlanId,
 } from "@/app/api/payment/lib/subscription-plan-guard";
+import {
+  executeWithOptionalColumns,
+  toCompatError,
+} from "@/app/api/payment/lib/supabase-schema-compat";
 import { getBillingSettings } from "@/lib/billing/settings";
 import {
   getAddonProductPrice,
@@ -42,6 +46,20 @@ interface CreatePaymentBody {
   creditAmount?: number;
 }
 
+const OPTIONAL_PAYMENT_INSERT_COLUMNS = [
+  "type",
+  "description",
+  "metadata",
+  "addon_package_id",
+  "image_credits",
+  "video_audio_credits",
+  "out_trade_no",
+  "client_type",
+  "code_url",
+  "provider",
+  "provider_order_id",
+];
+
 function getMetadataActivePlan(user: any): string | null {
   const plan = normalizePlanId(user?.user_metadata?.subscription_plan);
   if (!plan || plan === "free") return null;
@@ -59,6 +77,29 @@ function getMetadataActivePlan(user: any): string | null {
 function detectAlipayProductMode(request: NextRequest): "wap" | "page" {
   const userAgent = request.headers.get("user-agent") || "";
   return MOBILE_USER_AGENT.test(userAgent) ? "wap" : "page";
+}
+
+async function insertSupabasePaymentRecord(paymentData: Record<string, any>) {
+  const metadata =
+    paymentData.metadata && typeof paymentData.metadata === "object"
+      ? { ...paymentData.metadata }
+      : {};
+  if (typeof paymentData.description === "string" && paymentData.description.trim()) {
+    metadata.description = paymentData.description;
+  }
+
+  const payloadWithMetadata =
+    Object.keys(metadata).length > 0
+      ? { ...paymentData, metadata }
+      : { ...paymentData };
+
+  return executeWithOptionalColumns({
+    payload: payloadWithMetadata,
+    optionalColumns: OPTIONAL_PAYMENT_INSERT_COLUMNS,
+    tableName: "payments",
+    execute: (payload) =>
+      supabaseAdmin.from("payments").insert([payload]).select("id").limit(1).maybeSingle(),
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -641,12 +682,20 @@ async function handlePaymentCreate(request: NextRequest) {
           paymentData._id = result.paymentId;
           await db.collection("payments").add(paymentData);
         } else {
-          const { error: paymentRecordError } = await supabaseAdmin
-            .from("payments")
-            .insert([paymentData]);
+          const { error: paymentRecordError, droppedColumns } =
+            await insertSupabasePaymentRecord(paymentData);
 
           if (paymentRecordError) {
             throw paymentRecordError;
+          }
+
+          if (droppedColumns.length > 0) {
+            logWarn("Inserted payment record after dropping unsupported columns", {
+              operationId,
+              userId: user.id,
+              transactionId: result.paymentId,
+              droppedColumns,
+            });
           }
 
           logInfo("Payment record created", {
@@ -662,9 +711,7 @@ async function handlePaymentCreate(request: NextRequest) {
       } catch (paymentRecordError) {
         logError(
           "Error recording payment",
-          paymentRecordError instanceof Error
-            ? paymentRecordError
-            : new Error(String(paymentRecordError)),
+          toCompatError(paymentRecordError),
           {
             operationId,
             userId: user.id,

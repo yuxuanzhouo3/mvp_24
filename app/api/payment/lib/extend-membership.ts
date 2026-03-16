@@ -2,6 +2,37 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 import { isChinaRegion } from "@/lib/config/region";
 import { getDatabase } from "@/lib/cloudbase-service";
 import { logInfo, logError, logWarn, logBusinessEvent } from "@/lib/logger";
+import {
+  executeWithOptionalColumns,
+  executeWithSelectFallback,
+  isMissingColumnError,
+  toCompatError,
+} from "@/app/api/payment/lib/supabase-schema-compat";
+
+const SUBSCRIPTION_COMPAT_INSERT_COLUMNS = [
+  "plan",
+  "expires_at",
+  "payment_method",
+  "transaction_id",
+  "provider",
+  "provider_subscription_id",
+  "verification_status",
+];
+
+const SUBSCRIPTION_COMPAT_UPDATE_COLUMNS = [
+  "plan",
+  "expires_at",
+  "payment_method",
+  "transaction_id",
+  "provider",
+  "provider_subscription_id",
+  "verification_status",
+];
+
+const SUPABASE_PRO_SUBSCRIPTION_SELECTS = [
+  "id, transaction_id, current_period_end",
+  "id, current_period_end",
+];
 
 function getLatestByPeriodEnd<T extends { current_period_end?: string | null }>(
   records?: T[] | null
@@ -17,6 +48,121 @@ function getLatestByPeriodEnd<T extends { current_period_end?: string | null }>(
   });
 
   return sorted[0] || null;
+}
+
+async function findSupabaseSubscriptionByTransaction(
+  userId: string,
+  transactionId: string
+): Promise<{ id: string } | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id")
+      .eq("user_id", userId)
+      .or(
+        `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
+      )
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      return data?.id ? data : null;
+    }
+
+    if (isMissingColumnError(error, "transaction_id", "subscriptions")) {
+      const { data: providerOnly, error: providerOnlyError } = await supabaseAdmin
+        .from("subscriptions")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("provider_subscription_id", transactionId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (
+        providerOnlyError &&
+        (providerOnlyError as any)?.code !== "PGRST116" &&
+        !isMissingColumnError(
+          providerOnlyError,
+          "provider_subscription_id",
+          "subscriptions"
+        )
+      ) {
+        throw providerOnlyError;
+      }
+
+      return providerOnly?.id ? providerOnly : null;
+    }
+
+    if ((error as any)?.code !== "PGRST116") {
+      throw error;
+    }
+  } catch (error) {
+    logWarn("Error checking idempotent status in Supabase subscriptions", {
+      userId,
+      transactionId,
+      error,
+    });
+  }
+
+  return null;
+}
+
+async function getLatestSupabaseProSubscription(userId: string): Promise<any | null> {
+  const { data, error } = await executeWithSelectFallback({
+    selectClauses: SUPABASE_PRO_SUBSCRIPTION_SELECTS,
+    tableName: "subscriptions",
+    execute: (selectClause) =>
+      supabaseAdmin
+        .from("subscriptions")
+        .select(selectClause)
+        .eq("user_id", userId)
+        .eq("plan_id", "pro")
+        .order("current_period_end", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+  });
+
+  if (error && (error as any)?.code !== "PGRST116") {
+    throw error;
+  }
+
+  return data || null;
+}
+
+async function updateSupabaseSubscriptionCompat(
+  subscriptionId: string,
+  payload: Record<string, any>
+) {
+  return executeWithOptionalColumns({
+    payload,
+    optionalColumns: SUBSCRIPTION_COMPAT_UPDATE_COLUMNS,
+    tableName: "subscriptions",
+    execute: (currentPayload) =>
+      supabaseAdmin
+        .from("subscriptions")
+        .update(currentPayload)
+        .eq("id", subscriptionId)
+        .select("id")
+        .limit(1)
+        .maybeSingle(),
+  });
+}
+
+async function insertSupabaseSubscriptionCompat(payload: Record<string, any>) {
+  return executeWithOptionalColumns({
+    payload,
+    optionalColumns: SUBSCRIPTION_COMPAT_INSERT_COLUMNS,
+    tableName: "subscriptions",
+    execute: (currentPayload) =>
+      supabaseAdmin
+        .from("subscriptions")
+        .insert(currentPayload)
+        .select("id")
+        .limit(1)
+        .maybeSingle(),
+  });
 }
 
 export async function extendMembership(
@@ -65,35 +211,21 @@ export async function extendMembership(
         });
       }
 
-      try {
-        const { data: existingByTransaction } = await supabaseAdmin
-          .from("subscriptions")
-          .select("id")
-          .eq("user_id", userId)
-          .or(
-            `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
-          )
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      const existingByTransaction = await findSupabaseSubscriptionByTransaction(
+        userId,
+        transactionId
+      );
 
-        if (existingByTransaction && existingByTransaction.id) {
-          logInfo(
-            "Transaction already processed in subscriptions (idempotent check passed)",
-            {
-              userId,
-              transactionId,
-              subscriptionId: existingByTransaction.id,
-            }
-          );
-          return true;
-        }
-      } catch (idempotentErr) {
-        logWarn("Error checking idempotent status in Supabase subscriptions", {
-          userId,
-          transactionId,
-          error: idempotentErr,
-        });
+      if (existingByTransaction?.id) {
+        logInfo(
+          "Transaction already processed in subscriptions (idempotent check passed)",
+          {
+            userId,
+            transactionId,
+            subscriptionId: existingByTransaction.id,
+          }
+        );
+        return true;
       }
 
       let currentExpiresAt: Date | null = null;
@@ -322,14 +454,7 @@ export async function extendMembership(
       try {
         const currentDate = new Date();
 
-        const { data: existingSubscription } = await supabaseAdmin
-          .from("subscriptions")
-          .select("id, transaction_id, current_period_end")
-          .eq("user_id", userId)
-          .eq("plan_id", "pro")
-          .order("current_period_end", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        const existingSubscription = await getLatestSupabaseProSubscription(userId);
 
         if (existingSubscription?.id) {
           const subscriptionId = existingSubscription.id;
@@ -343,10 +468,21 @@ export async function extendMembership(
             updated_at: currentDate.toISOString(),
           };
 
-          await supabaseAdmin
-            .from("subscriptions")
-            .update(updateData)
-            .eq("id", subscriptionId);
+          const { error: updateError, droppedColumns } =
+            await updateSupabaseSubscriptionCompat(subscriptionId, updateData);
+
+          if (updateError) {
+            throw updateError;
+          }
+
+          if (droppedColumns.length > 0) {
+            logWarn("Updated subscription after dropping unsupported columns", {
+              userId,
+              subscriptionId,
+              transactionId,
+              droppedColumns,
+            });
+          }
 
           logInfo(
             "Updated subscription record in Supabase (source of truth)",
@@ -358,7 +494,7 @@ export async function extendMembership(
             }
           );
         } else {
-          await supabaseAdmin.from("subscriptions").insert({
+          const insertPayload = {
             user_id: userId,
             plan_id: "pro",
             plan: "pro",
@@ -371,7 +507,22 @@ export async function extendMembership(
             transaction_id: transactionId,
             created_at: currentDate.toISOString(),
             updated_at: currentDate.toISOString(),
-          });
+          };
+
+          const { error: insertError, droppedColumns } =
+            await insertSupabaseSubscriptionCompat(insertPayload);
+
+          if (insertError) {
+            throw insertError;
+          }
+
+          if (droppedColumns.length > 0) {
+            logWarn("Created subscription after dropping unsupported columns", {
+              userId,
+              transactionId,
+              droppedColumns,
+            });
+          }
 
           logInfo(
             "Created subscription record in Supabase (source of truth)",
@@ -386,7 +537,7 @@ export async function extendMembership(
       } catch (subscriptionError) {
         logError(
           "Error managing Supabase subscription record",
-          subscriptionError as Error,
+          toCompatError(subscriptionError),
           {
             userId,
             transactionId,
