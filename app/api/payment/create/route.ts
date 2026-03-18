@@ -97,8 +97,7 @@ async function insertSupabasePaymentRecord(paymentData: Record<string, any>) {
     payload: payloadWithMetadata,
     optionalColumns: OPTIONAL_PAYMENT_INSERT_COLUMNS,
     tableName: "payments",
-    execute: (payload) =>
-      supabaseAdmin.from("payments").insert([payload]).select("id").limit(1).maybeSingle(),
+    execute: (payload) => supabaseAdmin.from("payments").insert([payload]),
   });
 }
 
@@ -709,6 +708,7 @@ async function handlePaymentCreate(request: NextRequest) {
           });
         }
       } catch (paymentRecordError) {
+        const compatError = paymentRecordError as any;
         logError(
           "Error recording payment",
           toCompatError(paymentRecordError),
@@ -720,6 +720,11 @@ async function handlePaymentCreate(request: NextRequest) {
             currency,
             method,
             productType: normalizedProductType,
+            errorCode: compatError?.code,
+            errorMessage: compatError?.message,
+            errorDetails: compatError?.details,
+            errorHint: compatError?.hint,
+            paymentColumns: Object.keys(paymentData),
           }
         );
 

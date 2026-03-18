@@ -13,10 +13,21 @@ import { extendMembership } from "@/app/api/payment/lib/extend-membership";
 import { addAddonCredits } from "@/services/wallet";
 import { getAddonPackageById } from "@/constants/addon-packages";
 import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
+import {
+  executeWithOptionalColumns,
+  isMissingColumnError,
+  toCompatError,
+} from "@/app/api/payment/lib/supabase-schema-compat";
 
 type ResolvedProductType = "ADDON" | "SUBSCRIPTION";
 
 type PaymentStatus = "pending" | "completed";
+
+const OPTIONAL_PAYMENT_INSERT_COLUMNS = [
+  "type",
+  "metadata",
+  "out_trade_no",
+];
 
 function resolveProductType(payment: any): ResolvedProductType {
   const type = String(
@@ -43,18 +54,6 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
 function isUuidLike(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value
-  );
-}
-
-function isMissingColumnError(error: any, column: string): boolean {
-  if (!error) {
-    return false;
-  }
-
-  const message = String(error?.message || "").toLowerCase();
-  return (
-    String(error?.code || "") === "42703" &&
-    message.includes(column.toLowerCase())
   );
 }
 
@@ -101,7 +100,7 @@ async function findSupabasePaymentForUser(
     return { payment: byOutTradeNo, error: null };
   }
   if (byOutTradeNoError && (byOutTradeNoError as any)?.code !== "PGRST116") {
-    if (isMissingColumnError(byOutTradeNoError, "out_trade_no")) {
+    if (isMissingColumnError(byOutTradeNoError, "out_trade_no", "payments")) {
       logWarn("payments.out_trade_no column is missing, skipping lookup", {
         operationId,
         userId,
@@ -245,17 +244,25 @@ async function hasSubscriptionForTransaction(
       .limit(1)
       .maybeSingle();
 
-    if (byTransactionError && (byTransactionError as any)?.code !== "PGRST116") {
-      logWarn("Supabase transaction_id idempotency lookup failed", {
-        operationId,
-        userId,
-        transactionId,
-        error: byTransactionError,
-      });
-    }
-
     if (byTransaction?.id) {
       return true;
+    }
+
+    if (byTransactionError && (byTransactionError as any)?.code !== "PGRST116") {
+      if (isMissingColumnError(byTransactionError, "transaction_id", "subscriptions")) {
+        logWarn("subscriptions.transaction_id column is missing, retrying idempotency lookup", {
+          operationId,
+          userId,
+          transactionId,
+        });
+      } else {
+        logWarn("Supabase transaction_id idempotency lookup failed", {
+          operationId,
+          userId,
+          transactionId,
+          error: byTransactionError,
+        });
+      }
     }
 
     const { data: byProviderSubscription, error: byProviderError } =
@@ -269,15 +276,33 @@ async function hasSubscriptionForTransaction(
         .maybeSingle();
 
     if (byProviderError && (byProviderError as any)?.code !== "PGRST116") {
-      logWarn("Supabase provider_subscription_id idempotency lookup failed", {
-        operationId,
-        userId,
-        transactionId,
-        error: byProviderError,
-      });
+      if (
+        isMissingColumnError(
+          byProviderError,
+          "provider_subscription_id",
+          "subscriptions"
+        )
+      ) {
+        logWarn("subscriptions.provider_subscription_id column is missing during idempotency lookup", {
+          operationId,
+          userId,
+          transactionId,
+        });
+      } else {
+        logWarn("Supabase provider_subscription_id idempotency lookup failed", {
+          operationId,
+          userId,
+          transactionId,
+          error: byProviderError,
+        });
+      }
     }
 
-    return !!byProviderSubscription?.id;
+    if (byProviderSubscription?.id) {
+      return true;
+    }
+
+    return false;
   } catch (error) {
     logWarn("Supabase subscription idempotency lookup threw unexpectedly", {
       operationId,
@@ -867,11 +892,17 @@ export async function GET(request: NextRequest) {
             insertError = error;
           }
         } else {
-          const { data: insertedPayment, error } = await supabaseAdmin
-            .from("payments")
-            .insert(paymentData)
-            .select("id")
-            .single();
+          const {
+            data: insertedPayment,
+            error,
+            droppedColumns,
+          } = await executeWithOptionalColumns({
+            payload: paymentData,
+            optionalColumns: OPTIONAL_PAYMENT_INSERT_COLUMNS,
+            tableName: "payments",
+            execute: (payload) =>
+              supabaseAdmin.from("payments").insert(payload).select("id").single(),
+          });
 
           if (error) {
             logError("Error creating payment record in Supabase", error, {
@@ -888,10 +919,20 @@ export async function GET(request: NextRequest) {
             });
             insertError = error;
           } else if (insertedPayment) {
+            const insertedPaymentRow = insertedPayment as { id: string };
+            if (droppedColumns.length > 0) {
+              logWarn("Created confirmed payment after dropping unsupported columns", {
+                operationId,
+                userId: user.id,
+                transactionId,
+                droppedColumns,
+              });
+            }
+
             logInfo("Payment record created successfully in Supabase", {
               operationId,
               userId: user.id,
-              paymentId: insertedPayment.id,
+              paymentId: insertedPaymentRow.id,
               transactionId,
               amount,
               days,
@@ -902,7 +943,7 @@ export async function GET(request: NextRequest) {
         if (insertError) {
           logError(
             "Failed to create payment record - continuing anyway",
-            insertError as Error,
+            toCompatError(insertError),
             {
               operationId,
               userId: user.id,

@@ -1,4 +1,4 @@
-const DEFAULT_H5_URL = 'https://ways-block-tue-stability.trycloudflare.com'
+const DEFAULT_H5_URL = 'https://multigpt.mornscience.top'
 function normalizeBaseUrl(raw) {
   const s = String(raw || '').trim()
   if (!s) return ''
@@ -108,12 +108,6 @@ Page({
   onReady() {
     // 由于部分基础库不存在 wx.createWebViewContext，无法走“小程序 -> H5 postMessage”。
     // 仅在这种兜底环境下才使用“追加 URL 参数触发刷新”的方式给 H5 一个已就绪信号。
-    try {
-      wx.showToast({ title: 'WebView Ready', icon: 'none', duration: 600 })
-    } catch {
-      // ignore
-    }
-
     const canPostToH5 = typeof wx.createWebViewContext === 'function'
     if (canPostToH5) return
 
@@ -171,6 +165,15 @@ Page({
   },
 
   onLoad(options) {
+    // Ensure share entry is enabled in the menu.
+    try {
+      wx.showShareMenu({
+        menus: ['shareAppMessage', 'shareTimeline'],
+      })
+    } catch {
+      // ignore
+    }
+
     const h5Url = maybeDecodeUrlParam(options.h5Url || options.url || DEFAULT_H5_URL)
     const apiBase = normalizeBaseUrl(options.apiBase)
     const skipProfile = options.skipProfile === '1'
@@ -355,6 +358,35 @@ Page({
         // ignore
       }
       return
+    }
+  },
+
+  onShareAppMessage() {
+    const h5Url = this.data && this.data.h5Url ? String(this.data.h5Url) : ''
+    const apiBase = this.data && this.data.apiBase ? String(this.data.apiBase) : ''
+
+    const params = []
+    if (h5Url && h5Url !== DEFAULT_H5_URL) params.push(`h5Url=${encodeURIComponent(h5Url)}`)
+    if (apiBase) params.push(`apiBase=${encodeURIComponent(apiBase)}`)
+    const path = `/pages/webshell/webshell${params.length ? `?${params.join('&')}` : ''}`
+
+    return {
+      title: 'MultiGPT Platform',
+      path,
+    }
+  },
+
+  onShareTimeline() {
+    const h5Url = this.data && this.data.h5Url ? String(this.data.h5Url) : ''
+    const apiBase = this.data && this.data.apiBase ? String(this.data.apiBase) : ''
+
+    const query = []
+    if (h5Url && h5Url !== DEFAULT_H5_URL) query.push(`h5Url=${encodeURIComponent(h5Url)}`)
+    if (apiBase) query.push(`apiBase=${encodeURIComponent(apiBase)}`)
+
+    return {
+      title: 'MultiGPT Platform',
+      query: query.join('&'),
     }
   },
 })

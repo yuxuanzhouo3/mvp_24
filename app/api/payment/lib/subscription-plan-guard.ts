@@ -26,6 +26,10 @@ const SUPABASE_ACTIVE_SUBSCRIPTION_SELECTS = [
   "plan_id, plan, current_period_end, provider, provider_subscription_id",
   "plan_id, plan, current_period_end, provider",
   "plan_id, plan, current_period_end",
+  "plan_id, current_period_end, provider, provider_subscription_id, transaction_id",
+  "plan_id, current_period_end, provider, provider_subscription_id",
+  "plan_id, current_period_end, provider",
+  "plan_id, current_period_end",
 ];
 
 export function normalizePlanId(value: unknown): string | null {

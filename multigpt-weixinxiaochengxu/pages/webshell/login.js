@@ -3,8 +3,31 @@ Page({
     loading: false,
   },
 
+  onShareAppMessage() {
+    return {
+      title: 'MultiGPT Platform',
+      path: '/pages/webshell/webshell',
+    }
+  },
+
+  onShareTimeline() {
+    return {
+      title: 'MultiGPT Platform',
+      query: '',
+    }
+  },
+
   async onLoad(options) {
     console.log('[login] onLoad called with options:', options)
+
+    try {
+      wx.showShareMenu({
+        menus: ['shareAppMessage', 'shareTimeline'],
+      })
+    } catch {
+      // ignore
+    }
+
     const returnUrl = options.returnUrl ? decodeURIComponent(options.returnUrl) : ''
     if (returnUrl) {
       wx.setStorageSync('mp_login_return_url', returnUrl)

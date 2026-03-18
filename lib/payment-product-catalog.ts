@@ -170,6 +170,15 @@ function missingCloudbaseCollection(error: any) {
   );
 }
 
+function missingSupabaseTable(error: any, tableName: string) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  return (
+    code === "PGRST205" &&
+    message.includes(`'public.${tableName}'`)
+  );
+}
+
 async function ensureCollection() {
   const db = getDatabase();
   try {
@@ -215,7 +224,9 @@ export async function listPaymentProductEntries(
       .eq("region", region)
       .order("product_key", { ascending: true });
     if (error) {
-      console.error("[payment-products] Supabase list failed:", error);
+      if (!missingSupabaseTable(error, "payment_product_catalog")) {
+        console.error("[payment-products] Supabase list failed:", error);
+      }
       return defaults;
     }
 

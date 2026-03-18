@@ -3,12 +3,11 @@
     "pages/webshell/webshell",
     "pages/webshell/login",
     "pages/webshell/profile",
-    "pages/index/index",
     "pages/logs/logs"
   ],
   "window": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "Weixin",
+    "navigationBarTitleText": "MultiGPT",
     "navigationBarBackgroundColor": "#ffffff"
   },
   "style": "v2",

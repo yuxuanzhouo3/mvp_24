@@ -7,6 +7,30 @@ Page({
     canSubmit: false,
   },
 
+  onLoad() {
+    try {
+      wx.showShareMenu({
+        menus: ['shareAppMessage', 'shareTimeline'],
+      })
+    } catch {
+      // ignore
+    }
+  },
+
+  onShareAppMessage() {
+    return {
+      title: 'MultiGPT Platform',
+      path: '/pages/webshell/webshell',
+    }
+  },
+
+  onShareTimeline() {
+    return {
+      title: 'MultiGPT Platform',
+      query: '',
+    }
+  },
+
   onChooseAvatar(e) {
     const { avatarUrl } = e.detail || {}
     this.setData({

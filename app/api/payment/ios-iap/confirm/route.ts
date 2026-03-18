@@ -11,6 +11,84 @@ import {
   normalizePlanId,
 } from "@/app/api/payment/lib/subscription-plan-guard";
 import { grantReferralFirstPaymentReward } from "@/lib/market/referrals";
+import {
+  executeWithOptionalColumns,
+  isMissingColumnError,
+  toCompatError,
+} from "@/app/api/payment/lib/supabase-schema-compat";
+
+const OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS = [
+  "transaction_id",
+  "verification_status",
+  "plan",
+];
+
+async function findExistingIapSubscription(
+  userId: string,
+  transactionId: string,
+  operationId: string
+) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("subscriptions")
+      .select("id")
+      .eq("user_id", userId)
+      .or(
+        `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
+      )
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error) {
+      return data || null;
+    }
+
+    if (isMissingColumnError(error, "transaction_id", "subscriptions")) {
+      logWarn("subscriptions.transaction_id column is missing during IAP lookup, retrying", {
+        operationId,
+        userId,
+        transactionId,
+      });
+
+      const { data: providerOnly, error: providerOnlyError } = await supabaseAdmin
+        .from("subscriptions")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("provider_subscription_id", transactionId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (
+        providerOnlyError &&
+        (providerOnlyError as any)?.code !== "PGRST116" &&
+        !isMissingColumnError(
+          providerOnlyError,
+          "provider_subscription_id",
+          "subscriptions"
+        )
+      ) {
+        throw providerOnlyError;
+      }
+
+      return providerOnly || null;
+    }
+
+    if ((error as any)?.code !== "PGRST116") {
+      throw error;
+    }
+  } catch (error) {
+    logWarn("Failed to resolve existing IAP subscription by transaction", {
+      operationId,
+      userId,
+      transactionId,
+      error,
+    });
+  }
+
+  return null;
+}
 
 async function syncUserMembershipCache(
   user: any,
@@ -236,32 +314,62 @@ export async function POST(request: NextRequest) {
         : null;
 
     // 幂等：同 transaction 已处理，保证缓存字段同步后直接返回
-    const { data: existingByTransaction } = await supabaseAdmin
-      .from("subscriptions")
-      .select("id")
-      .eq("user_id", user.id)
-      .or(
-        `transaction_id.eq.${transactionId},provider_subscription_id.eq.${transactionId}`
-      )
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const existingByTransaction = await findExistingIapSubscription(
+      user.id,
+      transactionId,
+      operationId
+    );
 
     if (existingByTransaction?.id) {
       const finalExpiresAtIso = appleExpiresAtIso;
 
-      await supabaseAdmin
-        .from("subscriptions")
-        .update({
-          status: "active",
-          provider: "apple",
-          provider_subscription_id: transactionId,
-          transaction_id: transactionId,
-          current_period_end: finalExpiresAtIso,
-          verification_status: "verified",
-          updated_at: nowIso,
-        })
-        .eq("id", existingByTransaction.id);
+      const { error: replayUpdateError, droppedColumns } =
+        await executeWithOptionalColumns({
+          payload: {
+            status: "active",
+            provider: "apple",
+            provider_subscription_id: transactionId,
+            transaction_id: transactionId,
+            current_period_end: finalExpiresAtIso,
+            verification_status: "verified",
+            updated_at: nowIso,
+          },
+          optionalColumns: OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS,
+          tableName: "subscriptions",
+          execute: (payload) =>
+            supabaseAdmin
+              .from("subscriptions")
+              .update(payload)
+              .eq("id", existingByTransaction.id)
+              .select("id")
+              .maybeSingle(),
+        });
+
+      if (replayUpdateError) {
+        logError(
+          "Failed to refresh replayed IAP subscription",
+          toCompatError(replayUpdateError),
+          {
+            operationId,
+            userId: user.id,
+            transactionId,
+            subscriptionId: existingByTransaction.id,
+          }
+        );
+        return NextResponse.json(
+          { success: false, error: "Failed to refresh subscription" },
+          { status: 500 }
+        );
+      }
+
+      if (droppedColumns.length > 0) {
+        logWarn("Updated replayed IAP subscription after dropping unsupported columns", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          droppedColumns,
+        });
+      }
 
       await syncUserMembershipCache(
         user,
@@ -330,21 +438,30 @@ export async function POST(request: NextRequest) {
     const finalExpiresAtIso = appleExpiresAtIso;
 
     if (latestSubscription?.id) {
-      const { error: updateErr } = await supabaseAdmin
-        .from("subscriptions")
-        .update({
-          status: "active",
-          provider: "apple",
-          provider_subscription_id: transactionId,
-          transaction_id: transactionId,
-          current_period_end: finalExpiresAtIso,
-          verification_status: "verified",
-          updated_at: nowIso,
-        })
-        .eq("id", latestSubscription.id);
+      const { error: updateErr, droppedColumns } =
+        await executeWithOptionalColumns({
+          payload: {
+            status: "active",
+            provider: "apple",
+            provider_subscription_id: transactionId,
+            transaction_id: transactionId,
+            current_period_end: finalExpiresAtIso,
+            verification_status: "verified",
+            updated_at: nowIso,
+          },
+          optionalColumns: OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS,
+          tableName: "subscriptions",
+          execute: (payload) =>
+            supabaseAdmin
+              .from("subscriptions")
+              .update(payload)
+              .eq("id", latestSubscription.id)
+              .select("id")
+              .maybeSingle(),
+        });
 
       if (updateErr) {
-        logError("Failed to update IAP subscription", new Error(updateErr.message), {
+        logError("Failed to update IAP subscription", toCompatError(updateErr), {
           operationId,
           userId: user.id,
           transactionId,
@@ -355,26 +472,44 @@ export async function POST(request: NextRequest) {
           { status: 500 }
         );
       }
+
+      if (droppedColumns.length > 0) {
+        logWarn("Updated IAP subscription after dropping unsupported columns", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          droppedColumns,
+        });
+      }
     } else {
-      const { error: insertErr } = await supabaseAdmin
-        .from("subscriptions")
-        .insert({
-          user_id: user.id,
-          plan_id: "pro",
-          status: "active",
-          current_period_start: nowIso,
-          current_period_end: finalExpiresAtIso,
-          cancel_at_period_end: false,
-          transaction_id: transactionId,
-          provider_subscription_id: transactionId,
-          provider: "apple",
-          verification_status: "verified",
-          created_at: nowIso,
-          updated_at: nowIso,
+      const { error: insertErr, droppedColumns } =
+        await executeWithOptionalColumns({
+          payload: {
+            user_id: user.id,
+            plan_id: "pro",
+            status: "active",
+            current_period_start: nowIso,
+            current_period_end: finalExpiresAtIso,
+            cancel_at_period_end: false,
+            transaction_id: transactionId,
+            provider_subscription_id: transactionId,
+            provider: "apple",
+            verification_status: "verified",
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+          optionalColumns: OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS,
+          tableName: "subscriptions",
+          execute: (payload) =>
+            supabaseAdmin
+              .from("subscriptions")
+              .insert(payload)
+              .select("id")
+              .maybeSingle(),
         });
 
       if (insertErr) {
-        logError("Failed to create IAP subscription", new Error(insertErr.message), {
+        logError("Failed to create IAP subscription", toCompatError(insertErr), {
           operationId,
           userId: user.id,
           transactionId,
@@ -383,6 +518,15 @@ export async function POST(request: NextRequest) {
           { success: false, error: "Failed to activate subscription" },
           { status: 500 }
         );
+      }
+
+      if (droppedColumns.length > 0) {
+        logWarn("Created IAP subscription after dropping unsupported columns", {
+          operationId,
+          userId: user.id,
+          transactionId,
+          droppedColumns,
+        });
       }
     }
 

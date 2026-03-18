@@ -14,7 +14,23 @@ import {
   logBusinessEvent,
 } from "../../logger";
 import { updateCloudbaseSubscription } from "../../../app/api/payment/lib/update-cloudbase-subscription";
+import {
+  executeWithOptionalColumns,
+  toCompatError,
+} from "../../../app/api/payment/lib/supabase-schema-compat";
 import type { SubscriptionUser } from "./types";
+
+const OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS = [
+  "plan",
+  "expires_at",
+  "transaction_id",
+];
+
+interface SupabaseSubscriptionRow {
+  id: string;
+  plan_id?: string | null;
+  current_period_end?: string | null;
+}
 
 function normalizeDays(days: number | string | undefined): number {
   const parsed =
@@ -648,16 +664,25 @@ async function updateSubscriptionStatusSupabase(
         updatePayload.transaction_id = subscriptionId;
       }
 
-      const { data: updatedSubscription, error: updateError } =
-        await supabaseAdmin
-          .from("subscriptions")
-          .update(updatePayload)
-          .eq("id", existingSubscriptionData.id)
-          .select()
-          .single();
+      const {
+        data: updatedSubscription,
+        error: updateError,
+        droppedColumns,
+      } = await executeWithOptionalColumns({
+        payload: updatePayload,
+        optionalColumns: OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS,
+        tableName: "subscriptions",
+        execute: (payload) =>
+          supabaseAdmin
+            .from("subscriptions")
+            .update(payload)
+            .eq("id", existingSubscriptionData.id)
+            .select()
+            .single(),
+      });
 
       if (updateError) {
-        logError("Failed to update existing subscription", updateError, {
+        logError("Failed to update existing subscription", toCompatError(updateError), {
           operationId,
           userId,
           subscriptionId: existingSubscriptionData.id,
@@ -666,13 +691,25 @@ async function updateSubscriptionStatusSupabase(
         return false;
       }
 
-      subscription = updatedSubscription;
+      if (droppedColumns.length > 0) {
+        logWarn("Updated webhook subscription after dropping unsupported columns", {
+          operationId,
+          userId,
+          subscriptionId: existingSubscriptionData.id,
+          provider,
+          droppedColumns,
+        });
+      }
+
+      const updatedSubscriptionRow =
+        updatedSubscription as SupabaseSubscriptionRow;
+      subscription = updatedSubscriptionRow;
       logBusinessEvent("subscription_updated", userId, {
         operationId,
-        subscriptionId: updatedSubscription.id,
+        subscriptionId: updatedSubscriptionRow.id,
         status,
         provider,
-        currentPeriodEnd: updatedSubscription.current_period_end,
+        currentPeriodEnd: updatedSubscriptionRow.current_period_end,
         daysAdded: status === "active" ? daysNum : 0,
       });
     } else if (status === "active") {
@@ -680,9 +717,12 @@ async function updateSubscriptionStatusSupabase(
         now.getTime() + daysNum * 24 * 60 * 60 * 1000
       ).toISOString();
 
-      const { data: newSubscription, error: insertError } = await supabaseAdmin
-        .from("subscriptions")
-        .insert({
+      const {
+        data: newSubscription,
+        error: insertError,
+        droppedColumns,
+      } = await executeWithOptionalColumns({
+        payload: {
           user_id: userId,
           plan_id: "pro",
           plan: "pro",
@@ -692,12 +732,19 @@ async function updateSubscriptionStatusSupabase(
           current_period_end: currentPeriodEnd,
           expires_at: currentPeriodEnd,
           transaction_id: subscriptionId,
-        })
-        .select()
-        .single();
+        },
+        optionalColumns: OPTIONAL_SUBSCRIPTION_WRITE_COLUMNS,
+        tableName: "subscriptions",
+        execute: (payload) =>
+          supabaseAdmin
+            .from("subscriptions")
+            .insert(payload)
+            .select()
+            .single(),
+      });
 
       if (insertError) {
-        logError("Failed to create new subscription", insertError, {
+        logError("Failed to create new subscription", toCompatError(insertError), {
           operationId,
           userId,
           subscriptionId,
@@ -706,11 +753,22 @@ async function updateSubscriptionStatusSupabase(
         return false;
       }
 
-      subscription = newSubscription;
+      if (droppedColumns.length > 0) {
+        logWarn("Created webhook subscription after dropping unsupported columns", {
+          operationId,
+          userId,
+          subscriptionId,
+          provider,
+          droppedColumns,
+        });
+      }
+
+      const newSubscriptionRow = newSubscription as SupabaseSubscriptionRow;
+      subscription = newSubscriptionRow;
       logBusinessEvent("subscription_created", userId, {
         operationId,
-        subscriptionId: newSubscription.id,
-        planId: newSubscription.plan_id,
+        subscriptionId: newSubscriptionRow.id,
+        planId: newSubscriptionRow.plan_id,
         provider,
       });
     }
